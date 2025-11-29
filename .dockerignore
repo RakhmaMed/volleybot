@@ -1,0 +1,31 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Документация
+*.md
+DEPLOY.md
+
+# Docker
+docker-compose.yml
+.dockerignore
+
+# Логи
+*.log
+
