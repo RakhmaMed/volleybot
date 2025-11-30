@@ -12,20 +12,38 @@ env/
 venv/
 ENV/
 .venv
+*.py[cod]
+*$py.class
 
 # IDE
 .vscode/
 .idea/
 *.swp
+*.swo
+*.swn
+.vs/
+.DS_Store
+__MACOSX/
 
 # Документация
 *.md
 DEPLOY.md
+WEBHOOK_SETUP.md
 
 # Docker
 docker-compose.yml
 .dockerignore
+Dockerfile
+
+# Скрипты развертывания (не нужны в контейнере)
+*.ps1
+*.sh
 
 # Логи
 *.log
+
+# Временные файлы
+*.tmp
+*.bak
+*.swp
 

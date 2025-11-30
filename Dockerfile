@@ -3,18 +3,17 @@ FROM python:3.10
 # Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Копируем файлы проекта
-COPY . /app
-
-# Очищаем ненужные папки (как в install-python.sh)
-RUN find . -type d -name "__MACOSX" -prune -exec rm -rf {} + 2>/dev/null || true && \
-    find . -type d -name ".vs" -prune -exec rm -rf {} + 2>/dev/null || true && \
-    find . -type d -name ".idea" -prune -exec rm -rf {} + 2>/dev/null || true && \
-    find . -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true && \
-    find . -type d -name "venv" -prune -exec rm -rf {} + 2>/dev/null || true
+# Сначала копируем только requirements.txt для кэширования зависимостей
+# Это позволяет переиспользовать слой с установленными пакетами при изменении кода
+COPY requirements.txt /app/
 
 # Устанавливаем зависимости Python
+# Этот слой будет кэшироваться, если requirements.txt не изменился
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Теперь копируем остальные файлы проекта
+# При изменении bot.py, config.json и т.д. пересоберётся только этот слой
+COPY . /app
 
 # Создаем директорию для сертификатов
 RUN mkdir -p /app/certs
