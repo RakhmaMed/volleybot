@@ -1,0 +1,41 @@
+"""Загрузка конфигурации и константы приложения."""
+
+import json
+import logging
+from urllib.parse import urlparse
+
+logging.basicConfig(level=logging.INFO)
+
+# Загрузка конфигурации
+with open("config.json") as f:
+    config = json.load(f)
+
+# Telegram настройки
+TOKEN = config["telegram_token"]
+CHAT_ID = config["chat_id"]
+ADMIN_USERNAME = config.get("admin_username", "TwinkleDev55")
+POLLS_SCHEDULE = config.get("polls", [])
+
+# Webhook настройки
+WEBHOOK_HOST = config.get("webhook_host", "")
+WEBHOOK_PATH = config.get("webhook_path", "/webhook")
+WEBHOOK_PORT = config.get("webhook_port", 8443)
+
+# Формируем полный URL webhook
+if WEBHOOK_HOST:
+    parsed = urlparse(WEBHOOK_HOST)
+    if not parsed.port and WEBHOOK_PORT != 443:
+        host_with_port = f"{parsed.scheme}://{parsed.netloc}:{WEBHOOK_PORT}"
+        WEBHOOK_URL = f"{host_with_port}{WEBHOOK_PATH}"
+    else:
+        WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+else:
+    WEBHOOK_URL = ""
+
+# SSL сертификаты
+WEBHOOK_SSL_CERT = config.get("ssl_cert_path", "/app/certs/fullchain.pem")
+WEBHOOK_SSL_PRIV = config.get("ssl_key_path", "/app/certs/privkey.pem")
+
+# Настройки опросов
+REQUIRED_PLAYERS = 18
+POLL_OPTIONS = ["Да", "Нет"]
