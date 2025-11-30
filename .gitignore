@@ -1,5 +1,6 @@
 # Конфигурация с секретами
 config.json
+certs/
 
 # Python
 __pycache__/

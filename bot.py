@@ -6,18 +6,10 @@ import asyncio
 import json
 import ssl
 from aiohttp import web
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 logging.basicConfig(level=logging.INFO)
-
-weekday_map = {
-    0: "Понедельник",
-    1: "Вторник",
-    2: "Среда",
-    3: "Четверг",
-    4: "Пятница",
-    5: "Суббота",
-    6: "Воскресенье"
-}
 
 with open("config.json") as f:
     config = json.load(f)
@@ -51,8 +43,6 @@ WEBHOOK_SSL_CERT = config.get("ssl_cert_path", "/app/certs/fullchain.pem")
 WEBHOOK_SSL_PRIV = config.get("ssl_key_path", "/app/certs/privkey.pem")
 MSG1 = "Волейбол завтра (среда) в 18:00"
 MSG2 = "Волейбол завтра (пятница) в 19:00"
-TWO_DAY = 60 * 60 * 24 * 2 - 120
-THREE_DAY = 60 * 60 * 24 * 5 - 120
 REQUIRED_PLAYERS = 18
 POLL_OPTIONS = ["Да", "Нет"]
 
@@ -60,7 +50,8 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher(bot=bot)
 
 poll_data = {}
-bot_enabled = True  # Состояние бота (включен/выключен) 
+bot_enabled = True  # Состояние бота (включен/выключен)
+scheduler = AsyncIOScheduler(timezone='UTC')  # Планировщик задач 
 
 chat_id = CHAT_ID
 # Время создания опросов в UTC (Московское время = UTC+3)
@@ -118,15 +109,23 @@ async def stop_bot_handler(message: types.Message):
         await message.reply("⏸️ Бот выключен. Опросы не будут создаваться до включения.")
         logging.info(f"Бот выключен администратором @{user.username} (ID: {user.id})")
 
-async def send_poll():
-    global poll_data 
-    now = datetime.datetime.now(timezone.utc)
-    msg = MSG1 if now.weekday() == 1 else MSG2  # Вторник -> MSG1 (среда), Четверг -> MSG2 (пятница)
+async def send_poll(question: str, poll_name: str = "опрос"):
+    """
+    Отправка опроса в чат
+    
+    Args:
+        question: Текст вопроса опроса
+        poll_name: Название опроса для логирования
+    """
+    global poll_data
+    if not bot_enabled:
+        logging.info(f"Бот выключен, {poll_name} не создан")
+        return
+    
     poll_data.clear()
-
     poll_message = await bot.send_poll(
         chat_id=chat_id,
-        question=msg,
+        question=question,
         options=POLL_OPTIONS,
         is_anonymous=False
     )
@@ -145,7 +144,7 @@ async def send_poll():
         'yes_voters': []
     }
 
-    logging.info(f"Создан опрос {poll_message.poll.id}")
+    logging.info(f"Создан {poll_name} {poll_message.poll.id}")
 
 @dp.poll_answer_handler()
 async def handle_poll_answer(poll_answer: types.PollAnswer):
@@ -184,43 +183,42 @@ async def handle_poll_answer(poll_answer: types.PollAnswer):
             await bot.edit_message_text(
                 chat_id=data['chat_id'],
                 message_id=data['info_msg_id'],
-                text=text
+                text=text,
+                parse_mode='Markdown'
             )
         except Exception as e:
             logging.warning(f"Ошибка редактирования сообщения: {e}")
 
-async def scheduler():
-    global bot_enabled
-    while True:
-        now = datetime.datetime.now(timezone.utc)
-        weekday = now.weekday()
-        hour_utc = now.hour
-        minute_utc = now.minute
-        
-        status = "🟢 ВКЛ" if bot_enabled else "🔴 ВЫКЛ"
-        logging.info(f"Время UTC: {hour_utc:02d}:{minute_utc:02d}, {weekday_map[weekday]}, Бот: {status}")
-        
-        if chat_id is not None and bot_enabled:
-            # Вторник 15:00 UTC (18:00 MSK) - опрос для среды
-            if weekday == 1 and hour_utc == TUESDAY_HOUR_UTC and minute_utc == MINUTE:
-                logging.warning(f"Создание опроса для среды (вторник 15:00 UTC / 18:00 MSK)")
-                await send_poll()
-                await asyncio.sleep(TWO_DAY)
-            # Четверг 16:00 UTC (19:00 MSK) - опрос для пятницы
-            elif weekday == 3 and hour_utc == THURSDAY_HOUR_UTC and minute_utc == MINUTE:
-                logging.warning(f"Создание опроса для пятницы (четверг 16:00 UTC / 19:00 MSK)")
-                await send_poll()
-                await asyncio.sleep(THREE_DAY)
-        elif not bot_enabled:
-            # Если бот выключен, просто ждем
-            pass
-
-        await asyncio.sleep(50)
+def setup_scheduler():
+    """Настройка планировщика задач"""
+    # Вторник 15:00 UTC (18:00 MSK) - опрос для среды
+    scheduler.add_job(
+        lambda: send_poll(MSG1, "опрос для среды"),
+        trigger=CronTrigger(day_of_week='tue', hour=TUESDAY_HOUR_UTC, minute=MINUTE, timezone='UTC'),
+        id='tuesday_poll',
+        name='Опрос для среды',
+        replace_existing=True
+    )
+    
+    # Четверг 16:00 UTC (19:00 MSK) - опрос для пятницы
+    scheduler.add_job(
+        lambda: send_poll(MSG2, "опрос для пятницы"),
+        trigger=CronTrigger(day_of_week='thu', hour=THURSDAY_HOUR_UTC, minute=MINUTE, timezone='UTC'),
+        id='thursday_poll',
+        name='Опрос для пятницы',
+        replace_existing=True
+    )
+    
+    logging.info(f"Планировщик настроен:")
+    logging.info(f"  - Вторник {TUESDAY_HOUR_UTC:02d}:{MINUTE:02d} UTC (18:00 MSK) - опрос для среды")
+    logging.info(f"  - Четверг {THURSDAY_HOUR_UTC:02d}:{MINUTE:02d} UTC (19:00 MSK) - опрос для пятницы")
 
 async def on_startup(dp: Dispatcher):
     """Выполняется при запуске бота"""
-    loop = asyncio.get_event_loop()
-    loop.create_task(scheduler())
+    # Настраиваем и запускаем планировщик
+    setup_scheduler()
+    scheduler.start()
+    logging.info("Планировщик запущен")
     
     # Устанавливаем webhook
     if WEBHOOK_HOST:
@@ -235,6 +233,12 @@ async def on_startup(dp: Dispatcher):
 async def on_shutdown(dp: Dispatcher):
     """Выполняется при остановке бота"""
     logging.info("Остановка бота...")
+    
+    # Останавливаем планировщик
+    if scheduler.running:
+        scheduler.shutdown()
+        logging.info("Планировщик остановлен")
+    
     if WEBHOOK_HOST:
         await bot.delete_webhook()
         logging.info("Webhook удален")
@@ -273,6 +277,4 @@ if __name__ == "__main__":
     else:
         # Режим polling (fallback)
         logging.info("Запуск бота в режиме polling (WEBHOOK_HOST не указан)")
-        loop = asyncio.get_event_loop()
-        loop.create_task(scheduler())
-        executor.start_polling(dp, skip_updates=True)
+        executor.start_polling(dp, on_startup=on_startup, on_shutdown=on_shutdown, skip_updates=True)
