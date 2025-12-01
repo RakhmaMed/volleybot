@@ -8,6 +8,7 @@ Telegram-бот для организации опросов.
 import asyncio
 import logging
 import ssl
+from typing import TypedDict
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher
@@ -31,37 +32,48 @@ from scheduler import setup_scheduler
 
 logging.basicConfig(level=logging.INFO)
 
+
+class BotState(TypedDict):
+    """Типизированное состояние бота."""
+    bot_enabled: bool
+    chat_id: int
+
+
 # Инициализация бота и диспетчера
-bot = Bot(
+bot: Bot = Bot(
     token=TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
-dp = Dispatcher()
+dp: Dispatcher = Dispatcher()
 
 # Глобальное состояние
-_state = {
+_state: BotState = {
     'bot_enabled': True,
     'chat_id': CHAT_ID,
 }
 
 # Планировщик задач
-scheduler = AsyncIOScheduler(timezone='UTC')
+scheduler: AsyncIOScheduler = AsyncIOScheduler(timezone='UTC')
 
 
 # Функции доступа к состоянию
 def get_bot_enabled() -> bool:
+    """Возвращает состояние включения бота."""
     return _state['bot_enabled']
 
 
-def set_bot_enabled(value: bool):
+def set_bot_enabled(value: bool) -> None:
+    """Устанавливает состояние включения бота."""
     _state['bot_enabled'] = value
 
 
 def get_chat_id() -> int:
+    """Возвращает ID текущего чата."""
     return _state['chat_id']
 
 
-def set_chat_id(value: int):
+def set_chat_id(value: int) -> None:
+    """Устанавливает ID текущего чата."""
     _state['chat_id'] = value
 
 
@@ -69,7 +81,7 @@ def set_chat_id(value: int):
 register_handlers(dp, bot, get_bot_enabled, set_bot_enabled)
 
 
-async def on_startup(bot: Bot):
+async def on_startup(bot: Bot) -> None:
     """Выполняется при запуске бота."""
     setup_scheduler(scheduler, bot, get_chat_id, set_chat_id, get_bot_enabled)
     scheduler.start()
@@ -85,7 +97,7 @@ async def on_startup(bot: Bot):
         logging.info("Режим polling активен")
 
 
-async def on_shutdown(bot: Bot):
+async def on_shutdown(bot: Bot) -> None:
     """Выполняется при остановке бота."""
     logging.info("Остановка бота...")
     
@@ -100,7 +112,7 @@ async def on_shutdown(bot: Bot):
     await bot.session.close()
 
 
-async def run_polling():
+async def run_polling() -> None:
     """Запуск в режиме polling."""
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
@@ -109,12 +121,12 @@ async def run_polling():
     await dp.start_polling(bot)
 
 
-def run_webhook():
+def run_webhook() -> None:
     """Запуск в режиме webhook."""
     logging.info("Запуск бота в режиме webhook")
     
     # Настройка SSL
-    ssl_context = None
+    ssl_context: ssl.SSLContext | None = None
     try:
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(WEBHOOK_SSL_CERT, WEBHOOK_SSL_PRIV)
@@ -131,10 +143,10 @@ def run_webhook():
     dp.shutdown.register(on_shutdown)
     
     # Создаём aiohttp приложение
-    app = web.Application()
+    app: web.Application = web.Application()
     
     # Настраиваем webhook handler
-    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_handler: SimpleRequestHandler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_handler.register(app, path=WEBHOOK_PATH)
     
     # Настраиваем приложение с диспетчером

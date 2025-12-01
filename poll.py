@@ -3,6 +3,9 @@
 import asyncio
 import logging
 import traceback
+from asyncio import Task
+from collections.abc import Callable
+from typing import Any, TypedDict
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramMigrateToChat
@@ -10,11 +13,34 @@ from aiogram.exceptions import TelegramMigrateToChat
 from config import POLL_OPTIONS, REQUIRED_PLAYERS
 from utils import save_error_dump
 
+
+class VoterInfo(TypedDict):
+    """Информация о проголосовавшем."""
+    id: int
+    name: str
+
+
+class PollDataItem(TypedDict, total=False):
+    """Данные опроса."""
+    chat_id: int
+    poll_msg_id: int
+    info_msg_id: int | None
+    yes_voters: list[VoterInfo]
+    update_task: Task[None] | None
+    last_message_text: str
+
+
 # Глобальное хранилище данных опросов
-poll_data = {}
+poll_data: dict[str, PollDataItem] = {}
 
 
-async def send_poll(bot: Bot, chat_id: int, question: str, poll_name: str, bot_enabled: bool):
+async def send_poll(
+    bot: Bot,
+    chat_id: int,
+    question: str,
+    poll_name: str,
+    bot_enabled: bool
+) -> int:
     """
     Отправка опроса в чат.
     
@@ -42,12 +68,12 @@ async def send_poll(bot: Bot, chat_id: int, question: str, poll_name: str, bot_e
             is_anonymous=False
         )
     except TelegramMigrateToChat as e:
-        new_chat_id = e.migrate_to_chat_id
+        new_chat_id: int = e.migrate_to_chat_id
         logging.error(f"Группа мигрирована в супергруппу. Старый ID: {chat_id}, Новый ID: {new_chat_id}")
         save_error_dump(e, poll_name, question, chat_id)
         
         try:
-            error_msg = (
+            error_msg: str = (
                 f"❌ *Ошибка при создании опроса \"{poll_name}\"*\n\n"
                 f"Группа была мигрирована в супергруппу.\n"
                 f"Новый ID чата: `{new_chat_id}`"
@@ -75,11 +101,11 @@ async def send_poll(bot: Bot, chat_id: int, question: str, poll_name: str, bot_e
         return chat_id
 
     # Отправляем информационное сообщение
+    info_message = None
     try:
         info_message = await bot.send_message(chat_id=chat_id, text="⏳ Идёт сбор голосов...")
     except Exception as e:
         logging.error(f"Ошибка при отправке информационного сообщения: {e}")
-        info_message = None
 
     # Закрепляем опрос
     try:
@@ -101,7 +127,7 @@ async def send_poll(bot: Bot, chat_id: int, question: str, poll_name: str, bot_e
     return chat_id
 
 
-async def update_players_list(bot: Bot, poll_id: str):
+async def update_players_list(bot: Bot, poll_id: str) -> None:
     """Обновляет список игроков с задержкой 10 секунд."""
     await asyncio.sleep(10)
     
@@ -109,9 +135,10 @@ async def update_players_list(bot: Bot, poll_id: str):
         return
     
     data = poll_data[poll_id]
-    yes_voters = data['yes_voters']
+    yes_voters: list[VoterInfo] = data['yes_voters']
     
     # Формируем текст
+    text: str
     if len(yes_voters) == 0:
         text = "⏳ Идёт сбор голосов..."
     elif len(yes_voters) < REQUIRED_PLAYERS:
@@ -119,8 +146,8 @@ async def update_players_list(bot: Bot, poll_id: str):
         text += "*Проголосовали:*\n"
         text += '\n'.join(f"{i + 1}) {p['name']}" for i, p in enumerate(yes_voters))
     else:
-        main_players = yes_voters[:REQUIRED_PLAYERS]
-        reserves = yes_voters[REQUIRED_PLAYERS:]
+        main_players: list[VoterInfo] = yes_voters[:REQUIRED_PLAYERS]
+        reserves: list[VoterInfo] = yes_voters[REQUIRED_PLAYERS:]
         
         text = "✅ *Список игроков:*\n"
         text += '\n'.join(f"{i + 1}) {p['name']}" for i, p in enumerate(main_players))
@@ -150,3 +177,79 @@ async def update_players_list(bot: Bot, poll_id: str):
             logging.error(f"Ошибка редактирования сообщения: {e}")
     
     data['update_task'] = None
+
+
+async def close_poll(
+    bot: Bot,
+    poll_name: str,
+    get_chat_id: Callable[[], int]
+) -> None:
+    """
+    Закрытие активного опроса и публикация финального списка.
+    
+    Args:
+        bot: Экземпляр бота
+        poll_name: Название опроса для логирования
+        get_chat_id: Функция получения текущего chat_id
+    """
+    chat_id: int = get_chat_id()
+    
+    if not poll_data:
+        logging.info(f"Нет активных опросов для закрытия ({poll_name})")
+        return
+    
+    # Берём первый (и обычно единственный) активный опрос
+    poll_id: str = list(poll_data.keys())[0]
+    data: PollDataItem = poll_data[poll_id]
+    
+    # Останавливаем опрос
+    try:
+        await bot.stop_poll(chat_id=data['chat_id'], message_id=data['poll_msg_id'])
+        logging.info(f"Опрос '{poll_name}' остановлен")
+    except Exception as e:
+        logging.error(f"Ошибка при остановке опроса '{poll_name}': {e}")
+    
+    # Открепляем опрос
+    try:
+        await bot.unpin_chat_message(chat_id=data['chat_id'], message_id=data['poll_msg_id'])
+    except Exception as e:
+        logging.warning(f"Не удалось открепить опрос: {e}")
+    
+    # Формируем финальный список
+    yes_voters: list[VoterInfo] = data.get('yes_voters', [])
+    
+    final_text: str
+    if len(yes_voters) == 0:
+        final_text = "📊 *Голосование завершено*\n\nНикто не записался."
+    elif len(yes_voters) < REQUIRED_PLAYERS:
+        final_text = f"📊 *Голосование завершено:* {len(yes_voters)}/{REQUIRED_PLAYERS}\n\n"
+        final_text += "*Записались:*\n"
+        final_text += '\n'.join(f"{i + 1}) {p['name']}" for i, p in enumerate(yes_voters))
+        final_text += f"\n\n⚠️ *Не хватает игроков!*"
+    else:
+        main_players: list[VoterInfo] = yes_voters[:REQUIRED_PLAYERS]
+        reserves: list[VoterInfo] = yes_voters[REQUIRED_PLAYERS:]
+        
+        final_text = f"📊 *Голосование завершено* ✅\n\n*Основной состав ({len(main_players)}):*\n"
+        final_text += '\n'.join(f"{i + 1}) {p['name']}" for i, p in enumerate(main_players))
+        
+        if reserves:
+            final_text += f"\n\n🕗 *Запасные ({len(reserves)}):*\n"
+            final_text += '\n'.join(f"{i + 1}) {p['name']}" for i, p in enumerate(reserves))
+    
+    # Обновляем информационное сообщение с финальным списком
+    if data.get('info_msg_id'):
+        try:
+            await bot.edit_message_text(
+                chat_id=data['chat_id'],
+                message_id=data['info_msg_id'],
+                text=final_text,
+                parse_mode='Markdown'
+            )
+            logging.info(f"Финальный список опубликован для '{poll_name}'")
+        except Exception as e:
+            logging.error(f"Ошибка обновления финального сообщения: {e}")
+    
+    # Очищаем данные опроса
+    del poll_data[poll_id]
+    logging.info(f"Опрос '{poll_name}' закрыт, данные очищены")

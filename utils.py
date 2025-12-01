@@ -6,13 +6,14 @@ import json
 import logging
 import os
 import traceback
+from typing import Any
 
 from aiogram.types import User
 
 from config import ADMIN_USERNAME
 
 
-def save_error_dump(error: Exception, poll_name: str, question: str, chat_id: int):
+def save_error_dump(error: Exception, poll_name: str, question: str, chat_id: int) -> None:
     """
     Сохраняет дамп ошибки в файл рядом с исходником.
     
@@ -23,7 +24,7 @@ def save_error_dump(error: Exception, poll_name: str, question: str, chat_id: in
         chat_id: ID чата
     """
     try:
-        error_data = {
+        error_data: dict[str, Any] = {
             'timestamp': datetime.datetime.now(timezone.utc).isoformat(),
             'poll_name': poll_name,
             'question': question,
@@ -33,10 +34,10 @@ def save_error_dump(error: Exception, poll_name: str, question: str, chat_id: in
             'chat_id': chat_id
         }
         
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        error_file = os.path.join(script_dir, 'error_dump.json')
+        script_dir: str = os.path.dirname(os.path.abspath(__file__))
+        error_file: str = os.path.join(script_dir, 'error_dump.json')
         
-        existing_errors = []
+        existing_errors: list[dict[str, Any]] = []
         if os.path.exists(error_file):
             try:
                 with open(error_file, 'r', encoding='utf-8') as f:
@@ -55,10 +56,18 @@ def save_error_dump(error: Exception, poll_name: str, question: str, chat_id: in
 
 
 def is_admin(user: User) -> bool:
-    """Проверяет, является ли пользователь администратором."""
-    username = user.username
+    """
+    Проверяет, является ли пользователь администратором.
+    
+    Args:
+        user: Объект пользователя Telegram
+        
+    Returns:
+        True если пользователь является администратором, иначе False
+    """
+    username: str | None = user.username
     if not username:
         return False
-    admin_username_clean = ADMIN_USERNAME.replace("@", "")
-    username_clean = username.replace("@", "")
+    admin_username_clean: str = ADMIN_USERNAME.replace("@", "")
+    username_clean: str = username.replace("@", "")
     return username_clean == admin_username_clean
