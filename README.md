@@ -41,7 +41,7 @@ Telegram-бот для автоматической организации оп�
 
 ```bash
 git clone <repository-url>
-cd bot_itv
+cd volleybot
 ```
 
 ### 2. Создайте `config.json`
@@ -183,51 +183,51 @@ python -m src.bot
 **Сборка образа:**
 
 ```bash
-docker build -t bot_itv:latest .
+docker build -t volleybot:latest .
 ```
 
 **Запуск (polling режим):**
 
 ```bash
 docker run -d \
-  --name bot_itv \
+  --name volleybot \
   --restart unless-stopped \
   -v $(pwd)/config.json:/app/config.json:ro \
-  bot_itv:latest
+  volleybot:latest
 ```
 
 **Запуск (webhook режим):**
 
 ```bash
 docker run -d \
-  --name bot_itv \
+  --name volleybot \
   --restart unless-stopped \
   -p 8443:8443 \
   -v $(pwd)/certs:/app/certs:ro \
   -v $(pwd)/config.json:/app/config.json:ro \
-  bot_itv:latest
+  volleybot:latest
 ```
 
 **Просмотр логов:**
 
 ```bash
-docker logs -f bot_itv
+docker logs -f volleybot
 ```
 
 **Управление контейнером:**
 
 ```bash
 # Остановить
-docker stop bot_itv
+docker stop volleybot
 
 # Запустить
-docker start bot_itv
+docker start volleybot
 
 # Перезапустить
-docker restart bot_itv
+docker restart volleybot
 
 # Удалить
-docker rm bot_itv
+docker rm volleybot
 ```
 
 #### Вариант 2: Docker Compose (рекомендуется)
@@ -240,7 +240,7 @@ version: '3.8'
 services:
   bot:
     build: .
-    container_name: bot_itv
+    container_name: volleybot
     restart: unless-stopped
     ports:
       - "8443:8443"
@@ -316,12 +316,12 @@ sudo firewall-cmd --reload
 
 ```bash
 docker run -d \
-  --name bot_itv \
+  --name volleybot \
   --restart unless-stopped \
   -p 8443:8443 \
   -v $(pwd)/certs:/app/certs:ro \
   -v $(pwd)/config.json:/app/config.json:ro \
-  bot_itv:latest
+  volleybot:latest
 ```
 
 #### Шаг 5: Проверка
@@ -345,7 +345,7 @@ sudo apt install nginx
 
 #### Шаг 2: Настройка Nginx
 
-Создайте `/etc/nginx/sites-available/bot_itv`:
+Создайте `/etc/nginx/sites-available/volleybot`:
 
 ```nginx
 server {
@@ -378,7 +378,7 @@ server {
 Активируйте конфигурацию:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/bot_itv /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/volleybot /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl reload nginx
 ```
@@ -401,13 +401,13 @@ sudo systemctl reload nginx
 
 ```bash
 #!/bin/bash
-cd /path/to/bot_itv
+cd /path/to/volleybot
 sudo cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem ./certs/
 sudo cp /etc/letsencrypt/live/yourdomain.com/privkey.pem ./certs/
 sudo chmod 644 ./certs/fullchain.pem
 sudo chmod 600 ./certs/privkey.pem
 sudo chown $USER:$USER ./certs/*
-docker restart bot_itv
+docker restart volleybot
 ```
 
 Добавьте в cron:
@@ -415,7 +415,7 @@ docker restart bot_itv
 ```bash
 chmod +x update_certs.sh
 # Добавьте в crontab -e:
-0 3 * * * /path/to/bot_itv/update_certs.sh
+0 3 * * * /path/to/volleybot/update_certs.sh
 ```
 
 ## 🌐 Деплой на сервер
@@ -442,45 +442,45 @@ docker --version
 
 ```bash
 # 1. Перейдите в директорию проекта
-cd /path/to/bot_itv
+cd /path/to/volleybot
 
 # 2. Соберите образ
-docker build -t bot_itv:latest .
+docker build -t volleybot:latest .
 
 # 3. Запустите контейнер
 docker run -d \
-  --name bot_itv \
+  --name volleybot \
   --restart unless-stopped \
   -p 8443:8443 \
   -v $(pwd)/certs:/app/certs:ro \
   -v $(pwd)/config.json:/app/config.json:ro \
-  bot_itv:latest
+  volleybot:latest
 
 # 4. Проверьте логи
-docker logs -f bot_itv
+docker logs -f volleybot
 ```
 
 ### Обновление бота
 
 ```bash
 # Остановите и удалите старый контейнер
-docker stop bot_itv
-docker rm bot_itv
+docker stop volleybot
+docker rm volleybot
 
 # Обновите код (например, через git pull)
 git pull
 
 # Пересоберите образ
-docker build -t bot_itv:latest .
+docker build -t volleybot:latest .
 
 # Запустите новый контейнер
 docker run -d \
-  --name bot_itv \
+  --name volleybot \
   --restart unless-stopped \
   -p 8443:8443 \
   -v $(pwd)/certs:/app/certs:ro \
   -v $(pwd)/config.json:/app/config.json:ro \
-  bot_itv:latest
+  volleybot:latest
 ```
 
 Или используйте универсальный скрипт управления:
@@ -585,10 +585,10 @@ uv run pytest --cov=. --cov-report=html
 
 ```bash
 # Проверьте логи
-docker logs bot_itv
+docker logs volleybot
 
 # Проверьте конфигурацию
-docker exec bot_itv cat /app/config.json
+docker exec volleybot cat /app/config.json
 
 # Проверьте наличие токена
 grep telegram_token config.json
@@ -607,7 +607,7 @@ grep telegram_token config.json
 curl https://api.telegram.org/bot<YOUR_TOKEN>/getWebhookInfo
 
 # Проверьте сертификаты в контейнере
-docker exec bot_itv ls -la /app/certs/
+docker exec volleybot ls -la /app/certs/
 
 # Проверьте доступность домена
 curl -I https://yourdomain.com/webhook
@@ -627,13 +627,13 @@ sudo tail -f /var/log/nginx/error.log
 Если webhook не работает, временно переключитесь на polling:
 
 1. Удалите или закомментируйте `webhook_host` в `config.json`
-2. Перезапустите контейнер: `docker restart bot_itv`
+2. Перезапустите контейнер: `docker restart volleybot`
 
 ### Конфликт имени контейнера
 
 ```bash
-docker stop bot_itv
-docker rm bot_itv
+docker stop volleybot
+docker rm volleybot
 # Затем запустите контейнер снова
 ```
 
@@ -673,7 +673,7 @@ docker rm bot_itv
 ## 📁 Структура проекта
 
 ```
-bot_itv/
+volleybot/
 ├── src/                # Исходный код приложения
 │   ├── __init__.py
 │   ├── bot.py         # Точка входа, инициализация бота

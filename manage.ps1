@@ -1,4 +1,4 @@
-# Универсальный скрипт управления проектом bot_itv (Windows PowerShell)
+# Универсальный скрипт управления проектом volleybot (Windows PowerShell)
 # Использование: .\manage.ps1 [команда] [опции]
 
 param(
@@ -10,14 +10,14 @@ param(
     [string]$File = ""
 )
 
-$CONTAINER_NAME = "bot_itv"
-$IMAGE_NAME = "bot_itv:latest"
+$CONTAINER_NAME = "volleybot"
+$IMAGE_NAME = "volleybot:latest"
 $PORT = "8443:8443"
 
 # Функция помощи
 function Show-Help {
     Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  Bot ITV - Скрипт управления" -ForegroundColor Cyan
+    Write-Host "  Volleybot - Скрипт управления" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Использование: .\manage.ps1 [команда] [опции]" -ForegroundColor White

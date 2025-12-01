@@ -1,5 +1,5 @@
 #!/bin/bash
-# Универсальный скрипт управления проектом bot_itv (Linux/macOS)
+# Универсальный скрипт управления проектом volleybot (Linux/macOS)
 # Использование: ./manage.sh [команда] [опции]
 
 set -e
@@ -12,14 +12,14 @@ CYAN='\033[0;36m'
 GRAY='\033[0;90m'
 NC='\033[0m' # No Color
 
-CONTAINER_NAME="bot_itv"
-IMAGE_NAME="bot_itv:latest"
+CONTAINER_NAME="volleybot"
+IMAGE_NAME="volleybot:latest"
 PORT="8443:8443"
 
 # Функция помощи
 show_help() {
     echo -e "${CYAN}========================================${NC}"
-    echo -e "${CYAN}  Bot ITV - Скрипт управления${NC}"
+    echo -e "${CYAN}  Volleybot - Скрипт управления${NC}"
     echo -e "${CYAN}========================================${NC}"
     echo ""
     echo "Использование: ./manage.sh [команда] [опции]"
