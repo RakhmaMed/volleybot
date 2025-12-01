@@ -6,11 +6,12 @@ import json
 import logging
 import os
 import traceback
+from pathlib import Path
 from typing import Any
 
 from aiogram.types import User
 
-from config import ADMIN_USERNAME
+from .config import ADMIN_USERNAME
 
 
 def save_error_dump(error: Exception, poll_name: str, question: str, chat_id: int) -> None:
@@ -34,8 +35,9 @@ def save_error_dump(error: Exception, poll_name: str, question: str, chat_id: in
             'chat_id': chat_id
         }
         
-        script_dir: str = os.path.dirname(os.path.abspath(__file__))
-        error_file: str = os.path.join(script_dir, 'error_dump.json')
+        # Сохраняем error_dump.json в корне проекта
+        script_dir: Path = Path(__file__).parent.parent
+        error_file: str = str(script_dir / 'error_dump.json')
         
         existing_errors: list[dict[str, Any]] = []
         if os.path.exists(error_file):

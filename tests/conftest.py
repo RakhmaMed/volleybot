@@ -11,7 +11,7 @@ import pytest
 from aiogram import Bot
 from aiogram.types import Chat, Message, Poll, PollAnswer, User
 
-from config import ADMIN_USERNAME
+from src.config import ADMIN_USERNAME
 
 
 @pytest.fixture

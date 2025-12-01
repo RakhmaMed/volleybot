@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from scheduler import create_close_poll_job, create_poll_job, setup_scheduler
+from src.scheduler import create_close_poll_job, create_poll_job, setup_scheduler
 
 
 @pytest.mark.asyncio
@@ -26,7 +26,7 @@ class TestCreatePollJob:
         def get_bot_enabled():
             return True
         
-        with patch('scheduler.send_poll', new_callable=AsyncMock) as mock_send_poll:
+        with patch('src.scheduler.send_poll', new_callable=AsyncMock) as mock_send_poll:
             mock_send_poll.return_value = -1001234567890
             
             job = create_poll_job(
@@ -60,7 +60,7 @@ class TestCreatePollJob:
         def get_bot_enabled():
             return True
         
-        with patch('scheduler.send_poll', new_callable=AsyncMock) as mock_send_poll:
+        with patch('src.scheduler.send_poll', new_callable=AsyncMock) as mock_send_poll:
             mock_send_poll.return_value = new_chat_id
             
             job = create_poll_job(
@@ -88,7 +88,7 @@ class TestCreateClosePollJob:
         def get_chat_id():
             return -1001234567890
         
-        with patch('scheduler.close_poll', new_callable=AsyncMock) as mock_close_poll:
+        with patch('src.scheduler.close_poll', new_callable=AsyncMock) as mock_close_poll:
             job = create_close_poll_job(bot, "test_poll", get_chat_id)
             
             await job()
@@ -128,7 +128,7 @@ class TestSetupScheduler:
             }
         ]
         
-        with patch('scheduler.POLLS_SCHEDULE', test_polls):
+        with patch('src.scheduler.POLLS_SCHEDULE', test_polls):
             setup_scheduler(scheduler, bot, get_chat_id, set_chat_id, get_bot_enabled)
             
             # Проверяем, что задачи добавлены
@@ -149,7 +149,7 @@ class TestSetupScheduler:
         def get_bot_enabled():
             return True
         
-        with patch('scheduler.POLLS_SCHEDULE', []):
+        with patch('src.scheduler.POLLS_SCHEDULE', []):
             setup_scheduler(scheduler, bot, get_chat_id, set_chat_id, get_bot_enabled)
             
             jobs = scheduler.get_jobs()
@@ -182,7 +182,7 @@ class TestSetupScheduler:
             }
         ]
         
-        with patch('scheduler.POLLS_SCHEDULE', test_polls):
+        with patch('src.scheduler.POLLS_SCHEDULE', test_polls):
             setup_scheduler(scheduler, bot, get_chat_id, set_chat_id, get_bot_enabled)
             
             jobs = scheduler.get_jobs()

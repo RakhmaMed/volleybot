@@ -1,0 +1,359 @@
+# Универсальный скрипт управления проектом bot_itv (Windows PowerShell)
+# Использование: .\manage.ps1 [команда] [опции]
+
+param(
+    [Parameter(Position=0)]
+    [string]$Command = "help",
+    
+    [switch]$Coverage,
+    [switch]$Verbose,
+    [string]$File = ""
+)
+
+$CONTAINER_NAME = "bot_itv"
+$IMAGE_NAME = "bot_itv:latest"
+$PORT = "8443:8443"
+
+# Функция помощи
+function Show-Help {
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "  Bot ITV - Скрипт управления" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Использование: .\manage.ps1 [команда] [опции]" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Доступные команды:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  setup" -ForegroundColor Green -NoNewline
+    Write-Host "                Настроить тестовое окружение"
+    Write-Host "  test" -ForegroundColor Green -NoNewline
+    Write-Host " [опции]        Запустить тесты"
+    Write-Host "  deploy" -ForegroundColor Green -NoNewline
+    Write-Host "               Собрать и запустить Docker контейнер"
+    Write-Host "  logs" -ForegroundColor Green -NoNewline
+    Write-Host "                 Показать логи контейнера"
+    Write-Host "  start" -ForegroundColor Green -NoNewline
+    Write-Host "                Запустить контейнер"
+    Write-Host "  stop" -ForegroundColor Green -NoNewline
+    Write-Host "                 Остановить контейнер"
+    Write-Host "  restart" -ForegroundColor Green -NoNewline
+    Write-Host "              Перезапустить контейнер"
+    Write-Host "  status" -ForegroundColor Green -NoNewline
+    Write-Host "               Показать статус контейнера"
+    Write-Host "  clean" -ForegroundColor Green -NoNewline
+    Write-Host "                Удалить контейнер и образ"
+    Write-Host "  help" -ForegroundColor Green -NoNewline
+    Write-Host "                 Показать эту справку"
+    Write-Host ""
+    Write-Host "Опции для test:" -ForegroundColor Yellow
+    Write-Host "  -Coverage        Запустить с покрытием кода"
+    Write-Host "  -Verbose         Подробный вывод"
+    Write-Host "  -File <путь>     Запустить конкретный файл"
+    Write-Host ""
+    Write-Host "Примеры:" -ForegroundColor Yellow
+    Write-Host "  .\manage.ps1 setup"
+    Write-Host "  .\manage.ps1 test"
+    Write-Host "  .\manage.ps1 test -Coverage"
+    Write-Host "  .\manage.ps1 test -File tests\test_utils.py"
+    Write-Host "  .\manage.ps1 deploy"
+    Write-Host "  .\manage.ps1 logs"
+    Write-Host ""
+}
+
+# Настройка тестового окружения
+function Setup-Environment {
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "  Настройка тестового окружения" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Проверка наличия uv
+    Write-Host "[1/4] Проверка uv..." -ForegroundColor Yellow
+    if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+        Write-Host "❌ uv не найден. Устанавливаю uv..." -ForegroundColor Yellow
+        powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+        
+        # Обновляем PATH для текущей сессии
+        $env:PATH = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+        
+        if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+            Write-Host "❌ Не удалось установить uv. Установите вручную:" -ForegroundColor Red
+            Write-Host "   powershell -ExecutionPolicy ByPass -c `"irm https://astral.sh/uv/install.ps1 | iex`"" -ForegroundColor Yellow
+            exit 1
+        }
+    }
+    Write-Host "✓ uv найден" -ForegroundColor Green
+    
+    # Создание виртуального окружения
+    Write-Host ""
+    Write-Host "[2/4] Создание виртуального окружения..." -ForegroundColor Yellow
+    uv venv
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "❌ Ошибка при создании виртуального окружения" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "✓ Виртуальное окружение создано" -ForegroundColor Green
+    
+    # Активация виртуального окружения
+    Write-Host ""
+    Write-Host "[3/4] Активация виртуального окружения..." -ForegroundColor Yellow
+    & .\.venv\Scripts\Activate.ps1
+    Write-Host "✓ Виртуальное окружение активировано" -ForegroundColor Green
+    
+    # Установка зависимостей
+    Write-Host ""
+    Write-Host "[4/4] Установка зависимостей..." -ForegroundColor Yellow
+    uv pip install -r requirements.txt
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "❌ Ошибка при установке зависимостей" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "✓ Зависимости установлены" -ForegroundColor Green
+    
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "✓ Тестовое окружение готово!" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Для запуска тестов выполните:" -ForegroundColor White
+    Write-Host "  .\.venv\Scripts\Activate.ps1" -ForegroundColor Gray
+    Write-Host "  pytest" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "Или используйте:" -ForegroundColor White
+    Write-Host "  .\manage.ps1 test" -ForegroundColor Gray
+    Write-Host ""
+}
+
+# Запуск тестов
+function Run-Tests {
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "  Запуск тестов" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Проверка наличия виртуального окружения
+    if (-not (Test-Path ".venv")) {
+        Write-Host "❌ Виртуальное окружение не найдено." -ForegroundColor Red
+        Write-Host "Запустите: .\manage.ps1 setup" -ForegroundColor Yellow
+        exit 1
+    }
+    
+    # Активация виртуального окружения
+    & .\.venv\Scripts\Activate.ps1
+    
+    # Формирование команды pytest
+    $pytestArgs = @()
+    
+    if ($Verbose) {
+        $pytestArgs += "-v"
+    }
+    
+    if ($Coverage) {
+        $pytestArgs += "--cov=."
+        $pytestArgs += "--cov-report=html"
+        $pytestArgs += "--cov-report=term-missing"
+    }
+    
+    if ($File) {
+        $pytestArgs += $File
+    }
+    
+    # Запуск тестов
+    if ($pytestArgs.Count -gt 0) {
+        pytest $pytestArgs
+    } else {
+        pytest
+    }
+    
+    if ($Coverage) {
+        Write-Host ""
+        Write-Host "📊 Отчёт о покрытии сохранён в htmlcov\index.html" -ForegroundColor Green
+    }
+}
+
+# Деплой Docker контейнера
+function Deploy-Container {
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "  Пересборка и перезапуск бота" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Проверка наличия Docker
+    Write-Host "[1/5] Проверка Docker..." -ForegroundColor Yellow
+    try {
+        docker --version | Out-Null
+        Write-Host "✓ Docker найден" -ForegroundColor Green
+    } catch {
+        Write-Host "✗ Docker не найден. Установите Docker Desktop." -ForegroundColor Red
+        exit 1
+    }
+    
+    # Остановка и удаление старого контейнера
+    Write-Host ""
+    Write-Host "[2/5] Остановка контейнера..." -ForegroundColor Yellow
+    $containerExists = docker ps -a --filter "name=$CONTAINER_NAME" --format "{{.Names}}"
+    if ($containerExists) {
+        docker stop $CONTAINER_NAME 2>$null
+        docker rm $CONTAINER_NAME 2>$null
+        Write-Host "✓ Контейнер остановлен и удален" -ForegroundColor Green
+    } else {
+        Write-Host "  Контейнер не найден, пропускаем" -ForegroundColor Gray
+    }
+    
+    # Пересборка образа
+    Write-Host ""
+    Write-Host "[3/5] Пересборка образа..." -ForegroundColor Yellow
+    docker build -t $IMAGE_NAME .
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "✓ Образ успешно собран" -ForegroundColor Green
+    } else {
+        Write-Host "✗ Ошибка при сборке образа" -ForegroundColor Red
+        exit 1
+    }
+    
+    # Запуск контейнера
+    Write-Host ""
+    Write-Host "[4/5] Запуск контейнера..." -ForegroundColor Yellow
+    
+    # Проверка наличия директории certs
+    $certsPath = Join-Path $PSScriptRoot "certs"
+    $configPath = Join-Path $PSScriptRoot "config.json"
+    
+    if (Test-Path $certsPath) {
+        # Запуск с webhook (с сертификатами)
+        docker run -d `
+            --name $CONTAINER_NAME `
+            --restart unless-stopped `
+            -p $PORT `
+            -v "${certsPath}:/app/certs:ro" `
+            -v "${configPath}:/app/config.json:ro" `
+            $IMAGE_NAME
+        Write-Host "✓ Контейнер запущен в режиме webhook" -ForegroundColor Green
+    } else {
+        # Запуск без webhook (polling mode)
+        docker run -d `
+            --name $CONTAINER_NAME `
+            --restart unless-stopped `
+            -v "${configPath}:/app/config.json:ro" `
+            $IMAGE_NAME
+        Write-Host "✓ Контейнер запущен в режиме polling" -ForegroundColor Green
+        Write-Host "  (директория certs не найдена)" -ForegroundColor Gray
+    }
+    
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "✗ Ошибка при запуске контейнера" -ForegroundColor Red
+        exit 1
+    }
+    
+    # Показ логов
+    Write-Host ""
+    Write-Host "[5/5] Логи контейнера:" -ForegroundColor Yellow
+    Write-Host "----------------------------------------" -ForegroundColor Gray
+    Start-Sleep -Seconds 2
+    docker logs --tail 20 $CONTAINER_NAME
+    
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "✓ Развертывание завершено!" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    Show-DockerCommands
+}
+
+# Показать логи
+function Show-Logs {
+    Write-Host "Логи контейнера $CONTAINER_NAME" -ForegroundColor Cyan
+    Write-Host ""
+    docker logs -f $CONTAINER_NAME
+}
+
+# Запустить контейнер
+function Start-Container {
+    Write-Host "Запуск контейнера..." -ForegroundColor Yellow
+    docker start $CONTAINER_NAME
+    Write-Host "✓ Контейнер запущен" -ForegroundColor Green
+    Show-DockerCommands
+}
+
+# Остановить контейнер
+function Stop-Container {
+    Write-Host "Остановка контейнера..." -ForegroundColor Yellow
+    docker stop $CONTAINER_NAME
+    Write-Host "✓ Контейнер остановлен" -ForegroundColor Green
+}
+
+# Перезапустить контейнер
+function Restart-Container {
+    Write-Host "Перезапуск контейнера..." -ForegroundColor Yellow
+    docker restart $CONTAINER_NAME
+    Write-Host "✓ Контейнер перезапущен" -ForegroundColor Green
+    Start-Sleep -Seconds 2
+    docker logs --tail 20 $CONTAINER_NAME
+}
+
+# Показать статус
+function Show-Status {
+    Write-Host "Статус контейнера:" -ForegroundColor Cyan
+    Write-Host ""
+    docker ps -a --filter "name=$CONTAINER_NAME" --format "table {{.Names}}`t{{.Status}}`t{{.Ports}}"
+}
+
+# Очистка
+function Clean-Docker {
+    Write-Host "Удаление контейнера и образа..." -ForegroundColor Yellow
+    docker stop $CONTAINER_NAME 2>$null
+    docker rm $CONTAINER_NAME 2>$null
+    docker rmi $IMAGE_NAME 2>$null
+    Write-Host "✓ Контейнер и образ удалены" -ForegroundColor Green
+}
+
+# Показать Docker команды
+function Show-DockerCommands {
+    Write-Host "Полезные команды:" -ForegroundColor White
+    Write-Host "  .\manage.ps1 logs        # Просмотр логов в реальном времени" -ForegroundColor Gray
+    Write-Host "  .\manage.ps1 stop        # Остановить контейнер" -ForegroundColor Gray
+    Write-Host "  .\manage.ps1 start       # Запустить контейнер" -ForegroundColor Gray
+    Write-Host "  .\manage.ps1 restart     # Перезапустить контейнер" -ForegroundColor Gray
+    Write-Host "  .\manage.ps1 status      # Показать статус" -ForegroundColor Gray
+    Write-Host ""
+}
+
+# Основная логика
+switch ($Command.ToLower()) {
+    "setup" {
+        Setup-Environment
+    }
+    "test" {
+        Run-Tests
+    }
+    "deploy" {
+        Deploy-Container
+    }
+    "logs" {
+        Show-Logs
+    }
+    "start" {
+        Start-Container
+    }
+    "stop" {
+        Stop-Container
+    }
+    "restart" {
+        Restart-Container
+    }
+    "status" {
+        Show-Status
+    }
+    "clean" {
+        Clean-Docker
+    }
+    "help" {
+        Show-Help
+    }
+    default {
+        Write-Host "Неизвестная команда: $Command" -ForegroundColor Red
+        Write-Host ""
+        Show-Help
+        exit 1
+    }
+}

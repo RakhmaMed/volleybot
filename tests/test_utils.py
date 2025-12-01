@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 from aiogram.types import User
 
-from utils import is_admin, save_error_dump
+from src.utils import is_admin, save_error_dump
 
 
 class TestIsAdmin:
@@ -74,8 +74,8 @@ class TestSaveErrorDump:
         error_file = tmp_path / "error_dump.json"
         test_error = ValueError("Test error message")
         
-        with patch('utils.os.path.dirname', return_value=str(tmp_path)):
-            with patch('utils.os.path.join', return_value=str(error_file)):
+        with patch('src.utils.os.path.dirname', return_value=str(tmp_path)):
+            with patch('src.utils.os.path.join', return_value=str(error_file)):
                 save_error_dump(test_error, "test_poll", "Test question", -1001234567890)
         
         assert error_file.exists()
@@ -108,8 +108,8 @@ class TestSaveErrorDump:
         
         test_error = ValueError("New error")
         
-        with patch('utils.os.path.dirname', return_value=str(tmp_path)):
-            with patch('utils.os.path.join', return_value=str(error_file)):
+        with patch('src.utils.os.path.dirname', return_value=str(tmp_path)):
+            with patch('src.utils.os.path.join', return_value=str(error_file)):
                 save_error_dump(test_error, "new_poll", "New question", -1001234567890)
         
         with open(error_file, 'r', encoding='utf-8') as f:
@@ -130,8 +130,8 @@ class TestSaveErrorDump:
         
         test_error = ValueError("New error")
         
-        with patch('utils.os.path.dirname', return_value=str(tmp_path)):
-            with patch('utils.os.path.join', return_value=str(error_file)):
+        with patch('src.utils.os.path.dirname', return_value=str(tmp_path)):
+            with patch('src.utils.os.path.join', return_value=str(error_file)):
                 save_error_dump(test_error, "test_poll", "Test question", -1001234567890)
         
         with open(error_file, 'r', encoding='utf-8') as f:
@@ -151,8 +151,8 @@ class TestSaveErrorDump:
         
         test_error = ValueError("Test error")
         
-        with patch('utils.os.path.dirname', return_value=str(tmp_path)):
-            with patch('utils.os.path.join', return_value=str(error_file)):
+        with patch('src.utils.os.path.dirname', return_value=str(tmp_path)):
+            with patch('src.utils.os.path.join', return_value=str(error_file)):
                 save_error_dump(test_error, "test_poll", "Test question", -1001234567890)
         
         # Файл должен быть перезаписан с новой ошибкой

@@ -6,8 +6,8 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.types import Chat, Message, PollAnswer, User
 
-from handlers import register_handlers
-from config import ADMIN_USERNAME
+from src.handlers import register_handlers
+from src.config import ADMIN_USERNAME
 
 
 @pytest.mark.asyncio
@@ -167,7 +167,7 @@ class TestPollAnswerHandler:
     
     async def test_poll_answer_handler_adds_voter(self):
         """Тест добавления голосующего при ответе на опрос."""
-        from poll import poll_data
+        from src.poll import poll_data
         
         bot = MagicMock(spec=Bot)
         dp = Dispatcher()
@@ -203,7 +203,7 @@ class TestPollAnswerHandler:
     
     async def test_poll_answer_handler_removes_voter(self):
         """Тест удаления голосующего при изменении ответа."""
-        from poll import poll_data
+        from src.poll import poll_data
         
         poll_id = "test_poll_id"
         user_id = 123

@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 # Импортируем config для проверки его структуры
-import config
+from src import config
 
 
 class TestConfigLoading:

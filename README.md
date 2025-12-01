@@ -103,7 +103,7 @@ source .venv/bin/activate
 ### 4. Запустите бота
 
 ```bash
-python bot.py
+python -m src.bot
 ```
 
 ## ⚙️ Настройка
@@ -171,7 +171,7 @@ python bot.py
 **Режим polling (по умолчанию):**
 
 ```bash
-python bot.py
+python -m src.bot
 ```
 
 Бот будет опрашивать Telegram API для получения обновлений.
@@ -674,27 +674,29 @@ docker rm bot_itv
 
 ```
 bot_itv/
-├── bot.py              # Точка входа, инициализация бота
-├── config.py           # Загрузка конфигурации
-├── handlers.py         # Обработчики команд
-├── poll.py             # Логика опросов
-├── scheduler.py        # Планировщик задач
-├── utils.py            # Вспомогательные функции
-├── config.json         # Конфигурация (не в git!)
-├── requirements.txt    # Зависимости Python
-├── Dockerfile          # Docker образ
-├── docker-compose.yml  # Docker Compose конфигурация (создайте при необходимости)
-├── pytest.ini          # Настройки pytest
-├── .coveragerc         # Настройки coverage
-├── manage.sh           # Универсальный скрипт управления (Linux/macOS)
-├── manage.ps1          # Универсальный скрипт управления (Windows)
-└── tests/              # Автотесты
-    ├── conftest.py
-    ├── test_config.py
-    ├── test_handlers.py
-    ├── test_poll.py
-    ├── test_scheduler.py
-    └── test_utils.py
+├── src/                # Исходный код приложения
+│   ├── __init__.py
+│   ├── bot.py         # Точка входа, инициализация бота
+│   ├── config.py      # Загрузка конфигурации
+│   ├── handlers.py    # Обработчики команд
+│   ├── poll.py        # Логика опросов
+│   ├── scheduler.py   # Планировщик задач
+│   └── utils.py       # Вспомогательные функции
+├── tests/             # Автотесты
+│   ├── conftest.py
+│   ├── test_config.py
+│   ├── test_handlers.py
+│   ├── test_poll.py
+│   ├── test_scheduler.py
+│   └── test_utils.py
+├── config.json        # Конфигурация (не в git!)
+├── requirements.txt   # Зависимости Python
+├── Dockerfile         # Docker образ
+├── docker-compose.yml # Docker Compose конфигурация (создайте при необходимости)
+├── pytest.ini         # Настройки pytest
+├── .coveragerc        # Настройки coverage
+├── manage.sh          # Универсальный скрипт управления (Linux/macOS)
+└── manage.ps1         # Универсальный скрипт управления (Windows)
 ```
 
 ## 📝 Важные замечания

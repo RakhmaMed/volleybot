@@ -10,8 +10,8 @@ from typing import Any, TypedDict
 from aiogram import Bot
 from aiogram.exceptions import TelegramMigrateToChat
 
-from config import POLL_OPTIONS, REQUIRED_PLAYERS
-from utils import save_error_dump
+from .config import POLL_OPTIONS, REQUIRED_PLAYERS
+from .utils import save_error_dump
 
 
 class VoterInfo(TypedDict):

@@ -17,7 +17,7 @@ from aiogram.enums import ParseMode
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import (
+from .config import (
     TOKEN,
     CHAT_ID,
     WEBHOOK_HOST,
@@ -27,8 +27,8 @@ from config import (
     WEBHOOK_SSL_CERT,
     WEBHOOK_SSL_PRIV,
 )
-from handlers import register_handlers
-from scheduler import setup_scheduler
+from .handlers import register_handlers
+from .scheduler import setup_scheduler
 
 logging.basicConfig(level=logging.INFO)
 

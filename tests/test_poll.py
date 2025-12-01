@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram.exceptions import TelegramMigrateToChat
 
-from poll import (
+from src.poll import (
     close_poll,
     poll_data,
     send_poll,
@@ -14,7 +14,7 @@ from poll import (
     PollDataItem,
     VoterInfo
 )
-from config import REQUIRED_PLAYERS
+from src.config import REQUIRED_PLAYERS
 
 
 @pytest.mark.asyncio
@@ -93,7 +93,7 @@ class TestSendPoll:
         
         poll_data.clear()
         
-        with patch('poll.save_error_dump') as mock_save:
+        with patch('src.poll.save_error_dump') as mock_save:
             result = await send_poll(
                 mock_bot,
                 chat_id=-1001234567890,
@@ -125,7 +125,7 @@ class TestUpdatePlayersList:
         
         mock_bot.edit_message_text = AsyncMock()
         
-        with patch('poll.asyncio.sleep', new_callable=AsyncMock):
+        with patch('src.poll.asyncio.sleep', new_callable=AsyncMock):
             await update_players_list(mock_bot, poll_id)
         
         mock_bot.edit_message_text.assert_called_once()
@@ -150,7 +150,7 @@ class TestUpdatePlayersList:
         
         mock_bot.edit_message_text = AsyncMock()
         
-        with patch('poll.asyncio.sleep', new_callable=AsyncMock):
+        with patch('src.poll.asyncio.sleep', new_callable=AsyncMock):
             await update_players_list(mock_bot, poll_id)
         
         mock_bot.edit_message_text.assert_called_once()
@@ -176,7 +176,7 @@ class TestUpdatePlayersList:
         
         mock_bot.edit_message_text = AsyncMock()
         
-        with patch('poll.asyncio.sleep', new_callable=AsyncMock):
+        with patch('src.poll.asyncio.sleep', new_callable=AsyncMock):
             await update_players_list(mock_bot, poll_id)
         
         mock_bot.edit_message_text.assert_called_once()
@@ -198,7 +198,7 @@ class TestUpdatePlayersList:
         
         mock_bot.edit_message_text = AsyncMock()
         
-        with patch('poll.asyncio.sleep', new_callable=AsyncMock):
+        with patch('src.poll.asyncio.sleep', new_callable=AsyncMock):
             await update_players_list(mock_bot, poll_id)
         
         mock_bot.edit_message_text.assert_not_called()
@@ -218,7 +218,7 @@ class TestUpdatePlayersList:
         
         mock_bot.edit_message_text = AsyncMock()
         
-        with patch('poll.asyncio.sleep', new_callable=AsyncMock):
+        with patch('src.poll.asyncio.sleep', new_callable=AsyncMock):
             await update_players_list(mock_bot, poll_id)
         
         # Должен быть вызван, но если текст совпадает, то не обновляется

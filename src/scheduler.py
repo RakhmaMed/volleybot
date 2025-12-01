@@ -8,8 +8,8 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from config import POLLS_SCHEDULE
-from poll import send_poll, close_poll
+from .config import POLLS_SCHEDULE
+from .poll import send_poll, close_poll
 
 
 def create_poll_job(

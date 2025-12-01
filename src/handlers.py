@@ -8,8 +8,8 @@ from aiogram import Bot, Dispatcher, Router
 from aiogram.types import Message, PollAnswer
 from aiogram.filters import Command
 
-from poll import poll_data, update_players_list
-from utils import is_admin
+from .poll import poll_data, update_players_list
+from .utils import is_admin
 
 
 def register_handlers(

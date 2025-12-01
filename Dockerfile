@@ -19,4 +19,4 @@ RUN mkdir -p /app/certs
 EXPOSE 8443
 
 # Запускаем бота
-CMD ["python", "bot.py"]
+CMD ["python", "-m", "src.bot"]
