@@ -28,6 +28,7 @@ show_help() {
     echo ""
     echo -e "  ${GREEN}setup${NC}                Настроить тестовое окружение"
     echo -e "  ${GREEN}test${NC} [опции]        Запустить тесты"
+    echo -e "  ${GREEN}build${NC}                Собрать Docker образ"
     echo -e "  ${GREEN}deploy${NC}               Собрать и запустить Docker контейнер"
     echo -e "  ${GREEN}logs${NC}                 Показать логи контейнера"
     echo -e "  ${GREEN}start${NC}                Запустить контейнер"
@@ -47,6 +48,7 @@ show_help() {
     echo "  ./manage.sh test"
     echo "  ./manage.sh test --coverage"
     echo "  ./manage.sh test --file tests/test_utils.py"
+    echo "  ./manage.sh build"
     echo "  ./manage.sh deploy"
     echo "  ./manage.sh logs"
     echo ""
@@ -178,6 +180,36 @@ run_tests() {
     fi
 }
 
+# Сборка Docker образа
+build_image() {
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${CYAN}  Сборка Docker образа${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo ""
+    
+    # Проверка наличия Docker
+    echo -e "${YELLOW}[1/2] Проверка Docker...${NC}"
+    if ! command -v docker &> /dev/null; then
+        echo -e "${RED}✗ Docker не найден. Установите Docker.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Docker найден${NC}"
+    
+    # Сборка образа
+    echo ""
+    echo -e "${YELLOW}[2/2] Сборка образа...${NC}"
+    if docker build -t $IMAGE_NAME .; then
+        echo ""
+        echo -e "${CYAN}========================================${NC}"
+        echo -e "${GREEN}✓ Образ успешно собран: $IMAGE_NAME${NC}"
+        echo -e "${CYAN}========================================${NC}"
+        echo ""
+    else
+        echo -e "${RED}✗ Ошибка при сборке образа${NC}"
+        exit 1
+    fi
+}
+
 # Деплой Docker контейнера
 deploy_container() {
     echo -e "${CYAN}========================================${NC}"
@@ -255,8 +287,19 @@ deploy_container() {
     show_docker_commands
 }
 
+# Проверка существования контейнера
+container_exists() {
+    [ "$(docker ps -aq -f name=$CONTAINER_NAME)" ]
+}
+
 # Показать логи
 show_logs() {
+    if ! container_exists; then
+        echo -e "${RED}❌ Контейнер '$CONTAINER_NAME' не найден.${NC}"
+        echo -e "${YELLOW}Запустите: ./manage.sh deploy${NC}"
+        exit 1
+    fi
+    
     echo -e "${CYAN}Логи контейнера $CONTAINER_NAME:${NC}"
     echo ""
     docker logs -f $CONTAINER_NAME
@@ -264,33 +307,68 @@ show_logs() {
 
 # Запустить контейнер
 start_container() {
+    if ! container_exists; then
+        echo -e "${RED}❌ Контейнер '$CONTAINER_NAME' не найден.${NC}"
+        echo -e "${YELLOW}Запустите: ./manage.sh deploy${NC}"
+        exit 1
+    fi
+    
     echo -e "${YELLOW}Запуск контейнера...${NC}"
-    docker start $CONTAINER_NAME
-    echo -e "${GREEN}✓ Контейнер запущен${NC}"
-    show_docker_commands
+    if docker start $CONTAINER_NAME; then
+        echo -e "${GREEN}✓ Контейнер запущен${NC}"
+        show_docker_commands
+    else
+        echo -e "${RED}✗ Ошибка при запуске контейнера${NC}"
+        exit 1
+    fi
 }
 
 # Остановить контейнер
 stop_container() {
+    if ! container_exists; then
+        echo -e "${RED}❌ Контейнер '$CONTAINER_NAME' не найден.${NC}"
+        exit 1
+    fi
+    
     echo -e "${YELLOW}Остановка контейнера...${NC}"
-    docker stop $CONTAINER_NAME
-    echo -e "${GREEN}✓ Контейнер остановлен${NC}"
+    if docker stop $CONTAINER_NAME; then
+        echo -e "${GREEN}✓ Контейнер остановлен${NC}"
+    else
+        echo -e "${RED}✗ Ошибка при остановке контейнера${NC}"
+        exit 1
+    fi
 }
 
 # Перезапустить контейнер
 restart_container() {
+    if ! container_exists; then
+        echo -e "${RED}❌ Контейнер '$CONTAINER_NAME' не найден.${NC}"
+        echo -e "${YELLOW}Запустите: ./manage.sh deploy${NC}"
+        exit 1
+    fi
+    
     echo -e "${YELLOW}Перезапуск контейнера...${NC}"
-    docker restart $CONTAINER_NAME
-    echo -e "${GREEN}✓ Контейнер перезапущен${NC}"
-    sleep 2
-    docker logs --tail 20 $CONTAINER_NAME
+    if docker restart $CONTAINER_NAME; then
+        echo -e "${GREEN}✓ Контейнер перезапущен${NC}"
+        sleep 2
+        docker logs --tail 20 $CONTAINER_NAME
+    else
+        echo -e "${RED}✗ Ошибка при перезапуске контейнера${NC}"
+        exit 1
+    fi
 }
 
 # Показать статус
 show_status() {
     echo -e "${CYAN}Статус контейнера:${NC}"
     echo ""
-    docker ps -a --filter "name=$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    STATUS=$(docker ps -a --filter "name=$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}")
+    if [ -n "$STATUS" ] && echo "$STATUS" | grep -q "$CONTAINER_NAME"; then
+        echo "$STATUS"
+    else
+        echo -e "${YELLOW}Контейнер '$CONTAINER_NAME' не найден.${NC}"
+        echo -e "${GRAY}Запустите: ./manage.sh deploy${NC}"
+    fi
 }
 
 # Очистка
@@ -321,6 +399,9 @@ case "${1:-help}" in
     test)
         shift
         run_tests "$@"
+        ;;
+    build)
+        build_image
         ;;
     deploy)
         deploy_container

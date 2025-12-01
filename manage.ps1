@@ -6,7 +6,7 @@ param(
     [string]$Command = "help",
     
     [switch]$Coverage,
-    [switch]$Verbose,
+    [switch]$VerboseOutput,
     [string]$File = ""
 )
 
@@ -28,6 +28,8 @@ function Show-Help {
     Write-Host "                Настроить тестовое окружение"
     Write-Host "  test" -ForegroundColor Green -NoNewline
     Write-Host " [опции]        Запустить тесты"
+    Write-Host "  build" -ForegroundColor Green -NoNewline
+    Write-Host "                Собрать Docker образ"
     Write-Host "  deploy" -ForegroundColor Green -NoNewline
     Write-Host "               Собрать и запустить Docker контейнер"
     Write-Host "  logs" -ForegroundColor Green -NoNewline
@@ -47,7 +49,7 @@ function Show-Help {
     Write-Host ""
     Write-Host "Опции для test:" -ForegroundColor Yellow
     Write-Host "  -Coverage        Запустить с покрытием кода"
-    Write-Host "  -Verbose         Подробный вывод"
+    Write-Host "  -VerboseOutput   Подробный вывод"
     Write-Host "  -File <путь>     Запустить конкретный файл"
     Write-Host ""
     Write-Host "Примеры:" -ForegroundColor Yellow
@@ -55,6 +57,7 @@ function Show-Help {
     Write-Host "  .\manage.ps1 test"
     Write-Host "  .\manage.ps1 test -Coverage"
     Write-Host "  .\manage.ps1 test -File tests\test_utils.py"
+    Write-Host "  .\manage.ps1 build"
     Write-Host "  .\manage.ps1 deploy"
     Write-Host "  .\manage.ps1 logs"
     Write-Host ""
@@ -144,7 +147,7 @@ function Run-Tests {
     # Формирование команды pytest
     $pytestArgs = @()
     
-    if ($Verbose) {
+    if ($VerboseOutput) {
         $pytestArgs += "-v"
     }
     
@@ -168,6 +171,39 @@ function Run-Tests {
     if ($Coverage) {
         Write-Host ""
         Write-Host "📊 Отчёт о покрытии сохранён в htmlcov\index.html" -ForegroundColor Green
+    }
+}
+
+# Сборка Docker образа
+function Build-Image {
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "  Сборка Docker образа" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Проверка наличия Docker
+    Write-Host "[1/2] Проверка Docker..." -ForegroundColor Yellow
+    try {
+        docker --version | Out-Null
+        Write-Host "✓ Docker найден" -ForegroundColor Green
+    } catch {
+        Write-Host "✗ Docker не найден. Установите Docker Desktop." -ForegroundColor Red
+        exit 1
+    }
+    
+    # Сборка образа
+    Write-Host ""
+    Write-Host "[2/2] Сборка образа..." -ForegroundColor Yellow
+    docker build -t $IMAGE_NAME .
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host ""
+        Write-Host "========================================" -ForegroundColor Cyan
+        Write-Host "✓ Образ успешно собран: $IMAGE_NAME" -ForegroundColor Green
+        Write-Host "========================================" -ForegroundColor Cyan
+        Write-Host ""
+    } else {
+        Write-Host "✗ Ошибка при сборке образа" -ForegroundColor Red
+        exit 1
     }
 }
 
@@ -260,8 +296,20 @@ function Deploy-Container {
     Show-DockerCommands
 }
 
+# Проверка существования контейнера
+function Test-ContainerExists {
+    $containerExists = docker ps -a --filter "name=$CONTAINER_NAME" --format "{{.Names}}"
+    return ($containerExists -eq $CONTAINER_NAME)
+}
+
 # Показать логи
 function Show-Logs {
+    if (-not (Test-ContainerExists)) {
+        Write-Host "❌ Контейнер '$CONTAINER_NAME' не найден." -ForegroundColor Red
+        Write-Host "Запустите: .\manage.ps1 deploy" -ForegroundColor Yellow
+        exit 1
+    }
+    
     Write-Host "Логи контейнера $CONTAINER_NAME" -ForegroundColor Cyan
     Write-Host ""
     docker logs -f $CONTAINER_NAME
@@ -269,33 +317,71 @@ function Show-Logs {
 
 # Запустить контейнер
 function Start-Container {
+    if (-not (Test-ContainerExists)) {
+        Write-Host "❌ Контейнер '$CONTAINER_NAME' не найден." -ForegroundColor Red
+        Write-Host "Запустите: .\manage.ps1 deploy" -ForegroundColor Yellow
+        exit 1
+    }
+    
     Write-Host "Запуск контейнера..." -ForegroundColor Yellow
     docker start $CONTAINER_NAME
-    Write-Host "✓ Контейнер запущен" -ForegroundColor Green
-    Show-DockerCommands
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "✓ Контейнер запущен" -ForegroundColor Green
+        Show-DockerCommands
+    } else {
+        Write-Host "✗ Ошибка при запуске контейнера" -ForegroundColor Red
+        exit 1
+    }
 }
 
 # Остановить контейнер
 function Stop-Container {
+    if (-not (Test-ContainerExists)) {
+        Write-Host "❌ Контейнер '$CONTAINER_NAME' не найден." -ForegroundColor Red
+        exit 1
+    }
+    
     Write-Host "Остановка контейнера..." -ForegroundColor Yellow
     docker stop $CONTAINER_NAME
-    Write-Host "✓ Контейнер остановлен" -ForegroundColor Green
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "✓ Контейнер остановлен" -ForegroundColor Green
+    } else {
+        Write-Host "✗ Ошибка при остановке контейнера" -ForegroundColor Red
+        exit 1
+    }
 }
 
 # Перезапустить контейнер
 function Restart-Container {
+    if (-not (Test-ContainerExists)) {
+        Write-Host "❌ Контейнер '$CONTAINER_NAME' не найден." -ForegroundColor Red
+        Write-Host "Запустите: .\manage.ps1 deploy" -ForegroundColor Yellow
+        exit 1
+    }
+    
     Write-Host "Перезапуск контейнера..." -ForegroundColor Yellow
     docker restart $CONTAINER_NAME
-    Write-Host "✓ Контейнер перезапущен" -ForegroundColor Green
-    Start-Sleep -Seconds 2
-    docker logs --tail 20 $CONTAINER_NAME
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "✓ Контейнер перезапущен" -ForegroundColor Green
+        Start-Sleep -Seconds 2
+        docker logs --tail 20 $CONTAINER_NAME
+    } else {
+        Write-Host "✗ Ошибка при перезапуске контейнера" -ForegroundColor Red
+        exit 1
+    }
 }
 
 # Показать статус
 function Show-Status {
     Write-Host "Статус контейнера:" -ForegroundColor Cyan
     Write-Host ""
-    docker ps -a --filter "name=$CONTAINER_NAME" --format "table {{.Names}}`t{{.Status}}`t{{.Ports}}"
+    $status = docker ps -a --filter "name=$CONTAINER_NAME" --format "table {{.Names}}`t{{.Status}}`t{{.Ports}}"
+    if ($status -and $status -match $CONTAINER_NAME) {
+        Write-Host $status
+    } else {
+        Write-Host "Контейнер '$CONTAINER_NAME' не найден." -ForegroundColor Yellow
+        Write-Host "Запустите: .\manage.ps1 deploy" -ForegroundColor Gray
+    }
 }
 
 # Очистка
@@ -325,6 +411,9 @@ switch ($Command.ToLower()) {
     }
     "test" {
         Run-Tests
+    }
+    "build" {
+        Build-Image
     }
     "deploy" {
         Deploy-Container
