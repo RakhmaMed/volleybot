@@ -11,9 +11,6 @@ from aiogram.filters import Command
 from poll import poll_data, update_players_list
 from utils import is_admin
 
-# Создаём роутер для обработчиков
-router: Router = Router()
-
 
 def register_handlers(
     dp: Dispatcher,
@@ -30,6 +27,9 @@ def register_handlers(
         get_bot_enabled: Функция получения состояния бота
         set_bot_enabled: Функция установки состояния бота
     """
+    
+    # Создаём роутер для обработчиков
+    router: Router = Router()
     
     @router.message(Command("start"))
     async def start_bot_handler(message: Message) -> None:

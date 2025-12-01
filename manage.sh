@@ -1,0 +1,356 @@
+#!/bin/bash
+# Универсальный скрипт управления проектом bot_itv (Linux/macOS)
+# Использование: ./manage.sh [команда] [опции]
+
+set -e
+
+# Цвета для вывода
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+GRAY='\033[0;90m'
+NC='\033[0m' # No Color
+
+CONTAINER_NAME="bot_itv"
+IMAGE_NAME="bot_itv:latest"
+PORT="8443:8443"
+
+# Функция помощи
+show_help() {
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${CYAN}  Bot ITV - Скрипт управления${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo ""
+    echo "Использование: ./manage.sh [команда] [опции]"
+    echo ""
+    echo -e "${YELLOW}Доступные команды:${NC}"
+    echo ""
+    echo -e "  ${GREEN}setup${NC}                Настроить тестовое окружение"
+    echo -e "  ${GREEN}test${NC} [опции]        Запустить тесты"
+    echo -e "  ${GREEN}deploy${NC}               Собрать и запустить Docker контейнер"
+    echo -e "  ${GREEN}logs${NC}                 Показать логи контейнера"
+    echo -e "  ${GREEN}start${NC}                Запустить контейнер"
+    echo -e "  ${GREEN}stop${NC}                 Остановить контейнер"
+    echo -e "  ${GREEN}restart${NC}              Перезапустить контейнер"
+    echo -e "  ${GREEN}status${NC}               Показать статус контейнера"
+    echo -e "  ${GREEN}clean${NC}                Удалить контейнер и образ"
+    echo -e "  ${GREEN}help${NC}                 Показать эту справку"
+    echo ""
+    echo -e "${YELLOW}Опции для test:${NC}"
+    echo "  -c, --coverage       Запустить с покрытием кода"
+    echo "  -v, --verbose        Подробный вывод"
+    echo "  -f, --file <путь>    Запустить конкретный файл"
+    echo ""
+    echo -e "${YELLOW}Примеры:${NC}"
+    echo "  ./manage.sh setup"
+    echo "  ./manage.sh test"
+    echo "  ./manage.sh test --coverage"
+    echo "  ./manage.sh test --file tests/test_utils.py"
+    echo "  ./manage.sh deploy"
+    echo "  ./manage.sh logs"
+    echo ""
+}
+
+# Настройка тестового окружения
+setup_environment() {
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${CYAN}  Настройка тестового окружения${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo ""
+    
+    # Проверка наличия uv
+    echo -e "${YELLOW}[1/4] Проверка uv...${NC}"
+    if ! command -v uv &> /dev/null; then
+        echo -e "${YELLOW}❌ uv не найден. Устанавливаю uv...${NC}"
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        export PATH="$HOME/.cargo/bin:$PATH"
+        
+        if ! command -v uv &> /dev/null; then
+            echo -e "${RED}❌ Не удалось установить uv. Установите вручную:${NC}"
+            echo "   curl -LsSf https://astral.sh/uv/install.sh | sh"
+            exit 1
+        fi
+    fi
+    echo -e "${GREEN}✓ uv найден${NC}"
+    
+    # Создание виртуального окружения
+    echo ""
+    echo -e "${YELLOW}[2/4] Создание виртуального окружения...${NC}"
+    uv venv
+    echo -e "${GREEN}✓ Виртуальное окружение создано${NC}"
+    
+    # Активация виртуального окружения
+    echo ""
+    echo -e "${YELLOW}[3/4] Активация виртуального окружения...${NC}"
+    source .venv/bin/activate
+    echo -e "${GREEN}✓ Виртуальное окружение активировано${NC}"
+    
+    # Установка зависимостей
+    echo ""
+    echo -e "${YELLOW}[4/4] Установка зависимостей...${NC}"
+    uv pip install -r requirements.txt
+    echo -e "${GREEN}✓ Зависимости установлены${NC}"
+    
+    echo ""
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${GREEN}✓ Тестовое окружение готово!${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo ""
+    echo -e "${NC}Для запуска тестов выполните:${NC}"
+    echo -e "${GRAY}  source .venv/bin/activate${NC}"
+    echo -e "${GRAY}  pytest${NC}"
+    echo ""
+    echo -e "${NC}Или используйте:${NC}"
+    echo -e "${GRAY}  ./manage.sh test${NC}"
+    echo ""
+}
+
+# Запуск тестов
+run_tests() {
+    COVERAGE=false
+    VERBOSE=false
+    FILE=""
+    
+    # Парсинг аргументов
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --coverage|-c)
+                COVERAGE=true
+                shift
+                ;;
+            --verbose|-v)
+                VERBOSE=true
+                shift
+                ;;
+            --file|-f)
+                FILE="$2"
+                shift 2
+                ;;
+            *)
+                echo -e "${RED}Неизвестный аргумент: $1${NC}"
+                echo "Использование: ./manage.sh test [--coverage] [--verbose] [--file <путь>]"
+                exit 1
+                ;;
+        esac
+    done
+    
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${CYAN}  Запуск тестов${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo ""
+    
+    # Проверка наличия виртуального окружения
+    if [ ! -d ".venv" ]; then
+        echo -e "${RED}❌ Виртуальное окружение не найдено.${NC}"
+        echo -e "${YELLOW}Запустите: ./manage.sh setup${NC}"
+        exit 1
+    fi
+    
+    # Активация виртуального окружения
+    source .venv/bin/activate
+    
+    # Формирование команды pytest
+    PYTEST_ARGS=()
+    
+    if [ "$VERBOSE" = true ]; then
+        PYTEST_ARGS+=("-v")
+    fi
+    
+    if [ "$COVERAGE" = true ]; then
+        PYTEST_ARGS+=("--cov=." "--cov-report=html" "--cov-report=term-missing")
+    fi
+    
+    if [ -n "$FILE" ]; then
+        PYTEST_ARGS+=("$FILE")
+    fi
+    
+    # Запуск тестов
+    if [ ${#PYTEST_ARGS[@]} -gt 0 ]; then
+        pytest "${PYTEST_ARGS[@]}"
+    else
+        pytest
+    fi
+    
+    if [ "$COVERAGE" = true ]; then
+        echo ""
+        echo -e "${GREEN}📊 Отчёт о покрытии сохранён в htmlcov/index.html${NC}"
+    fi
+}
+
+# Деплой Docker контейнера
+deploy_container() {
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${CYAN}  Пересборка и перезапуск бота${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo ""
+    
+    # Проверка наличия Docker
+    echo -e "${YELLOW}[1/5] Проверка Docker...${NC}"
+    if ! command -v docker &> /dev/null; then
+        echo -e "${RED}✗ Docker не найден. Установите Docker.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Docker найден${NC}"
+    
+    # Остановка и удаление старого контейнера
+    echo ""
+    echo -e "${YELLOW}[2/5] Остановка контейнера...${NC}"
+    if [ "$(docker ps -aq -f name=$CONTAINER_NAME)" ]; then
+        docker stop $CONTAINER_NAME 2>/dev/null || true
+        docker rm $CONTAINER_NAME 2>/dev/null || true
+        echo -e "${GREEN}✓ Контейнер остановлен и удален${NC}"
+    else
+        echo -e "${GRAY}  Контейнер не найден, пропускаем${NC}"
+    fi
+    
+    # Пересборка образа
+    echo ""
+    echo -e "${YELLOW}[3/5] Пересборка образа...${NC}"
+    if docker build -t $IMAGE_NAME .; then
+        echo -e "${GREEN}✓ Образ успешно собран${NC}"
+    else
+        echo -e "${RED}✗ Ошибка при сборке образа${NC}"
+        exit 1
+    fi
+    
+    # Запуск контейнера
+    echo ""
+    echo -e "${YELLOW}[4/5] Запуск контейнера...${NC}"
+    
+    # Проверка наличия директории certs
+    if [ -d "./certs" ]; then
+        # Запуск с webhook (с сертификатами)
+        docker run -d \
+            --name $CONTAINER_NAME \
+            --restart unless-stopped \
+            -p $PORT \
+            -v "$(pwd)/certs:/app/certs:ro" \
+            -v "$(pwd)/config.json:/app/config.json:ro" \
+            $IMAGE_NAME
+        echo -e "${GREEN}✓ Контейнер запущен в режиме webhook${NC}"
+    else
+        # Запуск без webhook (polling mode)
+        docker run -d \
+            --name $CONTAINER_NAME \
+            --restart unless-stopped \
+            -v "$(pwd)/config.json:/app/config.json:ro" \
+            $IMAGE_NAME
+        echo -e "${GREEN}✓ Контейнер запущен в режиме polling${NC}"
+        echo -e "${GRAY}  (директория certs не найдена)${NC}"
+    fi
+    
+    # Показ логов
+    echo ""
+    echo -e "${YELLOW}[5/5] Логи контейнера:${NC}"
+    echo -e "${GRAY}----------------------------------------${NC}"
+    sleep 2
+    docker logs --tail 20 $CONTAINER_NAME
+    
+    echo ""
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${GREEN}✓ Развертывание завершено!${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo ""
+    show_docker_commands
+}
+
+# Показать логи
+show_logs() {
+    echo -e "${CYAN}Логи контейнера $CONTAINER_NAME:${NC}"
+    echo ""
+    docker logs -f $CONTAINER_NAME
+}
+
+# Запустить контейнер
+start_container() {
+    echo -e "${YELLOW}Запуск контейнера...${NC}"
+    docker start $CONTAINER_NAME
+    echo -e "${GREEN}✓ Контейнер запущен${NC}"
+    show_docker_commands
+}
+
+# Остановить контейнер
+stop_container() {
+    echo -e "${YELLOW}Остановка контейнера...${NC}"
+    docker stop $CONTAINER_NAME
+    echo -e "${GREEN}✓ Контейнер остановлен${NC}"
+}
+
+# Перезапустить контейнер
+restart_container() {
+    echo -e "${YELLOW}Перезапуск контейнера...${NC}"
+    docker restart $CONTAINER_NAME
+    echo -e "${GREEN}✓ Контейнер перезапущен${NC}"
+    sleep 2
+    docker logs --tail 20 $CONTAINER_NAME
+}
+
+# Показать статус
+show_status() {
+    echo -e "${CYAN}Статус контейнера:${NC}"
+    echo ""
+    docker ps -a --filter "name=$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+}
+
+# Очистка
+clean_docker() {
+    echo -e "${YELLOW}Удаление контейнера и образа...${NC}"
+    docker stop $CONTAINER_NAME 2>/dev/null || true
+    docker rm $CONTAINER_NAME 2>/dev/null || true
+    docker rmi $IMAGE_NAME 2>/dev/null || true
+    echo -e "${GREEN}✓ Контейнер и образ удалены${NC}"
+}
+
+# Показать Docker команды
+show_docker_commands() {
+    echo -e "${NC}Полезные команды:${NC}"
+    echo -e "${GRAY}  ./manage.sh logs        # Просмотр логов в реальном времени${NC}"
+    echo -e "${GRAY}  ./manage.sh stop        # Остановить контейнер${NC}"
+    echo -e "${GRAY}  ./manage.sh start       # Запустить контейнер${NC}"
+    echo -e "${GRAY}  ./manage.sh restart     # Перезапустить контейнер${NC}"
+    echo -e "${GRAY}  ./manage.sh status      # Показать статус${NC}"
+    echo ""
+}
+
+# Основная логика
+case "${1:-help}" in
+    setup)
+        setup_environment
+        ;;
+    test)
+        shift
+        run_tests "$@"
+        ;;
+    deploy)
+        deploy_container
+        ;;
+    logs)
+        show_logs
+        ;;
+    start)
+        start_container
+        ;;
+    stop)
+        stop_container
+        ;;
+    restart)
+        restart_container
+        ;;
+    status)
+        show_status
+        ;;
+    clean)
+        clean_docker
+        ;;
+    help|--help|-h)
+        show_help
+        ;;
+    *)
+        echo -e "${RED}Неизвестная команда: $1${NC}"
+        echo ""
+        show_help
+        exit 1
+        ;;
+esac
+

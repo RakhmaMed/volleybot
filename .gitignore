@@ -12,6 +12,7 @@ env/
 venv/
 ENV/
 .venv
+.pytest_cache
 
 # IDE
 .vscode/
@@ -22,4 +23,9 @@ ENV/
 
 # Логи
 *.log
+error_dump.json
+
+# Coverage reports
+htmlcov/
+.coverage
 

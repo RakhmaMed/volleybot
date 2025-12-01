@@ -1,0 +1,21 @@
+[run]
+# Исключаем из покрытия тесты и кэш
+omit =
+    tests/*
+    */__pycache__/*
+    */site-packages/*
+    */dist-packages/*
+    setup.py
+    */migrations/*
+
+[report]
+# Исключаем из отчёта
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
+

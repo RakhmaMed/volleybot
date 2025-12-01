@@ -8,12 +8,12 @@ from urllib.parse import urlparse
 logging.basicConfig(level=logging.INFO)
 
 # Загрузка конфигурации
-with open("config.json") as f:
+with open("config.json", encoding="utf-8") as f:
     config: dict[str, Any] = json.load(f)
 
 # Telegram настройки
 TOKEN: str = config["telegram_token"]
-CHAT_ID: int = config["chat_id"]
+CHAT_ID: int = int(config["chat_id"])
 ADMIN_USERNAME: str = config.get("admin_username", "TwinkleDev55")
 POLLS_SCHEDULE: list[dict[str, Any]] = config.get("polls", [])
 
