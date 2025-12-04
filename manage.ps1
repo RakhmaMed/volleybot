@@ -182,7 +182,7 @@ function Build-Image {
     Write-Host ""
     
     # Проверка наличия Docker
-    Write-Host "[1/2] Проверка Docker..." -ForegroundColor Yellow
+    Write-Host "[1/3] Проверка Docker..." -ForegroundColor Yellow
     try {
         docker --version | Out-Null
         Write-Host "✓ Docker найден" -ForegroundColor Green
@@ -191,9 +191,20 @@ function Build-Image {
         exit 1
     }
     
+    # Проверка доступности Docker daemon
+    Write-Host ""
+    Write-Host "[2/3] Проверка Docker daemon..." -ForegroundColor Yellow
+    try {
+        docker info | Out-Null
+        Write-Host "✓ Docker daemon запущен" -ForegroundColor Green
+    } catch {
+        Write-Host "✗ Docker daemon не запущен. Запустите Docker Desktop." -ForegroundColor Red
+        exit 1
+    }
+    
     # Сборка образа
     Write-Host ""
-    Write-Host "[2/2] Сборка образа..." -ForegroundColor Yellow
+    Write-Host "[3/3] Сборка образа..." -ForegroundColor Yellow
     docker build -t $IMAGE_NAME .
     if ($LASTEXITCODE -eq 0) {
         Write-Host ""
@@ -215,7 +226,7 @@ function Deploy-Container {
     Write-Host ""
     
     # Проверка наличия Docker
-    Write-Host "[1/5] Проверка Docker..." -ForegroundColor Yellow
+    Write-Host "[1/6] Проверка Docker..." -ForegroundColor Yellow
     try {
         docker --version | Out-Null
         Write-Host "✓ Docker найден" -ForegroundColor Green
@@ -224,9 +235,20 @@ function Deploy-Container {
         exit 1
     }
     
+    # Проверка доступности Docker daemon
+    Write-Host ""
+    Write-Host "[2/6] Проверка Docker daemon..." -ForegroundColor Yellow
+    try {
+        docker info | Out-Null
+        Write-Host "✓ Docker daemon запущен" -ForegroundColor Green
+    } catch {
+        Write-Host "✗ Docker daemon не запущен. Запустите Docker Desktop." -ForegroundColor Red
+        exit 1
+    }
+    
     # Остановка и удаление старого контейнера
     Write-Host ""
-    Write-Host "[2/5] Остановка контейнера..." -ForegroundColor Yellow
+    Write-Host "[3/6] Остановка контейнера..." -ForegroundColor Yellow
     $containerExists = docker ps -a --filter "name=$CONTAINER_NAME" --format "{{.Names}}"
     if ($containerExists) {
         docker stop $CONTAINER_NAME 2>$null
@@ -238,7 +260,7 @@ function Deploy-Container {
     
     # Пересборка образа
     Write-Host ""
-    Write-Host "[3/5] Пересборка образа..." -ForegroundColor Yellow
+    Write-Host "[4/6] Пересборка образа..." -ForegroundColor Yellow
     docker build -t $IMAGE_NAME .
     if ($LASTEXITCODE -eq 0) {
         Write-Host "✓ Образ успешно собран" -ForegroundColor Green
@@ -249,7 +271,7 @@ function Deploy-Container {
     
     # Запуск контейнера
     Write-Host ""
-    Write-Host "[4/5] Запуск контейнера..." -ForegroundColor Yellow
+    Write-Host "[5/6] Запуск контейнера..." -ForegroundColor Yellow
     
     # Проверка наличия директории certs
     $certsPath = Join-Path $PSScriptRoot "certs"
@@ -283,7 +305,7 @@ function Deploy-Container {
     
     # Показ логов
     Write-Host ""
-    Write-Host "[5/5] Логи контейнера:" -ForegroundColor Yellow
+    Write-Host "[6/6] Логи контейнера:" -ForegroundColor Yellow
     Write-Host "----------------------------------------" -ForegroundColor Gray
     Start-Sleep -Seconds 2
     docker logs --tail 20 $CONTAINER_NAME

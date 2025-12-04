@@ -188,16 +188,25 @@ build_image() {
     echo ""
     
     # Проверка наличия Docker
-    echo -e "${YELLOW}[1/2] Проверка Docker...${NC}"
+    echo -e "${YELLOW}[1/3] Проверка Docker...${NC}"
     if ! command -v docker &> /dev/null; then
         echo -e "${RED}✗ Docker не найден. Установите Docker.${NC}"
         exit 1
     fi
     echo -e "${GREEN}✓ Docker найден${NC}"
     
+    # Проверка доступности Docker daemon
+    echo ""
+    echo -e "${YELLOW}[2/3] Проверка Docker daemon...${NC}"
+    if ! docker info &> /dev/null; then
+        echo -e "${RED}✗ Docker daemon не запущен. Запустите Docker.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Docker daemon запущен${NC}"
+    
     # Сборка образа
     echo ""
-    echo -e "${YELLOW}[2/2] Сборка образа...${NC}"
+    echo -e "${YELLOW}[3/3] Сборка образа...${NC}"
     if docker build -t $IMAGE_NAME .; then
         echo ""
         echo -e "${CYAN}========================================${NC}"
@@ -218,16 +227,25 @@ deploy_container() {
     echo ""
     
     # Проверка наличия Docker
-    echo -e "${YELLOW}[1/5] Проверка Docker...${NC}"
+    echo -e "${YELLOW}[1/6] Проверка Docker...${NC}"
     if ! command -v docker &> /dev/null; then
         echo -e "${RED}✗ Docker не найден. Установите Docker.${NC}"
         exit 1
     fi
     echo -e "${GREEN}✓ Docker найден${NC}"
     
+    # Проверка доступности Docker daemon
+    echo ""
+    echo -e "${YELLOW}[2/6] Проверка Docker daemon...${NC}"
+    if ! docker info &> /dev/null; then
+        echo -e "${RED}✗ Docker daemon не запущен. Запустите Docker.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Docker daemon запущен${NC}"
+    
     # Остановка и удаление старого контейнера
     echo ""
-    echo -e "${YELLOW}[2/5] Остановка контейнера...${NC}"
+    echo -e "${YELLOW}[3/6] Остановка контейнера...${NC}"
     if [ "$(docker ps -aq -f name=$CONTAINER_NAME)" ]; then
         docker stop $CONTAINER_NAME 2>/dev/null || true
         docker rm $CONTAINER_NAME 2>/dev/null || true
@@ -238,7 +256,7 @@ deploy_container() {
     
     # Пересборка образа
     echo ""
-    echo -e "${YELLOW}[3/5] Пересборка образа...${NC}"
+    echo -e "${YELLOW}[4/6] Пересборка образа...${NC}"
     if docker build -t $IMAGE_NAME .; then
         echo -e "${GREEN}✓ Образ успешно собран${NC}"
     else
@@ -248,7 +266,7 @@ deploy_container() {
     
     # Запуск контейнера
     echo ""
-    echo -e "${YELLOW}[4/5] Запуск контейнера...${NC}"
+    echo -e "${YELLOW}[5/6] Запуск контейнера...${NC}"
     
     # Проверка наличия директории certs
     if [ -d "./certs" ]; then
@@ -274,7 +292,7 @@ deploy_container() {
     
     # Показ логов
     echo ""
-    echo -e "${YELLOW}[5/5] Логи контейнера:${NC}"
+    echo -e "${YELLOW}[6/6] Логи контейнера:${NC}"
     echo -e "${GRAY}----------------------------------------${NC}"
     sleep 2
     docker logs --tail 20 $CONTAINER_NAME
