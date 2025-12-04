@@ -57,6 +57,24 @@ def save_error_dump(error: Exception, poll_name: str, question: str, chat_id: in
         logging.error(f"Не удалось сохранить дамп ошибки: {e}")
 
 
+def escape_html(text: str) -> str:
+    """
+    Экранирует специальные HTML-символы в тексте для безопасной
+    отправки сообщений с parse_mode='HTML' в Telegram.
+    
+    Args:
+        text: Исходный текст
+    
+    Returns:
+        Текст с экранированными символами &, < и >
+    """
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
 def is_admin(user: User) -> bool:
     """
     Проверяет, является ли пользователь администратором.

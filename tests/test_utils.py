@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 from aiogram.types import User
 
-from src.utils import is_admin, save_error_dump
+from src.utils import is_admin, save_error_dump, escape_html
 
 
 class TestIsAdmin:
@@ -92,6 +92,26 @@ class TestSaveErrorDump:
         assert data[0]['chat_id'] == -1001234567890
         assert 'timestamp' in data[0]
         assert 'traceback' in data[0]
+
+
+class TestEscapeHtml:
+    """Тесты для функции escape_html."""
+    
+    def test_escape_html_no_special_chars(self):
+        """Текст без спецсимволов не должен изменяться."""
+        assert escape_html("simple text @user") == "simple text @user"
+    
+    def test_escape_html_amp(self):
+        """Символ & должен экранироваться первым."""
+        assert escape_html("A & B") == "A &amp; B"
+    
+    def test_escape_html_angle_brackets(self):
+        """Угловые скобки должны экранироваться."""
+        assert escape_html("<b>bold</b>") == "&lt;b&gt;bold&lt;/b&gt;"
+    
+    def test_escape_html_mixed(self):
+        """Комбинация спецсимволов экранируется корректно."""
+        assert escape_html("1 < 2 & 3 > 2") == "1 &lt; 2 &amp; 3 &gt; 2"
     
     def test_save_error_dump_appends_to_existing_file(self, tmp_path: Path):
         """Тест добавления ошибки в существующий файл."""

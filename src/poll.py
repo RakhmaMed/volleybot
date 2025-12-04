@@ -11,7 +11,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramMigrateToChat
 
 from .config import POLL_OPTIONS, REQUIRED_PLAYERS
-from .utils import save_error_dump
+from .utils import save_error_dump, escape_html
 
 
 class VoterInfo(TypedDict):
@@ -137,24 +137,36 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
     data = poll_data[poll_id]
     yes_voters: list[VoterInfo] = data['yes_voters']
     
-    # Формируем текст
+    # Формируем текст (HTML-разметка)
     text: str
     if len(yes_voters) == 0:
         text = "⏳ Идёт сбор голосов..."
     elif len(yes_voters) < REQUIRED_PLAYERS:
-        text = f"⏳ *Идёт сбор голосов:* {len(yes_voters)}/{REQUIRED_PLAYERS}\n\n"
-        text += "*Проголосовали:*\n"
-        text += '\n'.join(f"{i + 1}) {p['name']}" for i, p in enumerate(yes_voters))
+        text = (
+            f"⏳ <b>Идёт сбор голосов:</b> "
+            f"{len(yes_voters)}/{REQUIRED_PLAYERS}\n\n"
+            "<b>Проголосовали:</b>\n"
+        )
+        text += '\n'.join(
+            f"{i + 1}) {escape_html(p['name'])}"
+            for i, p in enumerate(yes_voters)
+        )
     else:
         main_players: list[VoterInfo] = yes_voters[:REQUIRED_PLAYERS]
         reserves: list[VoterInfo] = yes_voters[REQUIRED_PLAYERS:]
         
-        text = "✅ *Список игроков:*\n"
-        text += '\n'.join(f"{i + 1}) {p['name']}" for i, p in enumerate(main_players))
+        text = "✅ <b>Список игроков:</b>\n"
+        text += '\n'.join(
+            f"{i + 1}) {escape_html(p['name'])}"
+            for i, p in enumerate(main_players)
+        )
         
         if reserves:
-            text += "\n\n🕗 *Запасные игроки:*\n"
-            text += '\n'.join(f"{i + 1}) {p['name']}" for i, p in enumerate(reserves))
+            text += "\n\n🕗 <b>Запасные игроки:</b>\n"
+            text += '\n'.join(
+                f"{i + 1}) {escape_html(p['name'])}"
+                for i, p in enumerate(reserves)
+            )
     
     if data.get('info_msg_id') is None:
         logging.debug("info_msg_id отсутствует, пропускаем обновление")
@@ -169,7 +181,7 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
                 chat_id=data['chat_id'],
                 message_id=data['info_msg_id'],
                 text=text,
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             data['last_message_text'] = text
             logging.info(f"Список игроков обновлен: {len(yes_voters)} человек")
@@ -220,22 +232,39 @@ async def close_poll(
     
     final_text: str
     if len(yes_voters) == 0:
-        final_text = "📊 *Голосование завершено*\n\nНикто не записался."
+        final_text = "📊 <b>Голосование завершено</b>\n\nНикто не записался."
     elif len(yes_voters) < REQUIRED_PLAYERS:
-        final_text = f"📊 *Голосование завершено:* {len(yes_voters)}/{REQUIRED_PLAYERS}\n\n"
-        final_text += "*Записались:*\n"
-        final_text += '\n'.join(f"{i + 1}) {p['name']}" for i, p in enumerate(yes_voters))
-        final_text += f"\n\n⚠️ *Не хватает игроков!*"
+        final_text = (
+            f"📊 <b>Голосование завершено:</b> "
+            f"{len(yes_voters)}/{REQUIRED_PLAYERS}\n\n"
+            "<b>Записались:</b>\n"
+        )
+        final_text += '\n'.join(
+            f"{i + 1}) {escape_html(p['name'])}"
+            for i, p in enumerate(yes_voters)
+        )
+        final_text += "\n\n⚠️ <b>Не хватает игроков!</b>"
     else:
         main_players: list[VoterInfo] = yes_voters[:REQUIRED_PLAYERS]
         reserves: list[VoterInfo] = yes_voters[REQUIRED_PLAYERS:]
         
-        final_text = f"📊 *Голосование завершено* ✅\n\n*Основной состав ({len(main_players)}):*\n"
-        final_text += '\n'.join(f"{i + 1}) {p['name']}" for i, p in enumerate(main_players))
+        final_text = (
+            "📊 <b>Голосование завершено</b> ✅\n\n"
+            f"<b>Основной состав ({len(main_players)}):</b>\n"
+        )
+        final_text += '\n'.join(
+            f"{i + 1}) {escape_html(p['name'])}"
+            for i, p in enumerate(main_players)
+        )
         
         if reserves:
-            final_text += f"\n\n🕗 *Запасные ({len(reserves)}):*\n"
-            final_text += '\n'.join(f"{i + 1}) {p['name']}" for i, p in enumerate(reserves))
+            final_text += (
+                f"\n\n🕗 <b>Запасные ({len(reserves)}):</b>\n"
+            )
+            final_text += '\n'.join(
+                f"{i + 1}) {escape_html(p['name'])}"
+                for i, p in enumerate(reserves)
+            )
     
     # Обновляем информационное сообщение с финальным списком
     if data.get('info_msg_id'):
@@ -244,7 +273,7 @@ async def close_poll(
                 chat_id=data['chat_id'],
                 message_id=data['info_msg_id'],
                 text=final_text,
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             logging.info(f"Финальный список опубликован для '{poll_name}'")
         except Exception as e:

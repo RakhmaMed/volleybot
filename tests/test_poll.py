@@ -181,8 +181,10 @@ class TestUpdatePlayersList:
         
         mock_bot.edit_message_text.assert_called_once()
         call_args = mock_bot.edit_message_text.call_args
-        assert "✅ *Список игроков:*" in call_args.kwargs['text']
-        assert "🕗 *Запасные игроки:*" in call_args.kwargs['text']
+        assert "✅ <b>Список игроков:</b>" in call_args.kwargs['text']
+        assert "🕗 <b>Запасные игроки:</b>" in call_args.kwargs['text']
+        # Должен использоваться HTML parse_mode
+        assert call_args.kwargs.get('parse_mode') == 'HTML'
     
     async def test_update_players_list_skips_if_no_info_msg(self, mock_bot):
         """Тест пропуска обновления при отсутствии info_msg_id."""
@@ -295,4 +297,38 @@ class TestClosePoll:
         call_args = mock_bot.edit_message_text.call_args
         assert "✅" in call_args.kwargs['text']
         assert "Запасные" in call_args.kwargs['text']
+        # Должен использоваться HTML parse_mode
+        assert call_args.kwargs.get('parse_mode') == 'HTML'
+
+
+@pytest.mark.asyncio
+class TestHtmlEscapingInPollTexts:
+    """Тесты экранирования HTML в текстах опроса."""
+    
+    async def test_update_players_list_escapes_html(self, mock_bot):
+        """Имена игроков с HTML-символами должны экранироваться."""
+        poll_id = "test_html_poll_id"
+        voters: list[VoterInfo] = [
+            {'id': 1, 'name': '<User&1>'},
+            {'id': 2, 'name': 'NormalUser'},
+        ]
+        poll_data[poll_id] = {
+            'chat_id': -1001234567890,
+            'poll_msg_id': 123,
+            'info_msg_id': 124,
+            'yes_voters': voters,
+            'update_task': None,
+            'last_message_text': ""
+        }
+        
+        mock_bot.edit_message_text = AsyncMock()
+        
+        with patch('src.poll.asyncio.sleep', new_callable=AsyncMock):
+            await update_players_list(mock_bot, poll_id)
+        
+        mock_bot.edit_message_text.assert_called_once()
+        text = mock_bot.edit_message_text.call_args.kwargs['text']
+        # Имя должно быть экранировано
+        assert "&lt;User&amp;1&gt;" in text
+        assert "<User&1>" not in text
 
