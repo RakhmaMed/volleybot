@@ -221,12 +221,6 @@ async def close_poll(
     except Exception as e:
         logging.error(f"Ошибка при остановке опроса '{poll_name}': {e}")
     
-    # Открепляем опрос
-    try:
-        await bot.unpin_chat_message(chat_id=data['chat_id'], message_id=data['poll_msg_id'])
-    except Exception as e:
-        logging.warning(f"Не удалось открепить опрос: {e}")
-    
     # Формируем финальный список
     yes_voters: list[VoterInfo] = data.get('yes_voters', [])
     

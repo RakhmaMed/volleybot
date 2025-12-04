@@ -259,7 +259,6 @@ class TestClosePoll:
         }
         
         mock_bot.stop_poll = AsyncMock()
-        mock_bot.unpin_chat_message = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
         
         get_chat_id = MagicMock(return_value=-1001234567890)
@@ -267,7 +266,6 @@ class TestClosePoll:
         await close_poll(mock_bot, "test_poll", get_chat_id)
         
         mock_bot.stop_poll.assert_called_once()
-        mock_bot.unpin_chat_message.assert_called_once()
         mock_bot.edit_message_text.assert_called_once()
         assert poll_id not in poll_data
     
@@ -287,7 +285,6 @@ class TestClosePoll:
         }
         
         mock_bot.stop_poll = AsyncMock()
-        mock_bot.unpin_chat_message = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
         
         get_chat_id = MagicMock(return_value=-1001234567890)
