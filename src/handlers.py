@@ -9,7 +9,7 @@ from aiogram.types import Message, PollAnswer
 from aiogram.filters import Command
 
 from .poll import poll_data, update_players_list
-from .utils import is_admin
+from .utils import is_admin, get_player_name
 
 
 def register_handlers(
@@ -117,7 +117,7 @@ def register_handlers(
         yes_voters = [v for v in yes_voters if v['id'] != user.id]
 
         if 0 in selected:  # Да
-            name: str = f"@{user.username}" if user.username else user.full_name
+            name: str = get_player_name(user)
             yes_voters.append({'id': user.id, 'name': name})
 
         data['yes_voters'] = yes_voters

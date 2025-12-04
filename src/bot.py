@@ -29,6 +29,7 @@ from .config import (
 )
 from .handlers import register_handlers
 from .scheduler import setup_scheduler
+from .utils import load_players
 
 logging.basicConfig(level=logging.INFO)
 
@@ -83,6 +84,9 @@ register_handlers(dp, bot, get_bot_enabled, set_bot_enabled)
 
 async def on_startup(bot: Bot) -> None:
     """Выполняется при запуске бота."""
+    # Загружаем список игроков один раз при старте
+    load_players()
+
     setup_scheduler(scheduler, bot, get_chat_id, set_chat_id, get_bot_enabled)
     scheduler.start()
     logging.info("Планировщик запущен")

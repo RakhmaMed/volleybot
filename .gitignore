@@ -1,5 +1,6 @@
 # Конфигурация с секретами
 config.json
+players.json
 certs/
 
 # Python

@@ -14,6 +14,10 @@ from aiogram.types import User
 from .config import ADMIN_USERNAME
 
 
+# Глобальный кэш списка игроков
+PLAYERS: list[dict[str, Any]] = []
+
+
 def save_error_dump(error: Exception, poll_name: str, question: str, chat_id: int) -> None:
     """
     Сохраняет дамп ошибки в файл рядом с исходником.
@@ -91,3 +95,63 @@ def is_admin(user: User) -> bool:
     admin_username_clean: str = ADMIN_USERNAME.replace("@", "")
     username_clean: str = username.replace("@", "")
     return username_clean == admin_username_clean
+
+
+def load_players() -> None:
+    """
+    Загружает список игроков из файла players.json при старте приложения.
+    Результат кэшируется в глобальной переменной PLAYERS.
+    """
+    global PLAYERS
+
+    try:
+        script_dir: Path = Path(__file__).parent.parent
+        players_file: Path = script_dir / "players.json"
+
+        if not players_file.exists():
+            logging.warning("Файл players.json не найден. Список игроков будет пустым.")
+            PLAYERS = []
+            return
+
+        with open(players_file, "r", encoding="utf-8") as f:
+            data: list[dict[str, Any]] = json.load(f)
+
+        PLAYERS = data
+        logging.info(f"Загружено {len(PLAYERS)} игроков из players.json")
+    except Exception as e:
+        logging.error(f"Ошибка при загрузке players.json: {e}")
+        PLAYERS = []
+
+
+def get_player_name(user: User) -> str:
+    """
+    Получает имя игрока по ID из players.json, используя fullname если он есть.
+    Если fullname пустой или не найден, возвращает имя из Telegram.
+    
+    Args:
+        user: Объект пользователя Telegram
+        
+    Returns:
+        Имя игрока (fullname из players.json или имя из Telegram)
+    """
+    # Получаем имя из Telegram как fallback
+    telegram_name: str = f"@{user.username}" if user.username else (user.full_name or "Неизвестный")
+
+    # Если список игроков не загружен, используем имя из Telegram
+    if not PLAYERS:
+        logging.warning("Список игроков пуст или не загружен, используем имя из Telegram")
+        return telegram_name
+
+    # Ищем игрока по ID в заранее загруженном списке
+    for player in PLAYERS:
+        if player.get("id") == user.id:
+            fullname: str | None = player.get("fullname")
+            # Если fullname есть и не пустой, используем его
+            if fullname and fullname.strip():
+                return fullname
+            # Иначе используем имя из Telegram
+            return telegram_name
+
+    # Игрок не найден в списке
+    logging.debug(f"Игрок с ID {user.id} не найден в players.json, используем имя из Telegram: {telegram_name}")
+    return telegram_name
