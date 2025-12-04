@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 from aiogram.types import User
 
-from src.utils import is_admin, save_error_dump, escape_html
+from src.utils import is_admin, save_error_dump, escape_html, get_player_name, PLAYERS
 
 
 class TestIsAdmin:
@@ -182,3 +182,147 @@ class TestEscapeHtml:
         assert len(data) == 1
         assert data[0]['error_type'] == 'ValueError'
 
+
+class TestGetPlayerName:
+    """Тесты для функции get_player_name."""
+    
+    def test_get_player_name_with_fullname_in_players(self):
+        """Пользователь с fullname в players.json показывает имя и @username."""
+        user = User(
+            id=185633965,  # ID из players.json с fullname "Кисик"
+            is_bot=False,
+            first_name="Test",
+            username="kkiiissik"
+        )
+        
+        # Мокаем PLAYERS
+        with patch('src.utils.PLAYERS', [
+            {"id": 185633965, "name": "kkiiissik", "fullname": "Кисик"}
+        ]):
+            result = get_player_name(user)
+        
+        assert result == "Кисик (@kkiiissik)"
+    
+    def test_get_player_name_without_fullname_no_duplicate(self):
+        """Пользователь без fullname - @username НЕ дублируется."""
+        user = User(
+            id=454205863,
+            is_bot=False,
+            first_name="Test",
+            username="what_goes_around"
+        )
+        
+        # Мокаем PLAYERS без fullname
+        with patch('src.utils.PLAYERS', [
+            {"id": 454205863, "name": "what_goes_around"}
+        ]):
+            result = get_player_name(user)
+        
+        # Не должно быть дубликата: "@username (@username)"
+        assert result == "@what_goes_around"
+    
+    def test_get_player_name_not_in_players_with_username(self):
+        """Пользователь не в players.json, но с username."""
+        user = User(
+            id=999999999,
+            is_bot=False,
+            first_name="Test",
+            username="new_user"
+        )
+        
+        with patch('src.utils.PLAYERS', []):
+            result = get_player_name(user)
+        
+        # display_name = @new_user, username_mention = @new_user -> не дублируем
+        assert result == "@new_user"
+    
+    def test_get_player_name_without_username(self):
+        """Пользователь без username использует full_name из Telegram."""
+        user = User(
+            id=999999999,
+            is_bot=False,
+            first_name="Иван",
+            last_name="Петров",
+            username=None
+        )
+        
+        with patch('src.utils.PLAYERS', []):
+            result = get_player_name(user)
+        
+        assert result == "Иван Петров"
+    
+    def test_get_player_name_without_username_no_fullname(self):
+        """Пользователь без username и без last_name."""
+        user = User(
+            id=999999999,
+            is_bot=False,
+            first_name="Иван",
+            username=None
+        )
+        
+        with patch('src.utils.PLAYERS', []):
+            result = get_player_name(user)
+        
+        assert result == "Иван"
+    
+    def test_get_player_name_escapes_html_in_fullname(self):
+        """HTML-символы в fullname экранируются."""
+        user = User(
+            id=123,
+            is_bot=False,
+            first_name="Test",
+            username="testuser"
+        )
+        
+        with patch('src.utils.PLAYERS', [
+            {"id": 123, "fullname": "Имя <script>"}
+        ]):
+            result = get_player_name(user)
+        
+        assert result == "Имя &lt;script&gt; (@testuser)"
+    
+    def test_get_player_name_escapes_html_without_username(self):
+        """HTML-символы экранируются для пользователя без username."""
+        user = User(
+            id=999999999,
+            is_bot=False,
+            first_name="Test<>",
+            username=None
+        )
+        
+        with patch('src.utils.PLAYERS', []):
+            result = get_player_name(user)
+        
+        assert result == "Test&lt;&gt;"
+    
+    def test_get_player_name_empty_fullname_uses_telegram_name(self):
+        """Пустой fullname в players.json - используется имя из Telegram."""
+        user = User(
+            id=123,
+            is_bot=False,
+            first_name="TelegramName",
+            username="testuser"
+        )
+        
+        with patch('src.utils.PLAYERS', [
+            {"id": 123, "fullname": "   "}  # Пустой fullname (только пробелы)
+        ]):
+            result = get_player_name(user)
+        
+        # fullname пустой -> display_name = @testuser -> не дублируем
+        assert result == "@testuser"
+    
+    def test_get_player_name_special_chars_no_escape_needed(self):
+        """Точки и подчёркивания не требуют экранирования."""
+        user = User(
+            id=123,
+            is_bot=False,
+            first_name=". .",
+            username=None
+        )
+        
+        with patch('src.utils.PLAYERS', []):
+            result = get_player_name(user)
+        
+        # Точки не экранируются в HTML
+        assert result == ". ."

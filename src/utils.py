@@ -127,31 +127,45 @@ def get_player_name(user: User) -> str:
     """
     Получает имя игрока по ID из players.json, используя fullname если он есть.
     Если fullname пустой или не найден, возвращает имя из Telegram.
+    Возвращает текст с упоминанием @username для открытия профиля (не чата).
     
     Args:
         user: Объект пользователя Telegram
         
     Returns:
-        Имя игрока (fullname из players.json или имя из Telegram)
+        Текст с именем игрока и упоминанием @username (кликабельно, открывает профиль)
     """
     # Получаем имя из Telegram как fallback
     telegram_name: str = f"@{user.username}" if user.username else (user.full_name or "Неизвестный")
+    display_name: str = telegram_name
 
     # Если список игроков не загружен, используем имя из Telegram
     if not PLAYERS:
         logging.warning("Список игроков пуст или не загружен, используем имя из Telegram")
-        return telegram_name
+    else:
+        # Ищем игрока по ID в заранее загруженном списке
+        for player in PLAYERS:
+            if player.get("id") == user.id:
+                fullname: str | None = player.get("fullname")
+                # Если fullname есть и не пустой, используем его
+                if fullname and fullname.strip():
+                    display_name = fullname
+                break
 
-    # Ищем игрока по ID в заранее загруженном списке
-    for player in PLAYERS:
-        if player.get("id") == user.id:
-            fullname: str | None = player.get("fullname")
-            # Если fullname есть и не пустой, используем его
-            if fullname and fullname.strip():
-                return fullname
-            # Иначе используем имя из Telegram
-            return telegram_name
-
-    # Игрок не найден в списке
-    logging.debug(f"Игрок с ID {user.id} не найден в players.json, используем имя из Telegram: {telegram_name}")
-    return telegram_name
+    # Для открытия профиля (а не чата) используем упоминание @username в тексте
+    # Telegram автоматически делает такие упоминания кликабельными и они открывают профиль
+    if user.username:
+        # Убираем @ если есть в username
+        username_clean: str = user.username.replace("@", "")
+        username_mention: str = f"@{username_clean}"
+        
+        # Если display_name уже является @username, не дублируем
+        if display_name == username_mention:
+            return escape_html(username_mention)
+        
+        # Формат: "ИМЯ (@username)" - упоминание будет кликабельным и откроет профиль
+        escaped_name: str = escape_html(display_name)
+        return f'{escaped_name} ({username_mention})'
+    else:
+        # Если нет username, просто возвращаем имя (без ссылки на профиль)
+        return escape_html(display_name)
