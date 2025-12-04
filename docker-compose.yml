@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: volleybot
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      # Конфигурация
+      - ./config.json:/app/config.json:ro
+      # Сертификаты (можно монтировать напрямую из Let's Encrypt или из локальной директории)
+      # Вариант 1: Из локальной директории certs (рекомендуется для автообновления)
+      - ./certs:/app/certs:ro
+      # Вариант 2: Напрямую из Let's Encrypt (раскомментируйте, если используете)
+      # - /etc/letsencrypt/live:/etc/letsencrypt/live:ro
+    environment:
+      - TZ=UTC
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+
+

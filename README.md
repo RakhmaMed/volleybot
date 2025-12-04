@@ -232,27 +232,18 @@ docker rm volleybot
 
 #### Вариант 2: Docker Compose (рекомендуется)
 
-Создайте `docker-compose.yml`:
-
-```yaml
-version: '3.8'
-
-services:
-  bot:
-    build: .
-    container_name: volleybot
-    restart: unless-stopped
-    ports:
-      - "8443:8443"
-    volumes:
-      - ./config.json:/app/config.json:ro
-      - ./certs:/app/certs:ro
-```
+Файл `docker-compose.yml` уже создан в корне проекта. Просто запустите:
 
 **Запуск:**
 
 ```bash
 docker-compose up -d
+```
+
+**Или используйте скрипт управления:**
+
+```bash
+./manage.sh deploy
 ```
 
 **Просмотр логов:**
@@ -397,25 +388,59 @@ sudo systemctl reload nginx
 
 ### Автообновление сертификатов
 
-Создайте скрипт `update_certs.sh`:
+Для автоматического обновления сертификатов Let's Encrypt используйте скрипт `update_certs.sh`, который уже включён в проект.
 
-```bash
-#!/bin/bash
-cd /path/to/volleybot
-sudo cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem ./certs/
-sudo cp /etc/letsencrypt/live/yourdomain.com/privkey.pem ./certs/
-sudo chmod 644 ./certs/fullchain.pem
-sudo chmod 600 ./certs/privkey.pem
-sudo chown $USER:$USER ./certs/*
-docker restart volleybot
-```
+#### Быстрая настройка
 
-Добавьте в cron:
-
+1. **Сделайте скрипт исполняемым:**
 ```bash
 chmod +x update_certs.sh
-# Добавьте в crontab -e:
-0 3 * * * /path/to/volleybot/update_certs.sh
+```
+
+2. **Запустите скрипт вручную для первого обновления:**
+```bash
+./update_certs.sh yourdomain.com
+```
+
+3. **Настройте автоматическое обновление через Certbot:**
+
+Certbot автоматически обновляет сертификаты через systemd timer. Настройте deploy hook для автоматического обновления в проекте:
+
+```bash
+# Создайте deploy hook
+sudo mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+sudo nano /etc/letsencrypt/renewal-hooks/deploy/volleybot-update.sh
+```
+
+Содержимое скрипта (замените `yourdomain.com` и `/path/to/volleybot`):
+```bash
+#!/bin/bash
+/path/to/volleybot/update_certs.sh yourdomain.com /path/to/volleybot
+```
+
+```bash
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/volleybot-update.sh
+```
+
+4. **Проверьте статус автоматического обновления:**
+```bash
+sudo systemctl status certbot.timer
+sudo systemctl enable certbot.timer
+```
+
+#### Подробная инструкция
+
+Для полной настройки автоматического обновления сертификатов см. подробное руководство: **[CERTBOT_SETUP.md](CERTBOT_SETUP.md)**
+
+#### Использование Docker Compose
+
+Если вы используете Docker Compose, обновление сертификатов будет автоматически подхватываться при перезапуске контейнера:
+
+```bash
+# После обновления сертификатов
+./update_certs.sh yourdomain.com
+# или
+docker-compose restart bot
 ```
 
 ## 🌐 Деплой на сервер
@@ -689,10 +714,16 @@ volleybot/
 │   ├── test_poll.py
 │   ├── test_scheduler.py
 │   └── test_utils.py
+├── certs/             # SSL сертификаты (создаётся автоматически, не в git!)
+│   ├── fullchain.pem
+│   └── privkey.pem
 ├── config.json        # Конфигурация (не в git!)
 ├── requirements.txt   # Зависимости Python
 ├── Dockerfile         # Docker образ
-├── docker-compose.yml # Docker Compose конфигурация (создайте при необходимости)
+├── docker-compose.yml # Docker Compose конфигурация
+├── update_certs.sh    # Скрипт автоматического обновления сертификатов
+├── renewal-hooks-example.sh  # Пример deploy hook для Certbot
+├── CERTBOT_SETUP.md   # Подробная инструкция по настройке Let's Encrypt
 ├── pytest.ini         # Настройки pytest
 ├── .coveragerc        # Настройки coverage
 ├── manage.sh          # Универсальный скрипт управления (Linux/macOS)
