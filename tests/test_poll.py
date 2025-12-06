@@ -325,7 +325,51 @@ class TestHtmlEscapingInPollTexts:
         
         mock_bot.edit_message_text.assert_called_once()
         text = mock_bot.edit_message_text.call_args.kwargs['text']
-        # Имя должно быть экранировано
         assert "&lt;User&amp;1&gt;" in text
         assert "<User&1>" not in text
+
+    async def test_update_players_list_includes_legend(self, mock_bot):
+        """Текст списка игроков должен содержать легенду эмодзи."""
+        poll_id = "test_legend_poll_id"
+        poll_data[poll_id] = {
+            'chat_id': -1001234567890,
+            'poll_msg_id': 123,
+            'info_msg_id': 124,
+            'yes_voters': [{'id': 1, 'name': 'User'}],
+            'update_task': None,
+            'last_message_text': ""
+        }
+        
+        mock_bot.edit_message_text = AsyncMock()
+        
+        with patch('src.poll.asyncio.sleep', new_callable=AsyncMock):
+            await update_players_list(mock_bot, poll_id)
+        
+        mock_bot.edit_message_text.assert_called_once()
+        text = mock_bot.edit_message_text.call_args.kwargs['text']
+        assert "⭐️ — абонемент" in text
+        assert "🏐 — мяч" in text
+
+    async def test_close_poll_includes_legend(self, mock_bot):
+        """Финальный текст опроса должен содержать легенду эмодзи."""
+        poll_id = "test_close_poll_legend_id"
+        poll_data[poll_id] = {
+            'chat_id': -1001234567890,
+            'poll_msg_id': 123,
+            'info_msg_id': 124,
+            'yes_voters': [{'id': 1, 'name': 'User'}],
+            'update_task': None,
+            'last_message_text': ""
+        }
+        
+        mock_bot.stop_poll = AsyncMock()
+        mock_bot.edit_message_text = AsyncMock()
+        get_chat_id = MagicMock(return_value=-1001234567890)
+        
+        await close_poll(mock_bot, "test_poll", get_chat_id)
+        
+        mock_bot.edit_message_text.assert_called_once()
+        text = mock_bot.edit_message_text.call_args.kwargs['text']
+        assert "⭐️ — абонемент" in text
+        assert "🏐 — мяч" in text
 

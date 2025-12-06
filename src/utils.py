@@ -123,7 +123,7 @@ def load_players() -> None:
         PLAYERS = []
 
 
-def get_player_name(user: User) -> str:
+def get_player_name(user: User, subs: list[int] | None = None) -> str:
     """
     Получает имя игрока по ID из players.json, используя fullname если он есть.
     Если fullname пустой или не найден, возвращает имя из Telegram.
@@ -138,6 +138,7 @@ def get_player_name(user: User) -> str:
     # Получаем имя из Telegram как fallback
     telegram_name: str = f"@{user.username}" if user.username else (user.full_name or "Неизвестный")
     display_name: str = telegram_name
+    emojis: str = ""
 
     # Если список игроков не загружен, используем имя из Telegram
     if not PLAYERS:
@@ -150,7 +151,19 @@ def get_player_name(user: User) -> str:
                 # Если fullname есть и не пустой, используем его
                 if fullname and fullname.strip():
                     display_name = fullname
+                
+                # Проверяем на донат мячей
+                if player.get("ball_donate") is True:
+                    emojis += "🏐"
                 break
+    
+    # Проверяем подписку (если передан список подписчиков)
+    if subs and user.id in subs:
+        emojis = "⭐️" + emojis
+
+    # Добавляем пробел после эмодзи, если они есть
+    if emojis:
+        display_name = f"{emojis} {display_name}"
 
     # Для открытия профиля (а не чата) используем упоминание @username в тексте
     # Telegram автоматически делает такие упоминания кликабельными и они открывают профиль

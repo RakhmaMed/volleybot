@@ -326,3 +326,66 @@ class TestGetPlayerName:
         
         # Точки не экранируются в HTML
         assert result == ". ."
+    def test_get_player_name_with_ball_donate(self):
+        """Игрок с донатом мячей получает эмодзи волейбольного мяча."""
+        user = User(
+            id=123,
+            is_bot=False,
+            first_name="Test",
+            username="donor"
+        )
+        
+        with patch('src.utils.PLAYERS', [
+            {"id": 123, "name": "donor", "fullname": "Donor", "ball_donate": True}
+        ]):
+            result = get_player_name(user)
+        
+        assert result == "🏐 Donor (@donor)"
+
+    def test_get_player_name_with_subscription(self):
+        """Подписчик получает эмодзи звёздочки."""
+        user = User(
+            id=123,
+            is_bot=False,
+            first_name="Test",
+            username="sub"
+        )
+        
+        with patch('src.utils.PLAYERS', [
+            {"id": 123, "name": "sub", "fullname": "Subscriber"}
+        ]):
+            result = get_player_name(user, subs=[123, 456])
+        
+        assert result == "⭐️ Subscriber (@sub)"
+    
+    def test_get_player_name_with_subscription_and_ball_donate(self):
+        """Подписчик и донор получает оба эмодзи в правильном порядке."""
+        user = User(
+            id=123,
+            is_bot=False,
+            first_name="Test",
+            username="super"
+        )
+        
+        with patch('src.utils.PLAYERS', [
+            {"id": 123, "name": "super", "fullname": "SuperUser", "ball_donate": True}
+        ]):
+            result = get_player_name(user, subs=[123])
+        
+        assert result == "⭐️🏐 SuperUser (@super)"
+    
+    def test_get_player_name_sub_not_in_list(self):
+        """Игрок не в списке подписчиков не получает звезду."""
+        user = User(
+            id=123,
+            is_bot=False,
+            first_name="Test",
+            username="user"
+        )
+        
+        with patch('src.utils.PLAYERS', [
+            {"id": 123, "name": "user", "fullname": "User"}
+        ]):
+            result = get_player_name(user, subs=[456, 789])
+        
+        assert result == "User (@user)"

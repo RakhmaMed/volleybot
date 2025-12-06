@@ -28,6 +28,7 @@ class PollDataItem(TypedDict, total=False):
     yes_voters: list[VoterInfo]
     update_task: Task[None] | None
     last_message_text: str
+    subs: list[int]
 
 
 # Глобальное хранилище данных опросов
@@ -39,7 +40,8 @@ async def send_poll(
     chat_id: int,
     question: str,
     poll_name: str,
-    bot_enabled: bool
+    bot_enabled: bool,
+    subs: list[int] | None = None
 ) -> int:
     """
     Отправка опроса в чат.
@@ -120,7 +122,11 @@ async def send_poll(
         'info_msg_id': info_message.message_id if info_message else None,
         'yes_voters': [],
         'update_task': None,
-        'last_message_text': "⏳ Идёт сбор голосов..."
+        'info_msg_id': info_message.message_id if info_message else None,
+        'yes_voters': [],
+        'update_task': None,
+        'last_message_text': "⏳ Идёт сбор голосов...",
+        'subs': subs or []
     }
 
     logging.info(f"Создан {poll_name} {poll_message.poll.id}")
@@ -167,6 +173,9 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
                 f"{i + 1}) {escape_html(p['name'])}"
                 for i, p in enumerate(reserves)
             )
+
+    # Добавляем легенду
+    text += "\n\n⭐️ — оплативший за месяц | 🏐 — донат на мяч"
     
     if data.get('info_msg_id') is None:
         logging.debug("info_msg_id отсутствует, пропускаем обновление")
@@ -259,6 +268,9 @@ async def close_poll(
                 f"{i + 1}) {escape_html(p['name'])}"
                 for i, p in enumerate(reserves)
             )
+    
+    # Добавляем легенду
+    final_text += "\n\n⭐️ — оплативший за месяц | 🏐 — донат на мяч"
     
     # Обновляем информационное сообщение с финальным списком
     if data.get('info_msg_id'):

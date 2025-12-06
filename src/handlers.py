@@ -117,7 +117,8 @@ def register_handlers(
         yes_voters = [v for v in yes_voters if v['id'] != user.id]
 
         if 0 in selected:  # Да
-            name: str = get_player_name(user)
+            subs: list[int] = data.get('subs', [])
+            name: str = get_player_name(user, subs)
             yes_voters.append({'id': user.id, 'name': name})
 
         data['yes_voters'] = yes_voters

@@ -18,7 +18,8 @@ def create_poll_job(
     poll_name: str,
     get_chat_id: Callable[[], int],
     set_chat_id: Callable[[int], None],
-    get_bot_enabled: Callable[[], bool]
+    get_bot_enabled: Callable[[], bool],
+    subs: list[int] | None = None
 ) -> Callable[[], Awaitable[None]]:
     """
     Создаёт асинхронную задачу для отправки опроса.
@@ -36,7 +37,7 @@ def create_poll_job(
     """
     async def job() -> None:
         chat_id: int = get_chat_id()
-        new_chat_id: int = await send_poll(bot, chat_id, message, poll_name, get_bot_enabled())
+        new_chat_id: int = await send_poll(bot, chat_id, message, poll_name, get_bot_enabled(), subs)
         if new_chat_id != chat_id:
             set_chat_id(new_chat_id)
     return job
@@ -116,8 +117,11 @@ def setup_scheduler(
         if open_day != "*":
             open_trigger_kwargs['day_of_week'] = open_day
         
+        # Получаем список подписчиков для этого опроса
+        subs: list[int] = poll_config.get("subs", [])
+
         poll_job: Callable[[], Awaitable[None]] = create_poll_job(
-            bot, message, poll_name, get_chat_id, set_chat_id, get_bot_enabled
+            bot, message, poll_name, get_chat_id, set_chat_id, get_bot_enabled, subs
         )
         
         scheduler.add_job(
