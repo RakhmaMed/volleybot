@@ -16,6 +16,39 @@ CONTAINER_NAME="volleybot"
 IMAGE_NAME="volleybot:latest"
 PORT="8443:8443"
 
+# Подбираем совместимый Python (<=3.13), чтобы зависимости имели готовые колёса
+find_compatible_python() {
+    if [ -n "$UV_PYTHON" ]; then
+        echo "$UV_PYTHON"
+        return
+    fi
+
+    local candidates=("python3.12" "python3.13" "python3.11" "python3" "python")
+    local chosen=""
+
+    for cmd in "${candidates[@]}"; do
+        if command -v "$cmd" >/dev/null 2>&1; then
+            local version major minor
+            version=$("$cmd" - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+)
+            major=${version%%.*}
+            minor=${version#*.}
+
+            if [ "$major" -eq 3 ] && [ "$minor" -le 13 ]; then
+                chosen="$cmd"
+                break
+            fi
+        fi
+    done
+
+    if [ -n "$chosen" ]; then
+        echo "$chosen"
+    fi
+}
+
 # Функция помощи
 show_help() {
     echo -e "${CYAN}========================================${NC}"
@@ -75,11 +108,25 @@ setup_environment() {
         fi
     fi
     echo -e "${GREEN}✓ uv найден${NC}"
+
+    # Выбор совместимой версии Python
+    PYTHON_BIN=$(find_compatible_python)
+    if [ -z "$PYTHON_BIN" ]; then
+        echo -e "${RED}❌ Не найден совместимый Python (нужен 3.12 или 3.13).${NC}"
+        echo -e "${YELLOW}Установите Python 3.12/3.13 или задайте переменную UV_PYTHON с путём до интерпретатора.${NC}"
+        exit 1
+    fi
+    PYTHON_VERSION=$("$PYTHON_BIN" - <<'PY'
+import sys
+print(".".join(map(str, sys.version_info[:3])))
+PY
+)
+    echo -e "${GRAY}Используем Python: ${PYTHON_BIN} (версия ${PYTHON_VERSION})${NC}"
     
     # Создание виртуального окружения
     echo ""
     echo -e "${YELLOW}[2/4] Создание виртуального окружения...${NC}"
-    uv venv
+    UV_PYTHON="$PYTHON_BIN" uv venv
     echo -e "${GREEN}✓ Виртуальное окружение создано${NC}"
     
     # Активация виртуального окружения
@@ -91,7 +138,7 @@ setup_environment() {
     # Установка зависимостей
     echo ""
     echo -e "${YELLOW}[4/4] Установка зависимостей...${NC}"
-    uv pip install -r requirements.txt
+    UV_PYTHON=".venv/bin/python" uv pip install -r requirements.txt
     echo -e "${GREEN}✓ Зависимости установлены${NC}"
     
     echo ""
