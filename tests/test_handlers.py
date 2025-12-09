@@ -1,6 +1,6 @@
 """Тесты для модуля handlers."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiogram import Bot, Dispatcher
@@ -39,19 +39,6 @@ class TestStartCommand:
         message.from_user = user
         message.reply = AsyncMock()
         
-        # Симулируем команду /start
-        from aiogram.filters import Command
-        from aiogram.types import Update
-        
-        update = Update(
-            update_id=1,
-            message=message
-        )
-        message.text = "/start"
-        message.entities = [MagicMock(type="bot_command", offset=0, length=6)]
-        
-        # Вызываем обработчик напрямую через фильтр
-        # В реальных тестах лучше использовать aiogram-test
         assert get_bot_enabled() is True
         # Проверяем, что бот уже включен
         # В реальном сценарии обработчик должен ответить соответствующим сообщением

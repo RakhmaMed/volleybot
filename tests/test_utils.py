@@ -1,15 +1,13 @@
 """Тесты для модуля utils."""
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from aiogram.types import User
 
-from src.utils import is_admin, save_error_dump, escape_html, get_player_name, PLAYERS
+from src.utils import get_player_name, is_admin, save_error_dump, escape_html
 
 
 class TestIsAdmin:

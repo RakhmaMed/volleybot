@@ -1,6 +1,5 @@
 """Тесты для модуля poll."""
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,10 +10,23 @@ from src.poll import (
     poll_data,
     send_poll,
     update_players_list,
-    PollDataItem,
+    sort_voters_by_update_id,
     VoterInfo
 )
 from src.config import REQUIRED_PLAYERS
+
+
+def test_sort_voters_by_update_id_orders_updates():
+    """Сортировка должна учитывать порядок update_id."""
+    voters: list[VoterInfo] = [
+        {'id': 2, 'name': '@late', 'update_id': 5},
+        {'id': 1, 'name': '@early', 'update_id': 3},
+        {'id': 3, 'name': '@unknown'},  # без update_id остаётся в начале
+    ]
+
+    sorted_voters = sort_voters_by_update_id(voters)
+
+    assert [v['id'] for v in sorted_voters] == [3, 1, 2]
 
 
 @pytest.mark.asyncio
@@ -347,8 +359,8 @@ class TestHtmlEscapingInPollTexts:
         
         mock_bot.edit_message_text.assert_called_once()
         text = mock_bot.edit_message_text.call_args.kwargs['text']
-        assert "⭐️ — абонемент" in text
-        assert "🏐 — мяч" in text
+        assert "⭐️ — оплативший за месяц" in text
+        assert "🏐 — донат на мяч" in text
 
     async def test_close_poll_includes_legend(self, mock_bot):
         """Финальный текст опроса должен содержать легенду эмодзи."""
@@ -370,6 +382,6 @@ class TestHtmlEscapingInPollTexts:
         
         mock_bot.edit_message_text.assert_called_once()
         text = mock_bot.edit_message_text.call_args.kwargs['text']
-        assert "⭐️ — абонемент" in text
-        assert "🏐 — мяч" in text
+        assert "⭐️ — оплативший за месяц" in text
+        assert "🏐 — донат на мяч" in text
 

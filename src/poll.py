@@ -14,10 +14,15 @@ from .config import POLL_OPTIONS, REQUIRED_PLAYERS
 from .utils import save_error_dump, escape_html
 
 
-class VoterInfo(TypedDict):
-    """Информация о проголосовавшем."""
+class VoterInfoRequired(TypedDict):
+    """Обязательные поля информации о проголосовавшем."""
     id: int
     name: str
+
+
+class VoterInfo(VoterInfoRequired, total=False):
+    """Информация о проголосовавшем."""
+    update_id: int
 
 
 class PollDataItem(TypedDict, total=False):
@@ -33,6 +38,11 @@ class PollDataItem(TypedDict, total=False):
 
 # Глобальное хранилище данных опросов
 poll_data: dict[str, PollDataItem] = {}
+
+
+def sort_voters_by_update_id(voters: list[VoterInfo]) -> list[VoterInfo]:
+    """Возвращает список голосовавших, отсортированный по update_id (порядок событий)."""
+    return sorted(voters, key=lambda v: (v.get('update_id', 0), v['id']))
 
 
 async def send_poll(
@@ -122,9 +132,6 @@ async def send_poll(
         'info_msg_id': info_message.message_id if info_message else None,
         'yes_voters': [],
         'update_task': None,
-        'info_msg_id': info_message.message_id if info_message else None,
-        'yes_voters': [],
-        'update_task': None,
         'last_message_text': "⏳ Идёт сбор голосов...",
         'subs': subs or []
     }
@@ -141,7 +148,8 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
         return
     
     data = poll_data[poll_id]
-    yes_voters: list[VoterInfo] = data['yes_voters']
+    yes_voters: list[VoterInfo] = sort_voters_by_update_id(data['yes_voters'])
+    data['yes_voters'] = yes_voters
     
     # Формируем текст (HTML-разметка)
     text: str
@@ -175,7 +183,7 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
             )
 
     # Добавляем легенду
-    text += "\n\n⭐️ — абонемент | 🏐 — мяч"
+    text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
     
     if data.get('info_msg_id') is None:
         logging.debug("info_msg_id отсутствует, пропускаем обновление")
@@ -270,7 +278,7 @@ async def close_poll(
             )
     
     # Добавляем легенду
-    final_text += "\n\n⭐️ — абонемент | 🏐 — мяч"
+    final_text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
     
     # Обновляем информационное сообщение с финальным списком
     if data.get('info_msg_id'):

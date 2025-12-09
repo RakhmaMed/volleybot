@@ -1,11 +1,5 @@
 """Тесты для модуля config."""
 
-import json
-from pathlib import Path
-from unittest.mock import patch
-
-import pytest
-
 # Импортируем config для проверки его структуры
 from src import config
 

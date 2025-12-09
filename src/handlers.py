@@ -5,10 +5,15 @@ import logging
 from collections.abc import Callable
 
 from aiogram import Bot, Dispatcher, Router
-from aiogram.types import Message, PollAnswer
+from aiogram.types import Message, PollAnswer, Update
 from aiogram.filters import Command
 
-from .poll import poll_data, update_players_list
+from .poll import (
+    poll_data,
+    update_players_list,
+    sort_voters_by_update_id,
+    VoterInfo
+)
 from .utils import is_admin, get_player_name
 
 
@@ -95,23 +100,30 @@ def register_handlers(
             logging.info(f"Запрос ID чата от пользователя @{from_user.username} (ID: {from_user.id}). Chat ID: {chat.id}")
 
     @router.poll_answer()
-    async def handle_poll_answer(poll_answer: PollAnswer) -> None:
+    async def handle_poll_answer(
+        poll_answer: PollAnswer,
+        event_update: Update | None = None
+    ) -> None:
         """Обработчик ответов на опросы."""
         poll_id: str = poll_answer.poll_id
         user = poll_answer.user
         selected: list[int] = poll_answer.option_ids
+        update_id: int = event_update.update_id if event_update else 0
         
         if user is None:
             logging.error(f"Получен ответ на опрос {poll_id} без информации о пользователе")
             return
         
-        logging.info(f"Получен новый ответ от пользователя {user.username} (ID: {user.id}), голос: {selected}")
+        logging.info(
+            f"Получен новый ответ от пользователя {user.username} "
+            f"(ID: {user.id}), голос: {selected}, update_id: {update_id}"
+        )
         
         if poll_id not in poll_data:
             return
 
         data = poll_data[poll_id]
-        yes_voters: list[dict[str, int | str]] = data['yes_voters']
+        yes_voters: list[VoterInfo] = data['yes_voters']
 
         # Удаляем пользователя, если был
         yes_voters = [v for v in yes_voters if v['id'] != user.id]
@@ -119,10 +131,11 @@ def register_handlers(
         if 0 in selected:  # Да
             subs: list[int] = data.get('subs', [])
             name: str = get_player_name(user, subs)
-            yes_voters.append({'id': user.id, 'name': name})
+            yes_voters.append({'id': user.id, 'name': name, 'update_id': update_id})
 
-        data['yes_voters'] = yes_voters
-        logging.info(f"Обновленный список голосующих: {yes_voters}")
+        sorted_yes_voters = sort_voters_by_update_id(yes_voters)
+        data['yes_voters'] = sorted_yes_voters
+        logging.info(f"Обновленный список голосующих: {sorted_yes_voters}")
         
         # Отменяем предыдущую задачу обновления
         if 'update_task' in data and data['update_task'] is not None:
@@ -132,6 +145,23 @@ def register_handlers(
         # Создаём новую задачу обновления с задержкой
         data['update_task'] = asyncio.create_task(update_players_list(bot, poll_id))
         logging.debug("Создана новая задача отложенного обновления (10 сек)")
+
+    @router.message()
+    async def log_any_message(message: Message) -> None:
+        """Логирует все входящие сообщения и их message_id."""
+        user = message.from_user
+        username = f"@{user.username}" if user and user.username else "unknown"
+        user_id = user.id if user else "unknown"
+        logging.info(
+            "Получено сообщение id=%s chat_id=%s от %s (ID: %s), "
+            "тип=%s, текст=%r",
+            message.message_id,
+            message.chat.id,
+            username,
+            user_id,
+            message.content_type,
+            message.text,
+        )
 
     # Регистрируем роутер в диспетчере
     dp.include_router(router)

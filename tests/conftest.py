@@ -51,7 +51,6 @@ def mock_bot() -> Bot:
     bot.token = "test_token"
     return bot
 
-
 @pytest.fixture
 def admin_user() -> User:
     """Создаёт пользователя-администратора."""
@@ -108,4 +107,5 @@ def mock_poll_answer(admin_user: User) -> PollAnswer:
     answer.user = admin_user
     answer.option_ids = [0]  # Выбран "Да"
     return answer
+
 
