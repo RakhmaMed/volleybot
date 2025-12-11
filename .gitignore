@@ -2,6 +2,7 @@
 config.json
 players.json
 certs/
+volleybot.db
 
 # Python
 __pycache__/

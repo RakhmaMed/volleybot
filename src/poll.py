@@ -11,7 +11,8 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramMigrateToChat
 
 from .config import POLL_OPTIONS, REQUIRED_PLAYERS
-from .utils import save_error_dump, escape_html
+from .db import POLL_STATE_KEY, load_state, save_state
+from .utils import escape_html, save_error_dump
 
 
 class VoterInfoRequired(TypedDict):
@@ -38,6 +39,30 @@ class PollDataItem(TypedDict, total=False):
 
 # Глобальное хранилище данных опросов
 poll_data: dict[str, PollDataItem] = {}
+
+
+def persist_poll_state() -> None:
+    """Сохраняет актуальное состояние опросов в базе."""
+    serializable: dict[str, PollDataItem] = {}
+    for poll_id, data in poll_data.items():
+        sanitized = dict(data)
+        sanitized["update_task"] = None  # задачи нельзя сериализовать
+        serializable[poll_id] = sanitized
+    save_state(POLL_STATE_KEY, serializable)
+
+
+def load_persisted_poll_state() -> None:
+    """Восстанавливает состояние опросов из базы после рестарта."""
+    stored = load_state(POLL_STATE_KEY, default={})
+    if not isinstance(stored, dict):
+        logging.warning("Сохранённое состояние опросов повреждено, пропускаем восстановление")
+        return
+
+    poll_data.clear()
+    for poll_id, data in stored.items():
+        restored: PollDataItem = dict(data)
+        restored["update_task"] = None
+        poll_data[poll_id] = restored
 
 
 def sort_voters_by_update_id(voters: list[VoterInfo]) -> list[VoterInfo]:
@@ -71,6 +96,7 @@ async def send_poll(
         return chat_id
     
     poll_data.clear()
+    persist_poll_state()
     
     try:
         poll_message = await bot.send_poll(
@@ -135,6 +161,7 @@ async def send_poll(
         'last_message_text': "⏳ Идёт сбор голосов...",
         'subs': subs or []
     }
+    persist_poll_state()
 
     logging.info(f"Создан {poll_name} {poll_message.poll.id}")
     return chat_id
@@ -188,6 +215,7 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
     if data.get('info_msg_id') is None:
         logging.debug("info_msg_id отсутствует, пропускаем обновление")
         data['update_task'] = None
+        persist_poll_state()
         return
     
     if text == data.get('last_message_text'):
@@ -206,6 +234,7 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
             logging.error(f"Ошибка редактирования сообщения: {e}")
     
     data['update_task'] = None
+    persist_poll_state()
 
 
 async def close_poll(
@@ -295,4 +324,5 @@ async def close_poll(
     
     # Очищаем данные опроса
     del poll_data[poll_id]
+    persist_poll_state()
     logging.info(f"Опрос '{poll_name}' закрыт, данные очищены")

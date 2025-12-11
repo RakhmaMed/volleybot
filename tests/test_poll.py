@@ -7,13 +7,16 @@ from aiogram.exceptions import TelegramMigrateToChat
 
 from src.poll import (
     close_poll,
+    load_persisted_poll_state,
     poll_data,
+    persist_poll_state,
     send_poll,
     update_players_list,
     sort_voters_by_update_id,
     VoterInfo
 )
 from src.config import REQUIRED_PLAYERS
+from src.db import POLL_STATE_KEY, init_db, load_state
 
 
 def test_sort_voters_by_update_id_orders_updates():
@@ -308,6 +311,35 @@ class TestClosePoll:
         assert "Запасные" in call_args.kwargs['text']
         # Должен использоваться HTML parse_mode
         assert call_args.kwargs.get('parse_mode') == 'HTML'
+
+
+def test_persist_poll_state_roundtrip():
+    """Состояние опроса должно сохраняться и восстанавливаться из БД."""
+    init_db()
+    poll_data.clear()
+    poll_data["poll123"] = {
+        'chat_id': 1,
+        'poll_msg_id': 2,
+        'info_msg_id': 3,
+        'yes_voters': [{'id': 7, 'name': '@user7', 'update_id': 1}],
+        'update_task': object(),
+        'last_message_text': "cached",
+        'subs': [7],
+    }
+
+    persist_poll_state()
+
+    stored = load_state(POLL_STATE_KEY, default={})
+    assert stored["poll123"]["update_task"] is None
+
+    poll_data.clear()
+    load_persisted_poll_state()
+
+    assert "poll123" in poll_data
+    restored = poll_data["poll123"]
+    assert restored["chat_id"] == 1
+    assert restored["update_task"] is None
+    assert restored["yes_voters"][0]["id"] == 7
 
 
 @pytest.mark.asyncio

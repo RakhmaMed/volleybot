@@ -27,7 +27,9 @@ from .config import (
     WEBHOOK_SSL_CERT,
     WEBHOOK_SSL_PRIV,
 )
+from .db import BOT_STATE_KEY, init_db, load_state, save_state
 from .handlers import register_handlers
+from .poll import load_persisted_poll_state, persist_poll_state
 from .scheduler import setup_scheduler
 from .utils import load_players
 
@@ -53,6 +55,32 @@ _state: BotState = {
     'chat_id': CHAT_ID,
 }
 
+# Инициализация БД и восстановление состояния после рестарта
+init_db()
+
+
+def _restore_bot_state() -> None:
+    """Подтягивает сохранённые значения bot_enabled/chat_id из БД."""
+    stored_state = load_state(BOT_STATE_KEY, default={})
+    if isinstance(stored_state, dict):
+        _state['bot_enabled'] = bool(stored_state.get('bot_enabled', _state['bot_enabled']))
+        try:
+            _state['chat_id'] = int(stored_state.get('chat_id', _state['chat_id']))
+        except (TypeError, ValueError):
+            logging.warning("Сохранённый chat_id повреждён, оставляем значение из config.json")
+
+
+def _persist_bot_state() -> None:
+    """Фиксирует текущее состояние бота в БД."""
+    save_state(BOT_STATE_KEY, {
+        'bot_enabled': _state['bot_enabled'],
+        'chat_id': _state['chat_id'],
+    })
+
+
+_restore_bot_state()
+_persist_bot_state()
+
 # Планировщик задач
 scheduler: AsyncIOScheduler = AsyncIOScheduler(timezone='UTC')
 
@@ -66,6 +94,7 @@ def get_bot_enabled() -> bool:
 def set_bot_enabled(value: bool) -> None:
     """Устанавливает состояние включения бота."""
     _state['bot_enabled'] = value
+    _persist_bot_state()
 
 
 def get_chat_id() -> int:
@@ -76,6 +105,7 @@ def get_chat_id() -> int:
 def set_chat_id(value: int) -> None:
     """Устанавливает ID текущего чата."""
     _state['chat_id'] = value
+    _persist_bot_state()
 
 
 # Регистрация обработчиков
@@ -86,6 +116,7 @@ async def on_startup(bot: Bot) -> None:
     """Выполняется при запуске бота."""
     # Загружаем список игроков один раз при старте
     load_players()
+    load_persisted_poll_state()
 
     setup_scheduler(scheduler, bot, get_chat_id, set_chat_id, get_bot_enabled)
     scheduler.start()
@@ -114,6 +145,8 @@ async def on_shutdown(bot: Bot) -> None:
         logging.info("Webhook удален")
     
     await bot.session.close()
+    persist_poll_state()
+    _persist_bot_state()
 
 
 async def run_polling() -> None:

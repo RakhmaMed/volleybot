@@ -12,6 +12,7 @@ from .poll import (
     poll_data,
     update_players_list,
     sort_voters_by_update_id,
+    persist_poll_state,
     VoterInfo
 )
 from .utils import is_admin, get_player_name
@@ -145,6 +146,9 @@ def register_handlers(
         # Создаём новую задачу обновления с задержкой
         data['update_task'] = asyncio.create_task(update_players_list(bot, poll_id))
         logging.debug("Создана новая задача отложенного обновления (10 сек)")
+        
+        # Сохраняем текущее состояние опросов для восстановления после перезапуска
+        persist_poll_state()
 
     @router.message()
     async def log_any_message(message: Message) -> None:

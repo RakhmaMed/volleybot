@@ -14,6 +14,13 @@ from aiogram.types import Chat, Message, Poll, PollAnswer, User
 from src.config import ADMIN_USERNAME
 
 
+@pytest.fixture(autouse=True)
+def temp_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Изолирует SQLite базу для каждого теста."""
+    db_path = tmp_path / "volleybot.db"
+    monkeypatch.setenv("VOLLEYBOT_DB_PATH", str(db_path))
+
+
 @pytest.fixture
 def temp_config_file(tmp_path: Path) -> Path:
     """Создаёт временный файл конфигурации для тестов."""
