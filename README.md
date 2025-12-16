@@ -49,21 +49,21 @@ cd volleybot
 
 ```json
 {
-    "telegram_token": "YOUR_BOT_TOKEN",
-    "chat_id": "YOUR_CHAT_ID",
-    "admin_username": "YOUR_USERNAME",
-    "polls": [
-        {
-            "name": "опрос для среды",
-            "message": "Волейбол завтра (среда) в 18:00",
-            "open_day": "tue",
-            "open_hour_utc": 15,
-            "open_minute_utc": 0,
-            "close_day": "wed",
-            "close_hour_utc": 15,
-            "close_minute_utc": 0
-        }
-    ]
+  "telegram_token": "YOUR_BOT_TOKEN",
+  "chat_id": "YOUR_CHAT_ID",
+  "admin_username": "YOUR_USERNAME",
+  "polls": [
+    {
+      "name": "опрос для среды",
+      "message": "Волейбол завтра (среда) в 18:00",
+      "open_day": "tue",
+      "open_hour_utc": 15,
+      "open_minute_utc": 0,
+      "close_day": "wed",
+      "close_hour_utc": 15,
+      "close_minute_utc": 0
+    }
+  ]
 }
 ```
 
@@ -115,10 +115,10 @@ python -m src.bot
 
 ```json
 {
-    "telegram_token": "YOUR_BOT_TOKEN",
-    "chat_id": "YOUR_CHAT_ID",
-    "admin_username": "YOUR_USERNAME",
-    "polls": []
+  "telegram_token": "YOUR_BOT_TOKEN",
+  "chat_id": "YOUR_CHAT_ID",
+  "admin_username": "YOUR_USERNAME",
+  "polls": []
 }
 ```
 
@@ -126,26 +126,26 @@ python -m src.bot
 
 ```json
 {
-    "telegram_token": "YOUR_BOT_TOKEN",
-    "chat_id": "YOUR_CHAT_ID",
-    "admin_username": "YOUR_USERNAME",
-    "webhook_host": "https://yourdomain.com",
-    "webhook_path": "/webhook",
-    "webhook_port": 8443,
-    "ssl_cert_path": "/app/certs/fullchain.pem",
-    "ssl_key_path": "/app/certs/privkey.pem",
-    "polls": [
-        {
-            "name": "название опроса",
-            "message": "текст сообщения с опросом",
-            "open_day": "mon",
-            "open_hour_utc": 10,
-            "open_minute_utc": 0,
-            "close_day": "mon",
-            "close_hour_utc": 18,
-            "close_minute_utc": 0
-        }
-    ]
+  "telegram_token": "YOUR_BOT_TOKEN",
+  "chat_id": "YOUR_CHAT_ID",
+  "admin_username": "YOUR_USERNAME",
+  "webhook_host": "https://yourdomain.com",
+  "webhook_path": "/webhook",
+  "webhook_port": 8443,
+  "ssl_cert_path": "/app/certs/fullchain.pem",
+  "ssl_key_path": "/app/certs/privkey.pem",
+  "polls": [
+    {
+      "name": "название опроса",
+      "message": "текст сообщения с опросом",
+      "open_day": "mon",
+      "open_hour_utc": 10,
+      "open_minute_utc": 0,
+      "close_day": "mon",
+      "close_hour_utc": 18,
+      "close_minute_utc": 0
+    }
+  ]
 }
 ```
 
@@ -236,7 +236,7 @@ docker rm volleybot
 Создайте `docker-compose.yml`:
 
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   bot:
@@ -305,11 +305,11 @@ sudo firewall-cmd --reload
 
 ```json
 {
-    "webhook_host": "https://yourdomain.com",
-    "webhook_path": "/webhook",
-    "webhook_port": 8443,
-    "ssl_cert_path": "/app/certs/fullchain.pem",
-    "ssl_key_path": "/app/certs/privkey.pem"
+  "webhook_host": "https://yourdomain.com",
+  "webhook_path": "/webhook",
+  "webhook_port": 8443,
+  "ssl_cert_path": "/app/certs/fullchain.pem",
+  "ssl_key_path": "/app/certs/privkey.pem"
 }
 ```
 
@@ -388,9 +388,9 @@ sudo systemctl reload nginx
 
 ```json
 {
-    "webhook_host": "https://yourdomain.com",
-    "webhook_path": "/webhook",
-    "webhook_port": 8443
+  "webhook_host": "https://yourdomain.com",
+  "webhook_path": "/webhook",
+  "webhook_port": 8443
 }
 ```
 
@@ -725,4 +725,3 @@ volleybot/
 ---
 
 **Разработано с ❤️ для организации спортивных мероприятий**
-

@@ -41,9 +41,9 @@ def temp_config_file(tmp_path: Path) -> Path:
                 "open_minute_utc": 0,
                 "close_day": "tue",
                 "close_hour_utc": 10,
-                "close_minute_utc": 0
+                "close_minute_utc": 0,
             }
-        ]
+        ],
     }
     config_file = tmp_path / "config.json"
     with open(config_file, "w", encoding="utf-8") as f:
@@ -58,6 +58,7 @@ def mock_bot() -> Bot:
     bot.token = "test_token"
     return bot
 
+
 @pytest.fixture
 def admin_user() -> User:
     """Создаёт пользователя-администратора."""
@@ -67,7 +68,7 @@ def admin_user() -> User:
         first_name="Test",
         last_name="Admin",
         username=ADMIN_USERNAME.replace("@", ""),
-        language_code="ru"
+        language_code="ru",
     )
 
 
@@ -80,7 +81,7 @@ def regular_user() -> User:
         first_name="Regular",
         last_name="User",
         username="regular_user",
-        language_code="ru"
+        language_code="ru",
     )
 
 
@@ -114,5 +115,3 @@ def mock_poll_answer(admin_user: User) -> PollAnswer:
     answer.user = admin_user
     answer.option_ids = [0]  # Выбран "Да"
     return answer
-
-

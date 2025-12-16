@@ -101,4 +101,3 @@ def delete_state(key: str) -> None:
             conn.commit()
     except Exception as exc:  # noqa: BLE001
         logging.error("Не удалось удалить состояние %s: %s", key, exc)
-

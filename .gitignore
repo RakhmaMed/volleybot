@@ -30,4 +30,3 @@ error_dump.json
 # Coverage reports
 htmlcov/
 .coverage
-

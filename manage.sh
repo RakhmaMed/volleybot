@@ -93,14 +93,14 @@ setup_environment() {
     echo -e "${CYAN}  Настройка тестового окружения${NC}"
     echo -e "${CYAN}========================================${NC}"
     echo ""
-    
+
     # Проверка наличия uv
     echo -e "${YELLOW}[1/4] Проверка uv...${NC}"
     if ! command -v uv &> /dev/null; then
         echo -e "${YELLOW}❌ uv не найден. Устанавливаю uv...${NC}"
         curl -LsSf https://astral.sh/uv/install.sh | sh
         export PATH="$HOME/.cargo/bin:$PATH"
-        
+
         if ! command -v uv &> /dev/null; then
             echo -e "${RED}❌ Не удалось установить uv. Установите вручную:${NC}"
             echo "   curl -LsSf https://astral.sh/uv/install.sh | sh"
@@ -122,25 +122,25 @@ print(".".join(map(str, sys.version_info[:3])))
 PY
 )
     echo -e "${GRAY}Используем Python: ${PYTHON_BIN} (версия ${PYTHON_VERSION})${NC}"
-    
+
     # Создание виртуального окружения
     echo ""
     echo -e "${YELLOW}[2/4] Создание виртуального окружения...${NC}"
     UV_PYTHON="$PYTHON_BIN" uv venv
     echo -e "${GREEN}✓ Виртуальное окружение создано${NC}"
-    
+
     # Активация виртуального окружения
     echo ""
     echo -e "${YELLOW}[3/4] Активация виртуального окружения...${NC}"
     source .venv/bin/activate
     echo -e "${GREEN}✓ Виртуальное окружение активировано${NC}"
-    
+
     # Установка зависимостей
     echo ""
     echo -e "${YELLOW}[4/4] Установка зависимостей...${NC}"
     UV_PYTHON=".venv/bin/python" uv pip install -r requirements.txt
     echo -e "${GREEN}✓ Зависимости установлены${NC}"
-    
+
     echo ""
     echo -e "${CYAN}========================================${NC}"
     echo -e "${GREEN}✓ Тестовое окружение готово!${NC}"
@@ -160,7 +160,7 @@ run_tests() {
     COVERAGE=false
     VERBOSE=false
     FILE=""
-    
+
     # Парсинг аргументов
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -183,44 +183,44 @@ run_tests() {
                 ;;
         esac
     done
-    
+
     echo -e "${CYAN}========================================${NC}"
     echo -e "${CYAN}  Запуск тестов${NC}"
     echo -e "${CYAN}========================================${NC}"
     echo ""
-    
+
     # Проверка наличия виртуального окружения
     if [ ! -d ".venv" ]; then
         echo -e "${RED}❌ Виртуальное окружение не найдено.${NC}"
         echo -e "${YELLOW}Запустите: ./manage.sh setup${NC}"
         exit 1
     fi
-    
+
     # Активация виртуального окружения
     source .venv/bin/activate
-    
+
     # Формирование команды pytest
     PYTEST_ARGS=()
-    
+
     if [ "$VERBOSE" = true ]; then
         PYTEST_ARGS+=("-v")
     fi
-    
+
     if [ "$COVERAGE" = true ]; then
         PYTEST_ARGS+=("--cov=." "--cov-report=html" "--cov-report=term-missing")
     fi
-    
+
     if [ -n "$FILE" ]; then
         PYTEST_ARGS+=("$FILE")
     fi
-    
+
     # Запуск тестов
     if [ ${#PYTEST_ARGS[@]} -gt 0 ]; then
         pytest "${PYTEST_ARGS[@]}"
     else
         pytest
     fi
-    
+
     if [ "$COVERAGE" = true ]; then
         echo ""
         echo -e "${GREEN}📊 Отчёт о покрытии сохранён в htmlcov/index.html${NC}"
@@ -233,7 +233,7 @@ build_image() {
     echo -e "${CYAN}  Сборка Docker образа${NC}"
     echo -e "${CYAN}========================================${NC}"
     echo ""
-    
+
     # Проверка наличия Docker
     echo -e "${YELLOW}[1/3] Проверка Docker...${NC}"
     if ! command -v docker &> /dev/null; then
@@ -241,7 +241,7 @@ build_image() {
         exit 1
     fi
     echo -e "${GREEN}✓ Docker найден${NC}"
-    
+
     # Проверка доступности Docker daemon
     echo ""
     echo -e "${YELLOW}[2/3] Проверка Docker daemon...${NC}"
@@ -250,7 +250,7 @@ build_image() {
         exit 1
     fi
     echo -e "${GREEN}✓ Docker daemon запущен${NC}"
-    
+
     # Сборка образа
     echo ""
     echo -e "${YELLOW}[3/3] Сборка образа...${NC}"
@@ -272,7 +272,7 @@ deploy_container() {
     echo -e "${CYAN}  Пересборка и перезапуск бота${NC}"
     echo -e "${CYAN}========================================${NC}"
     echo ""
-    
+
     # Проверка наличия Docker
     echo -e "${YELLOW}[1/6] Проверка Docker...${NC}"
     if ! command -v docker &> /dev/null; then
@@ -280,7 +280,7 @@ deploy_container() {
         exit 1
     fi
     echo -e "${GREEN}✓ Docker найден${NC}"
-    
+
     # Проверка доступности Docker daemon
     echo ""
     echo -e "${YELLOW}[2/6] Проверка Docker daemon...${NC}"
@@ -289,7 +289,7 @@ deploy_container() {
         exit 1
     fi
     echo -e "${GREEN}✓ Docker daemon запущен${NC}"
-    
+
     # Остановка и удаление старого контейнера
     echo ""
     echo -e "${YELLOW}[3/6] Остановка контейнера...${NC}"
@@ -300,7 +300,7 @@ deploy_container() {
     else
         echo -e "${GRAY}  Контейнер не найден, пропускаем${NC}"
     fi
-    
+
     # Пересборка образа
     echo ""
     echo -e "${YELLOW}[4/6] Пересборка образа...${NC}"
@@ -310,11 +310,11 @@ deploy_container() {
         echo -e "${RED}✗ Ошибка при сборке образа${NC}"
         exit 1
     fi
-    
+
     # Запуск контейнера
     echo ""
     echo -e "${YELLOW}[5/6] Запуск контейнера...${NC}"
-    
+
     # Проверка наличия директории certs
     if [ -d "./certs" ]; then
         # Запуск с webhook (с сертификатами)
@@ -336,14 +336,14 @@ deploy_container() {
         echo -e "${GREEN}✓ Контейнер запущен в режиме polling${NC}"
         echo -e "${GRAY}  (директория certs не найдена)${NC}"
     fi
-    
+
     # Показ логов
     echo ""
     echo -e "${YELLOW}[6/6] Логи контейнера:${NC}"
     echo -e "${GRAY}----------------------------------------${NC}"
     sleep 2
     docker logs --tail 20 $CONTAINER_NAME
-    
+
     echo ""
     echo -e "${CYAN}========================================${NC}"
     echo -e "${GREEN}✓ Развертывание завершено!${NC}"
@@ -364,7 +364,7 @@ show_logs() {
         echo -e "${YELLOW}Запустите: ./manage.sh deploy${NC}"
         exit 1
     fi
-    
+
     echo -e "${CYAN}Логи контейнера $CONTAINER_NAME:${NC}"
     echo ""
     docker logs -f $CONTAINER_NAME
@@ -377,7 +377,7 @@ start_container() {
         echo -e "${YELLOW}Запустите: ./manage.sh deploy${NC}"
         exit 1
     fi
-    
+
     echo -e "${YELLOW}Запуск контейнера...${NC}"
     if docker start $CONTAINER_NAME; then
         echo -e "${GREEN}✓ Контейнер запущен${NC}"
@@ -394,7 +394,7 @@ stop_container() {
         echo -e "${RED}❌ Контейнер '$CONTAINER_NAME' не найден.${NC}"
         exit 1
     fi
-    
+
     echo -e "${YELLOW}Остановка контейнера...${NC}"
     if docker stop $CONTAINER_NAME; then
         echo -e "${GREEN}✓ Контейнер остановлен${NC}"
@@ -411,7 +411,7 @@ restart_container() {
         echo -e "${YELLOW}Запустите: ./manage.sh deploy${NC}"
         exit 1
     fi
-    
+
     echo -e "${YELLOW}Перезапуск контейнера...${NC}"
     if docker restart $CONTAINER_NAME; then
         echo -e "${GREEN}✓ Контейнер перезапущен${NC}"
@@ -499,4 +499,3 @@ case "${1:-help}" in
         exit 1
         ;;
 esac
-

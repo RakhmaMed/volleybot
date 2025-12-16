@@ -4,7 +4,7 @@
 param(
     [Parameter(Position=0)]
     [string]$Command = "help",
-    
+
     [switch]$Coverage,
     [switch]$VerboseOutput,
     [string]$File = ""
@@ -115,16 +115,16 @@ function Setup-Environment {
     Write-Host "  Настройка тестового окружения" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
-    
+
     # Проверка наличия uv
     Write-Host "[1/4] Проверка uv..." -ForegroundColor Yellow
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
         Write-Host "❌ uv не найден. Устанавливаю uv..." -ForegroundColor Yellow
         powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-        
+
         # Обновляем PATH для текущей сессии
         $env:PATH = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
-        
+
         if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
             Write-Host "❌ Не удалось установить uv. Установите вручную:" -ForegroundColor Red
             Write-Host "   powershell -ExecutionPolicy ByPass -c `"irm https://astral.sh/uv/install.ps1 | iex`"" -ForegroundColor Yellow
@@ -144,7 +144,7 @@ function Setup-Environment {
     Write-Host "Используем Python: $pythonPath (версия $pythonVersion)" -ForegroundColor Gray
     $oldUvPython = $env:UV_PYTHON
     $env:UV_PYTHON = $pythonPath
-    
+
     # Создание виртуального окружения
     Write-Host ""
     Write-Host "[2/4] Создание виртуального окружения..." -ForegroundColor Yellow
@@ -154,13 +154,13 @@ function Setup-Environment {
         exit 1
     }
     Write-Host "✓ Виртуальное окружение создано" -ForegroundColor Green
-    
+
     # Активация виртуального окружения
     Write-Host ""
     Write-Host "[3/4] Активация виртуального окружения..." -ForegroundColor Yellow
     & .\.venv\Scripts\Activate.ps1
     Write-Host "✓ Виртуальное окружение активировано" -ForegroundColor Green
-    
+
     # Установка зависимостей
     Write-Host ""
     Write-Host "[4/4] Установка зависимостей..." -ForegroundColor Yellow
@@ -170,7 +170,7 @@ function Setup-Environment {
         exit 1
     }
     Write-Host "✓ Зависимости установлены" -ForegroundColor Green
-    
+
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "✓ Тестовое окружение готово!" -ForegroundColor Green
@@ -192,41 +192,41 @@ function Run-Tests {
     Write-Host "  Запуск тестов" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
-    
+
     # Проверка наличия виртуального окружения
     if (-not (Test-Path ".venv")) {
         Write-Host "❌ Виртуальное окружение не найдено." -ForegroundColor Red
         Write-Host "Запустите: .\manage.ps1 setup" -ForegroundColor Yellow
         exit 1
     }
-    
+
     # Активация виртуального окружения
     & .\.venv\Scripts\Activate.ps1
-    
+
     # Формирование команды pytest
     $pytestArgs = @()
-    
+
     if ($VerboseOutput) {
         $pytestArgs += "-v"
     }
-    
+
     if ($Coverage) {
         $pytestArgs += "--cov=."
         $pytestArgs += "--cov-report=html"
         $pytestArgs += "--cov-report=term-missing"
     }
-    
+
     if ($File) {
         $pytestArgs += $File
     }
-    
+
     # Запуск тестов
     if ($pytestArgs.Count -gt 0) {
         pytest $pytestArgs
     } else {
         pytest
     }
-    
+
     if ($Coverage) {
         Write-Host ""
         Write-Host "📊 Отчёт о покрытии сохранён в htmlcov\index.html" -ForegroundColor Green
@@ -239,7 +239,7 @@ function Build-Image {
     Write-Host "  Сборка Docker образа" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
-    
+
     # Проверка наличия Docker
     Write-Host "[1/3] Проверка Docker..." -ForegroundColor Yellow
     try {
@@ -249,7 +249,7 @@ function Build-Image {
         Write-Host "✗ Docker не найден. Установите Docker Desktop." -ForegroundColor Red
         exit 1
     }
-    
+
     # Проверка доступности Docker daemon
     Write-Host ""
     Write-Host "[2/3] Проверка Docker daemon..." -ForegroundColor Yellow
@@ -260,7 +260,7 @@ function Build-Image {
         Write-Host "✗ Docker daemon не запущен. Запустите Docker Desktop." -ForegroundColor Red
         exit 1
     }
-    
+
     # Сборка образа
     Write-Host ""
     Write-Host "[3/3] Сборка образа..." -ForegroundColor Yellow
@@ -283,7 +283,7 @@ function Deploy-Container {
     Write-Host "  Пересборка и перезапуск бота" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
-    
+
     # Проверка наличия Docker
     Write-Host "[1/6] Проверка Docker..." -ForegroundColor Yellow
     try {
@@ -293,7 +293,7 @@ function Deploy-Container {
         Write-Host "✗ Docker не найден. Установите Docker Desktop." -ForegroundColor Red
         exit 1
     }
-    
+
     # Проверка доступности Docker daemon
     Write-Host ""
     Write-Host "[2/6] Проверка Docker daemon..." -ForegroundColor Yellow
@@ -304,7 +304,7 @@ function Deploy-Container {
         Write-Host "✗ Docker daemon не запущен. Запустите Docker Desktop." -ForegroundColor Red
         exit 1
     }
-    
+
     # Остановка и удаление старого контейнера
     Write-Host ""
     Write-Host "[3/6] Остановка контейнера..." -ForegroundColor Yellow
@@ -316,7 +316,7 @@ function Deploy-Container {
     } else {
         Write-Host "  Контейнер не найден, пропускаем" -ForegroundColor Gray
     }
-    
+
     # Пересборка образа
     Write-Host ""
     Write-Host "[4/6] Пересборка образа..." -ForegroundColor Yellow
@@ -327,15 +327,15 @@ function Deploy-Container {
         Write-Host "✗ Ошибка при сборке образа" -ForegroundColor Red
         exit 1
     }
-    
+
     # Запуск контейнера
     Write-Host ""
     Write-Host "[5/6] Запуск контейнера..." -ForegroundColor Yellow
-    
+
     # Проверка наличия директории certs
     $certsPath = Join-Path $PSScriptRoot "certs"
     $configPath = Join-Path $PSScriptRoot "config.json"
-    
+
     if (Test-Path $certsPath) {
         # Запуск с webhook (с сертификатами)
         docker run -d `
@@ -356,19 +356,19 @@ function Deploy-Container {
         Write-Host "✓ Контейнер запущен в режиме polling" -ForegroundColor Green
         Write-Host "  (директория certs не найдена)" -ForegroundColor Gray
     }
-    
+
     if ($LASTEXITCODE -ne 0) {
         Write-Host "✗ Ошибка при запуске контейнера" -ForegroundColor Red
         exit 1
     }
-    
+
     # Показ логов
     Write-Host ""
     Write-Host "[6/6] Логи контейнера:" -ForegroundColor Yellow
     Write-Host "----------------------------------------" -ForegroundColor Gray
     Start-Sleep -Seconds 2
     docker logs --tail 20 $CONTAINER_NAME
-    
+
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "✓ Развертывание завершено!" -ForegroundColor Green
@@ -390,7 +390,7 @@ function Show-Logs {
         Write-Host "Запустите: .\manage.ps1 deploy" -ForegroundColor Yellow
         exit 1
     }
-    
+
     Write-Host "Логи контейнера $CONTAINER_NAME" -ForegroundColor Cyan
     Write-Host ""
     docker logs -f $CONTAINER_NAME
@@ -403,7 +403,7 @@ function Start-Container {
         Write-Host "Запустите: .\manage.ps1 deploy" -ForegroundColor Yellow
         exit 1
     }
-    
+
     Write-Host "Запуск контейнера..." -ForegroundColor Yellow
     docker start $CONTAINER_NAME
     if ($LASTEXITCODE -eq 0) {
@@ -421,7 +421,7 @@ function Stop-Container {
         Write-Host "❌ Контейнер '$CONTAINER_NAME' не найден." -ForegroundColor Red
         exit 1
     }
-    
+
     Write-Host "Остановка контейнера..." -ForegroundColor Yellow
     docker stop $CONTAINER_NAME
     if ($LASTEXITCODE -eq 0) {
@@ -439,7 +439,7 @@ function Restart-Container {
         Write-Host "Запустите: .\manage.ps1 deploy" -ForegroundColor Yellow
         exit 1
     }
-    
+
     Write-Host "Перезапуск контейнера..." -ForegroundColor Yellow
     docker restart $CONTAINER_NAME
     if ($LASTEXITCODE -eq 0) {
