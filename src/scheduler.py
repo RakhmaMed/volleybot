@@ -8,7 +8,7 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from .config import POLLS_SCHEDULE
+from .config import POLLS_SCHEDULE, PollSchedule
 from .poll import close_poll, send_poll
 
 
@@ -89,24 +89,18 @@ def setup_scheduler(
     logging.info("Настройка планировщика:")
 
     for idx, poll_config in enumerate(POLLS_SCHEDULE):
-        poll_name: str = poll_config.get("name", f"Опрос #{idx + 1}")
-        message: str = poll_config.get("message", "")
+        poll_name: str = poll_config.name
+        message: str = poll_config.message
 
         # Время открытия опроса
-        open_day: str = poll_config.get("open_day", "*")
-        open_hour_utc: int = poll_config.get("open_hour_utc", 0)
-        open_minute_utc: int = poll_config.get("open_minute_utc", 0)
+        open_day: str = poll_config.open_day
+        open_hour_utc: int = poll_config.open_hour_utc
+        open_minute_utc: int = poll_config.open_minute_utc
 
         # Время закрытия опроса
-        close_day: str = poll_config.get("close_day", "*")
-        close_hour_utc: int = poll_config.get("close_hour_utc", 0)
-        close_minute_utc: int = poll_config.get("close_minute_utc", 0)
-
-        if not message:
-            logging.warning(
-                f"Пропущен опрос '{poll_name}': отсутствует текст сообщения"
-            )
-            continue
+        close_day: str = poll_config.close_day
+        close_hour_utc: int = poll_config.close_hour_utc
+        close_minute_utc: int = poll_config.close_minute_utc
 
         # === Задача открытия опроса ===
         open_job_id: str = f"poll_open_{idx}"
@@ -121,7 +115,7 @@ def setup_scheduler(
             open_trigger_kwargs["day_of_week"] = open_day
 
         # Получаем список подписчиков для этого опроса
-        subs: list[int] = poll_config.get("subs", [])
+        subs: list[int] = poll_config.subs
 
         poll_job: Callable[[], Awaitable[None]] = create_poll_job(
             bot, message, poll_name, get_chat_id, set_chat_id, get_bot_enabled, subs

@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from pydantic import ValidationError
 
+from src.config import PollSchedule
 from src.scheduler import create_close_poll_job, create_poll_job, setup_scheduler
 
 
@@ -115,16 +117,16 @@ class TestSetupScheduler:
 
         # Мокаем конфигурацию
         test_polls = [
-            {
-                "name": "test_poll",
-                "message": "Test message",
-                "open_day": "mon",
-                "open_hour_utc": 10,
-                "open_minute_utc": 0,
-                "close_day": "tue",
-                "close_hour_utc": 10,
-                "close_minute_utc": 0,
-            }
+            PollSchedule(
+                name="test_poll",
+                message="Test message",
+                open_day="mon",
+                open_hour_utc=10,
+                open_minute_utc=0,
+                close_day="tue",
+                close_hour_utc=10,
+                close_minute_utc=0,
+            )
         ]
 
         with patch("src.scheduler.POLLS_SCHEDULE", test_polls):
@@ -156,33 +158,16 @@ class TestSetupScheduler:
 
     def test_setup_scheduler_skips_poll_without_message(self):
         """Тест пропуска опроса без сообщения."""
-        scheduler = AsyncIOScheduler(timezone="UTC")
-        bot = MagicMock()
-
-        def get_chat_id():
-            return -1001234567890
-
-        def set_chat_id(value: int):
-            pass
-
-        def get_bot_enabled():
-            return True
-
-        test_polls = [
-            {
-                "name": "test_poll",
-                "message": "",  # Пустое сообщение
-                "open_day": "mon",
-                "open_hour_utc": 10,
-                "open_minute_utc": 0,
-                "close_day": "tue",
-                "close_hour_utc": 10,
-                "close_minute_utc": 0,
-            }
-        ]
-
-        with patch("src.scheduler.POLLS_SCHEDULE", test_polls):
-            setup_scheduler(scheduler, bot, get_chat_id, set_chat_id, get_bot_enabled)
-
-            jobs = scheduler.get_jobs()
-            assert len(jobs) == 0  # Опрос должен быть пропущен
+        # С Pydantic validation, пустое message не пройдет валидацию
+        # Поэтому этот тест проверяет что валидация работает корректно
+        with pytest.raises(ValidationError):
+            PollSchedule(
+                name="test_poll",
+                message="",  # Пустое сообщение не пройдет валидацию (min_length=1)
+                open_day="mon",
+                open_hour_utc=10,
+                open_minute_utc=0,
+                close_day="tue",
+                close_hour_utc=10,
+                close_minute_utc=0,
+            )

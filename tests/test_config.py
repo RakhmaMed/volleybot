@@ -2,6 +2,7 @@
 
 # Импортируем config для проверки его структуры
 from src import config
+from src.config import PollSchedule
 
 
 class TestConfigLoading:
@@ -41,9 +42,9 @@ class TestConfigLoading:
         assert isinstance(config.REQUIRED_PLAYERS, int)
         assert config.REQUIRED_PLAYERS > 0
 
-    def test_config_poll_options_is_list(self):
+    def test_config_poll_options_is_tuple(self):
         """Тест типа poll_options."""
-        assert isinstance(config.POLL_OPTIONS, list)
+        assert isinstance(config.POLL_OPTIONS, tuple)
         assert len(config.POLL_OPTIONS) > 0
 
     def test_config_webhook_url_format(self):
@@ -57,11 +58,13 @@ class TestConfigLoading:
     def test_config_polls_have_required_fields(self):
         """Тест наличия обязательных полей в опросах."""
         for poll in config.POLLS_SCHEDULE:
-            assert "name" in poll
-            assert "message" in poll
-            assert "open_day" in poll
-            assert "open_hour_utc" in poll
-            assert "open_minute_utc" in poll
-            assert "close_day" in poll
-            assert "close_hour_utc" in poll
-            assert "close_minute_utc" in poll
+            assert isinstance(poll, PollSchedule)
+            assert hasattr(poll, "name")
+            assert hasattr(poll, "message")
+            assert hasattr(poll, "open_day")
+            assert hasattr(poll, "open_hour_utc")
+            assert hasattr(poll, "open_minute_utc")
+            assert hasattr(poll, "close_day")
+            assert hasattr(poll, "close_hour_utc")
+            assert hasattr(poll, "close_minute_utc")
+            assert hasattr(poll, "subs")

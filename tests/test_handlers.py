@@ -1,6 +1,5 @@
 """Тесты для модуля handlers."""
 
-from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,7 +8,7 @@ from aiogram.types import Chat, Message, PollAnswer, User
 
 from src.config import ADMIN_USERNAME
 from src.handlers import register_handlers
-from src.poll import PollDataItem
+from src.poll import PollData, VoterInfo, update_tasks
 
 
 @pytest.mark.asyncio
@@ -159,18 +158,15 @@ class TestPollAnswerHandler:
         register_handlers(dp, bot, lambda: True, lambda x: None)
 
         poll_id = "test_poll_id"
-        poll_data[poll_id] = cast(
-            PollDataItem,
-            {
-                "chat_id": -1001234567890,
-                "poll_msg_id": 123,
-                "info_msg_id": 124,
-                "yes_voters": [],
-                "update_task": None,
-                "last_message_text": "",
-                "subs": [],
-            },
+        poll_data[poll_id] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=123,
+            info_msg_id=124,
+            yes_voters=[],
+            last_message_text="",
+            subs=[],
         )
+        update_tasks[poll_id] = None
 
         user = User(id=123, is_bot=False, first_name="Test", username="test_user")
 
@@ -191,18 +187,15 @@ class TestPollAnswerHandler:
 
         poll_id = "test_poll_id"
         user_id = 123
-        poll_data[poll_id] = cast(
-            PollDataItem,
-            {
-                "chat_id": -1001234567890,
-                "poll_msg_id": 123,
-                "info_msg_id": 124,
-                "yes_voters": [{"id": user_id, "name": "@test_user"}],
-                "update_task": None,
-                "last_message_text": "",
-                "subs": [],
-            },
+        poll_data[poll_id] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=123,
+            info_msg_id=124,
+            yes_voters=[VoterInfo(id=user_id, name="@test_user")],
+            last_message_text="",
+            subs=[],
         )
+        update_tasks[poll_id] = None
 
         user = User(id=user_id, is_bot=False, first_name="Test", username="test_user")
 
@@ -215,4 +208,4 @@ class TestPollAnswerHandler:
 
         # Проверяем логику удаления
         # В реальном сценарии обработчик должен удалить пользователя из yes_voters
-        assert len(poll_data[poll_id]["yes_voters"]) == 1
+        assert len(poll_data[poll_id].yes_voters) == 1

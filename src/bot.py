@@ -8,7 +8,6 @@ Telegram-бот для организации опросов.
 import asyncio
 import logging
 import ssl
-from typing import TypedDict
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -16,6 +15,7 @@ from aiogram.enums import ParseMode
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from pydantic import BaseModel, Field
 
 from .config import (
     CHAT_ID,
@@ -36,11 +36,13 @@ from .utils import load_players
 logging.basicConfig(level=logging.INFO)
 
 
-class BotState(TypedDict):
+class BotState(BaseModel):
     """Типизированное состояние бота."""
 
-    bot_enabled: bool
-    chat_id: int
+    bot_enabled: bool = Field(default=True, description="Флаг включения бота")
+    chat_id: int = Field(..., description="ID чата для отправки сообщений")
+
+    model_config = {"frozen": False}  # Разрешаем изменение полей
 
 
 # Инициализация бота и диспетчера
@@ -48,10 +50,10 @@ bot: Bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HT
 dp: Dispatcher = Dispatcher()
 
 # Глобальное состояние
-_state: BotState = {
-    "bot_enabled": True,
-    "chat_id": CHAT_ID,
-}
+_state: BotState = BotState(
+    bot_enabled=True,
+    chat_id=CHAT_ID,
+)
 
 # Инициализация БД и восстановление состояния после рестарта
 init_db()
@@ -61,11 +63,9 @@ def _restore_bot_state() -> None:
     """Подтягивает сохранённые значения bot_enabled/chat_id из БД."""
     stored_state = load_state(BOT_STATE_KEY, default={})
     if isinstance(stored_state, dict):
-        _state["bot_enabled"] = bool(
-            stored_state.get("bot_enabled", _state["bot_enabled"])
-        )
+        _state.bot_enabled = bool(stored_state.get("bot_enabled", _state.bot_enabled))
         try:
-            _state["chat_id"] = int(stored_state.get("chat_id", _state["chat_id"]))
+            _state.chat_id = int(stored_state.get("chat_id", _state.chat_id))
         except (TypeError, ValueError):
             logging.warning(
                 "Сохранённый chat_id повреждён, оставляем значение из config.json"
@@ -76,10 +76,7 @@ def _persist_bot_state() -> None:
     """Фиксирует текущее состояние бота в БД."""
     save_state(
         BOT_STATE_KEY,
-        {
-            "bot_enabled": _state["bot_enabled"],
-            "chat_id": _state["chat_id"],
-        },
+        _state.model_dump(mode="json"),
     )
 
 
@@ -93,23 +90,23 @@ scheduler: AsyncIOScheduler = AsyncIOScheduler(timezone="UTC")
 # Функции доступа к состоянию
 def get_bot_enabled() -> bool:
     """Возвращает состояние включения бота."""
-    return _state["bot_enabled"]
+    return _state.bot_enabled
 
 
 def set_bot_enabled(value: bool) -> None:
     """Устанавливает состояние включения бота."""
-    _state["bot_enabled"] = value
+    _state.bot_enabled = value
     _persist_bot_state()
 
 
 def get_chat_id() -> int:
     """Возвращает ID текущего чата."""
-    return _state["chat_id"]
+    return _state.chat_id
 
 
 def set_chat_id(value: int) -> None:
     """Устанавливает ID текущего чата."""
-    _state["chat_id"] = value
+    _state.chat_id = value
     _persist_bot_state()
 
 

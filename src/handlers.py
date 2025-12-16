@@ -14,6 +14,7 @@ from .poll import (
     poll_data,
     sort_voters_by_update_id,
     update_players_list,
+    update_tasks,
 )
 from .utils import get_player_name, is_admin
 
@@ -143,27 +144,27 @@ def register_handlers(
             return
 
         data = poll_data[poll_id]
-        yes_voters: list[VoterInfo] = data["yes_voters"]
+        yes_voters: list[VoterInfo] = data.yes_voters
 
         # Удаляем пользователя, если был
-        yes_voters = [v for v in yes_voters if v["id"] != user.id]
+        yes_voters = [v for v in yes_voters if v.id != user.id]
 
         if 0 in selected:  # Да
-            subs: list[int] = data.get("subs", [])
+            subs: list[int] = data.subs
             name: str = get_player_name(user, subs)
-            yes_voters.append({"id": user.id, "name": name, "update_id": update_id})
+            yes_voters.append(VoterInfo(id=user.id, name=name, update_id=update_id))
 
         sorted_yes_voters = sort_voters_by_update_id(yes_voters)
-        data["yes_voters"] = sorted_yes_voters
+        data.yes_voters = sorted_yes_voters
         logging.info(f"Обновленный список голосующих: {sorted_yes_voters}")
 
         # Отменяем предыдущую задачу обновления
-        if "update_task" in data and data["update_task"] is not None:
-            data["update_task"].cancel()
+        if poll_id in update_tasks and update_tasks[poll_id] is not None:
+            update_tasks[poll_id].cancel()
             logging.debug("Предыдущая задача обновления отменена")
 
         # Создаём новую задачу обновления с задержкой
-        data["update_task"] = asyncio.create_task(update_players_list(bot, poll_id))
+        update_tasks[poll_id] = asyncio.create_task(update_players_list(bot, poll_id))
         logging.debug("Создана новая задача отложенного обновления (10 сек)")
 
         # Сохраняем текущее состояние опросов для восстановления после перезапуска

@@ -4,57 +4,58 @@ import asyncio
 import logging
 import traceback
 from asyncio import Task
-from typing import TypedDict, cast
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramMigrateToChat
+from pydantic import BaseModel, Field
 
 from .config import POLL_OPTIONS, REQUIRED_PLAYERS
 from .db import POLL_STATE_KEY, load_state, save_state
 from .utils import escape_html, save_error_dump
 
 
-class VoterInfoRequired(TypedDict):
-    """Обязательные поля информации о проголосовавшем."""
-
-    id: int
-    name: str
-
-
-class VoterInfo(VoterInfoRequired, total=False):
+class VoterInfo(BaseModel):
     """Информация о проголосовавшем."""
 
-    update_id: int
+    id: int = Field(..., description="ID пользователя Telegram")
+    name: str = Field(..., description="Имя пользователя")
+    update_id: int = Field(default=0, description="ID обновления для сортировки")
+
+    model_config = {"frozen": False}  # Разрешаем изменение полей
 
 
-class PollDataItemRequired(TypedDict):
-    """Обязательные поля данных опроса."""
+class PollData(BaseModel):
+    """Данные активного опроса."""
 
-    chat_id: int
-    poll_msg_id: int
-    yes_voters: list[VoterInfo]
-    last_message_text: str
-    subs: list[int]
+    chat_id: int = Field(..., description="ID чата")
+    poll_msg_id: int = Field(..., description="ID сообщения с опросом")
+    info_msg_id: int | None = Field(
+        default=None, description="ID информационного сообщения"
+    )
+    yes_voters: list[VoterInfo] = Field(
+        default_factory=list, description="Список проголосовавших 'Да'"
+    )
+    last_message_text: str = Field(
+        default="⏳ Идёт сбор голосов...", description="Последний отправленный текст"
+    )
+    subs: list[int] = Field(default_factory=list, description="Список ID подписчиков")
+    # update_task не сериализуется, хранится отдельно
 
-
-class PollDataItem(PollDataItemRequired, total=False):
-    """Данные опроса."""
-
-    info_msg_id: int | None
-    update_task: Task[None] | None
+    model_config = {"arbitrary_types_allowed": True, "frozen": False}
 
 
 # Глобальное хранилище данных опросов
-poll_data: dict[str, PollDataItem] = {}
+poll_data: dict[str, PollData] = {}
+# Отдельное хранилище для задач обновления (не сериализуются)
+update_tasks: dict[str, Task[None] | None] = {}
 
 
 def persist_poll_state() -> None:
     """Сохраняет актуальное состояние опросов в базе."""
-    serializable: dict[str, PollDataItem] = {}
+    serializable: dict[str, dict] = {}
     for poll_id, data in poll_data.items():
-        sanitized = cast(PollDataItem, dict(data))
-        sanitized["update_task"] = None  # задачи нельзя сериализовать
-        serializable[poll_id] = sanitized
+        # Используем model_dump для сериализации Pydantic модели
+        serializable[poll_id] = data.model_dump(mode="json")
     save_state(POLL_STATE_KEY, serializable)
 
 
@@ -68,15 +69,21 @@ def load_persisted_poll_state() -> None:
         return
 
     poll_data.clear()
+    update_tasks.clear()
+
     for poll_id, data in stored.items():
-        restored = cast(PollDataItem, dict(data))
-        restored["update_task"] = None
-        poll_data[poll_id] = restored
+        try:
+            # Восстанавливаем из словаря в Pydantic модель
+            restored = PollData(**data)
+            poll_data[poll_id] = restored
+            update_tasks[poll_id] = None
+        except Exception as e:
+            logging.error(f"Не удалось восстановить состояние опроса {poll_id}: {e}")
 
 
 def sort_voters_by_update_id(voters: list[VoterInfo]) -> list[VoterInfo]:
     """Возвращает список голосовавших, отсортированный по update_id (порядок событий)."""
-    return sorted(voters, key=lambda v: (v.get("update_id", 0), v["id"]))
+    return sorted(voters, key=lambda v: (v.update_id, v.id))
 
 
 async def send_poll(
@@ -96,6 +103,7 @@ async def send_poll(
         question: Текст вопроса опроса
         poll_name: Название опроса для логирования
         bot_enabled: Флаг включения бота
+        subs: Список ID подписчиков
 
     Returns:
         Новый chat_id (может измениться при миграции группы)
@@ -105,6 +113,7 @@ async def send_poll(
         return chat_id
 
     poll_data.clear()
+    update_tasks.clear()
     persist_poll_state()
 
     try:
@@ -173,15 +182,15 @@ async def send_poll(
         logging.error(f"Опрос создан, но poll объект отсутствует для '{poll_name}'")
         return chat_id
 
-    poll_data[poll_message.poll.id] = {
-        "chat_id": chat_id,
-        "poll_msg_id": poll_message.message_id,
-        "info_msg_id": info_message.message_id if info_message else None,
-        "yes_voters": [],
-        "update_task": None,
-        "last_message_text": "⏳ Идёт сбор голосов...",
-        "subs": subs or [],
-    }
+    poll_data[poll_message.poll.id] = PollData(
+        chat_id=chat_id,
+        poll_msg_id=poll_message.message_id,
+        info_msg_id=info_message.message_id if info_message else None,
+        yes_voters=[],
+        last_message_text="⏳ Идёт сбор голосов...",
+        subs=subs or [],
+    )
+    update_tasks[poll_message.poll.id] = None
     persist_poll_state()
 
     logging.info(f"Создан {poll_name} {poll_message.poll.id}")
@@ -196,8 +205,8 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
         return
 
     data = poll_data[poll_id]
-    yes_voters: list[VoterInfo] = sort_voters_by_update_id(data["yes_voters"])
-    data["yes_voters"] = yes_voters
+    yes_voters: list[VoterInfo] = sort_voters_by_update_id(data.yes_voters)
+    data.yes_voters = yes_voters
 
     # Формируем текст (HTML-разметка)
     text: str
@@ -210,7 +219,7 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
             "<b>Проголосовали:</b>\n"
         )
         text += "\n".join(
-            f"{i + 1}) {escape_html(p['name'])}" for i, p in enumerate(yes_voters)
+            f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(yes_voters)
         )
     else:
         main_players: list[VoterInfo] = yes_voters[:REQUIRED_PLAYERS]
@@ -218,43 +227,43 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
 
         text = "✅ <b>Список игроков:</b>\n"
         text += "\n".join(
-            f"{i + 1}) {escape_html(p['name'])}" for i, p in enumerate(main_players)
+            f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(main_players)
         )
 
         if reserves:
             text += "\n\n🕗 <b>Запасные игроки:</b>\n"
             text += "\n".join(
-                f"{i + 1}) {escape_html(p['name'])}" for i, p in enumerate(reserves)
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
             )
 
     # Добавляем легенду
     text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
 
-    info_msg_id = data.get("info_msg_id")
+    info_msg_id = data.info_msg_id
     if info_msg_id is None:
         logging.warning(
             f"info_msg_id отсутствует для опроса {poll_id}, пропускаем обновление списка игроков"
         )
-        data["update_task"] = None
+        update_tasks[poll_id] = None
         persist_poll_state()
         return
 
-    if text == data.get("last_message_text"):
+    if text == data.last_message_text:
         logging.debug("Текст не изменился, пропускаем обновление")
     else:
         try:
             await bot.edit_message_text(
-                chat_id=data["chat_id"],
+                chat_id=data.chat_id,
                 message_id=info_msg_id,
                 text=text,
                 parse_mode="HTML",
             )
-            data["last_message_text"] = text
+            data.last_message_text = text
             logging.info(f"Список игроков обновлен: {len(yes_voters)} человек")
         except Exception as e:
             logging.error(f"Ошибка редактирования сообщения: {e}")
 
-    data["update_task"] = None
+    update_tasks[poll_id] = None
     persist_poll_state()
 
 
@@ -273,17 +282,17 @@ async def close_poll(bot: Bot, poll_name: str) -> None:
 
     # Берём первый (и обычно единственный) активный опрос
     poll_id: str = list(poll_data.keys())[0]
-    data: PollDataItem = poll_data[poll_id]
+    data: PollData = poll_data[poll_id]
 
     # Останавливаем опрос
     try:
-        await bot.stop_poll(chat_id=data["chat_id"], message_id=data["poll_msg_id"])
+        await bot.stop_poll(chat_id=data.chat_id, message_id=data.poll_msg_id)
         logging.info(f"Опрос '{poll_name}' остановлен")
     except Exception as e:
         logging.error(f"Ошибка при остановке опроса '{poll_name}': {e}")
 
     # Формируем финальный список
-    yes_voters: list[VoterInfo] = data.get("yes_voters", [])
+    yes_voters: list[VoterInfo] = data.yes_voters
 
     final_text: str
     if len(yes_voters) == 0:
@@ -295,7 +304,7 @@ async def close_poll(bot: Bot, poll_name: str) -> None:
             "<b>Записались:</b>\n"
         )
         final_text += "\n".join(
-            f"{i + 1}) {escape_html(p['name'])}" for i, p in enumerate(yes_voters)
+            f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(yes_voters)
         )
         final_text += "\n\n⚠️ <b>Не хватает игроков!</b>"
     else:
@@ -307,24 +316,24 @@ async def close_poll(bot: Bot, poll_name: str) -> None:
             f"<b>Основной состав ({len(main_players)}):</b>\n"
         )
         final_text += "\n".join(
-            f"{i + 1}) {escape_html(p['name'])}" for i, p in enumerate(main_players)
+            f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(main_players)
         )
 
         if reserves:
             final_text += f"\n\n🕗 <b>Запасные ({len(reserves)}):</b>\n"
             final_text += "\n".join(
-                f"{i + 1}) {escape_html(p['name'])}" for i, p in enumerate(reserves)
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
             )
 
     # Добавляем легенду
     final_text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
 
     # Обновляем информационное сообщение с финальным списком
-    info_msg_id = data.get("info_msg_id")
+    info_msg_id = data.info_msg_id
     if info_msg_id:
         try:
             await bot.edit_message_text(
-                chat_id=data["chat_id"],
+                chat_id=data.chat_id,
                 message_id=info_msg_id,
                 text=final_text,
                 parse_mode="HTML",
@@ -339,5 +348,7 @@ async def close_poll(bot: Bot, poll_name: str) -> None:
 
     # Очищаем данные опроса
     del poll_data[poll_id]
+    if poll_id in update_tasks:
+        del update_tasks[poll_id]
     persist_poll_state()
     logging.info(f"Опрос '{poll_name}' закрыт, данные очищены")
