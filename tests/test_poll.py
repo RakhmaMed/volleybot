@@ -250,9 +250,7 @@ class TestClosePoll:
         """Тест закрытия опроса при отсутствии активных опросов."""
         poll_data.clear()
 
-        get_chat_id = MagicMock(return_value=-1001234567890)
-
-        await close_poll(mock_bot, "test_poll", get_chat_id)
+        await close_poll(mock_bot, "test_poll")
 
         mock_bot.stop_poll.assert_not_called()
 
@@ -272,9 +270,7 @@ class TestClosePoll:
         mock_bot.stop_poll = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
 
-        get_chat_id = MagicMock(return_value=-1001234567890)
-
-        await close_poll(mock_bot, "test_poll", get_chat_id)
+        await close_poll(mock_bot, "test_poll")
 
         mock_bot.stop_poll.assert_called_once()
         mock_bot.edit_message_text.assert_called_once()
@@ -298,9 +294,7 @@ class TestClosePoll:
         mock_bot.stop_poll = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
 
-        get_chat_id = MagicMock(return_value=-1001234567890)
-
-        await close_poll(mock_bot, "test_poll", get_chat_id)
+        await close_poll(mock_bot, "test_poll")
 
         call_args = mock_bot.edit_message_text.call_args
         assert "✅" in call_args.kwargs["text"]
@@ -404,9 +398,8 @@ class TestHtmlEscapingInPollTexts:
 
         mock_bot.stop_poll = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
-        get_chat_id = MagicMock(return_value=-1001234567890)
 
-        await close_poll(mock_bot, "test_poll", get_chat_id)
+        await close_poll(mock_bot, "test_poll")
 
         mock_bot.edit_message_text.assert_called_once()
         text = mock_bot.edit_message_text.call_args.kwargs["text"]

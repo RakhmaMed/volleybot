@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -43,4 +44,4 @@ WEBHOOK_SSL_PRIV: str = config.get("ssl_key_path", "/app/certs/privkey.pem")
 
 # Настройки опросов
 REQUIRED_PLAYERS: int = 18
-POLL_OPTIONS: list[str] = ["Да", "Нет"]
+POLL_OPTIONS: Sequence[str] = ["Да", "Нет"]

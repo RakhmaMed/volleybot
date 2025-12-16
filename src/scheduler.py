@@ -47,23 +47,20 @@ def create_poll_job(
     return job
 
 
-def create_close_poll_job(
-    bot: Bot, poll_name: str, get_chat_id: Callable[[], int]
-) -> Callable[[], Awaitable[None]]:
+def create_close_poll_job(bot: Bot, poll_name: str) -> Callable[[], Awaitable[None]]:
     """
     Создаёт асинхронную задачу для закрытия опроса.
 
     Args:
         bot: Экземпляр бота
         poll_name: Название опроса
-        get_chat_id: Функция получения текущего chat_id
 
     Returns:
         Асинхронная функция-задача для планировщика
     """
 
     async def job() -> None:
-        await close_poll(bot, poll_name, get_chat_id)
+        await close_poll(bot, poll_name)
 
     return job
 
@@ -159,9 +156,7 @@ def setup_scheduler(
         if close_day != "*":
             close_trigger_kwargs["day_of_week"] = close_day
 
-        close_job: Callable[[], Awaitable[None]] = create_close_poll_job(
-            bot, poll_name, get_chat_id
-        )
+        close_job: Callable[[], Awaitable[None]] = create_close_poll_job(bot, poll_name)
 
         scheduler.add_job(
             close_job,

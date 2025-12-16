@@ -4,8 +4,7 @@ import asyncio
 import logging
 import traceback
 from asyncio import Task
-from collections.abc import Callable
-from typing import TypedDict
+from typing import TypedDict, cast
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramMigrateToChat
@@ -28,16 +27,21 @@ class VoterInfo(VoterInfoRequired, total=False):
     update_id: int
 
 
-class PollDataItem(TypedDict, total=False):
-    """Данные опроса."""
+class PollDataItemRequired(TypedDict):
+    """Обязательные поля данных опроса."""
 
     chat_id: int
     poll_msg_id: int
-    info_msg_id: int | None
     yes_voters: list[VoterInfo]
-    update_task: Task[None] | None
     last_message_text: str
     subs: list[int]
+
+
+class PollDataItem(PollDataItemRequired, total=False):
+    """Данные опроса."""
+
+    info_msg_id: int | None
+    update_task: Task[None] | None
 
 
 # Глобальное хранилище данных опросов
@@ -48,7 +52,7 @@ def persist_poll_state() -> None:
     """Сохраняет актуальное состояние опросов в базе."""
     serializable: dict[str, PollDataItem] = {}
     for poll_id, data in poll_data.items():
-        sanitized = dict(data)
+        sanitized = cast(PollDataItem, dict(data))
         sanitized["update_task"] = None  # задачи нельзя сериализовать
         serializable[poll_id] = sanitized
     save_state(POLL_STATE_KEY, serializable)
@@ -65,7 +69,7 @@ def load_persisted_poll_state() -> None:
 
     poll_data.clear()
     for poll_id, data in stored.items():
-        restored: PollDataItem = dict(data)
+        restored = cast(PollDataItem, dict(data))
         restored["update_task"] = None
         poll_data[poll_id] = restored
 
@@ -105,7 +109,10 @@ async def send_poll(
 
     try:
         poll_message = await bot.send_poll(
-            chat_id=chat_id, question=question, options=POLL_OPTIONS, is_anonymous=False
+            chat_id=chat_id,
+            question=question,
+            options=list(POLL_OPTIONS),
+            is_anonymous=False,
         )
     except TelegramMigrateToChat as e:
         new_chat_id: int = e.migrate_to_chat_id
@@ -162,6 +169,10 @@ async def send_poll(
         logging.warning(f"Не удалось закрепить сообщение: {e}")
 
     # Сохраняем данные опроса
+    if poll_message.poll is None:
+        logging.error(f"Опрос создан, но poll объект отсутствует для '{poll_name}'")
+        return chat_id
+
     poll_data[poll_message.poll.id] = {
         "chat_id": chat_id,
         "poll_msg_id": poll_message.message_id,
@@ -219,8 +230,11 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
     # Добавляем легенду
     text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
 
-    if data.get("info_msg_id") is None:
-        logging.debug("info_msg_id отсутствует, пропускаем обновление")
+    info_msg_id = data.get("info_msg_id")
+    if info_msg_id is None:
+        logging.warning(
+            f"info_msg_id отсутствует для опроса {poll_id}, пропускаем обновление списка игроков"
+        )
         data["update_task"] = None
         persist_poll_state()
         return
@@ -231,7 +245,7 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
         try:
             await bot.edit_message_text(
                 chat_id=data["chat_id"],
-                message_id=data["info_msg_id"],
+                message_id=info_msg_id,
                 text=text,
                 parse_mode="HTML",
             )
@@ -244,16 +258,14 @@ async def update_players_list(bot: Bot, poll_id: str) -> None:
     persist_poll_state()
 
 
-async def close_poll(bot: Bot, poll_name: str, get_chat_id: Callable[[], int]) -> None:
+async def close_poll(bot: Bot, poll_name: str) -> None:
     """
     Закрытие активного опроса и публикация финального списка.
 
     Args:
         bot: Экземпляр бота
         poll_name: Название опроса для логирования
-        get_chat_id: Функция получения текущего chat_id
     """
-    chat_id: int = get_chat_id()
 
     if not poll_data:
         logging.info(f"Нет активных опросов для закрытия ({poll_name})")
@@ -308,17 +320,22 @@ async def close_poll(bot: Bot, poll_name: str, get_chat_id: Callable[[], int]) -
     final_text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
 
     # Обновляем информационное сообщение с финальным списком
-    if data.get("info_msg_id"):
+    info_msg_id = data.get("info_msg_id")
+    if info_msg_id:
         try:
             await bot.edit_message_text(
                 chat_id=data["chat_id"],
-                message_id=data["info_msg_id"],
+                message_id=info_msg_id,
                 text=final_text,
                 parse_mode="HTML",
             )
             logging.info(f"Финальный список опубликован для '{poll_name}'")
         except Exception as e:
             logging.error(f"Ошибка обновления финального сообщения: {e}")
+    else:
+        logging.warning(
+            f"info_msg_id отсутствует для '{poll_name}', финальное сообщение не обновлено"
+        )
 
     # Очищаем данные опроса
     del poll_data[poll_id]

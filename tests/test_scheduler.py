@@ -85,13 +85,10 @@ class TestCreateClosePollJob:
         """Тест создания задачи закрытия опроса."""
         bot = MagicMock()
 
-        def get_chat_id():
-            return -1001234567890
-
         with patch(
             "src.scheduler.close_poll", new_callable=AsyncMock
         ) as mock_close_poll:
-            job = create_close_poll_job(bot, "test_poll", get_chat_id)
+            job = create_close_poll_job(bot, "test_poll")
 
             await job()
 
