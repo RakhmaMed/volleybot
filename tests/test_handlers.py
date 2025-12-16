@@ -1,5 +1,6 @@
 """Тесты для модуля handlers."""
 
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,6 +9,7 @@ from aiogram.types import Chat, Message, PollAnswer, User
 
 from src.config import ADMIN_USERNAME
 from src.handlers import register_handlers
+from src.poll import PollDataItem
 
 
 @pytest.mark.asyncio
@@ -157,18 +159,23 @@ class TestPollAnswerHandler:
         register_handlers(dp, bot, lambda: True, lambda x: None)
 
         poll_id = "test_poll_id"
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": 124,
-            "yes_voters": [],
-            "update_task": None,
-            "last_message_text": "",
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": 124,
+                "yes_voters": [],
+                "update_task": None,
+                "last_message_text": "",
+                "subs": [],
+            },
+        )
 
         user = User(id=123, is_bot=False, first_name="Test", username="test_user")
 
-        poll_answer = PollAnswer(
+        # Создаём ответ на опрос (не используется напрямую в тесте, но показывает структуру)
+        PollAnswer(
             poll_id=poll_id,
             user=user,
             option_ids=[0],  # Выбран "Да"
@@ -184,18 +191,23 @@ class TestPollAnswerHandler:
 
         poll_id = "test_poll_id"
         user_id = 123
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": 124,
-            "yes_voters": [{"id": user_id, "name": "@test_user"}],
-            "update_task": None,
-            "last_message_text": "",
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": 124,
+                "yes_voters": [{"id": user_id, "name": "@test_user"}],
+                "update_task": None,
+                "last_message_text": "",
+                "subs": [],
+            },
+        )
 
         user = User(id=user_id, is_bot=False, first_name="Test", username="test_user")
 
-        poll_answer = PollAnswer(
+        # Создаём ответ на опрос (не используется напрямую в тесте, но показывает структуру)
+        PollAnswer(
             poll_id=poll_id,
             user=user,
             option_ids=[],  # Изменил ответ на "Нет" или убрал голос

@@ -1,13 +1,16 @@
 """Тесты для модуля poll."""
 
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram.exceptions import TelegramMigrateToChat
+from aiogram.methods import SendPoll
 
 from src.config import REQUIRED_PLAYERS
 from src.db import POLL_STATE_KEY, init_db, load_state
 from src.poll import (
+    PollDataItem,
     VoterInfo,
     close_poll,
     load_persisted_poll_state,
@@ -80,7 +83,13 @@ class TestSendPoll:
         new_chat_id = -1009876543210
         # Создаём мок исключения с нужным атрибутом
         migration_error = TelegramMigrateToChat(
-            method="sendPoll", message="Migration", migrate_to_chat_id=new_chat_id
+            method=SendPoll(
+                chat_id=-1001234567890,
+                question="Test question",
+                options=["Option 1", "Option 2"],
+            ),
+            message="Migration",
+            migrate_to_chat_id=new_chat_id,
         )
 
         mock_bot.send_poll = AsyncMock(side_effect=migration_error)
@@ -127,14 +136,18 @@ class TestUpdatePlayersList:
     async def test_update_players_list_empty(self, mock_bot):
         """Тест обновления списка при отсутствии голосов."""
         poll_id = "test_poll_id"
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": 124,
-            "yes_voters": [],
-            "update_task": None,
-            "last_message_text": "",  # Пустой текст, чтобы гарантировать обновление
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": 124,
+                "yes_voters": [],
+                "update_task": None,
+                "last_message_text": "",
+                "subs": [],
+            },
+        )
 
         mock_bot.edit_message_text = AsyncMock()
 
@@ -152,14 +165,18 @@ class TestUpdatePlayersList:
             {"id": 1, "name": "@user1"},
             {"id": 2, "name": "@user2"},
         ]
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": 124,
-            "yes_voters": voters,
-            "update_task": None,
-            "last_message_text": "",
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": 124,
+                "yes_voters": voters,
+                "update_task": None,
+                "last_message_text": "",
+                "subs": [],
+            },
+        )
 
         mock_bot.edit_message_text = AsyncMock()
 
@@ -178,14 +195,18 @@ class TestUpdatePlayersList:
         voters: list[VoterInfo] = [
             {"id": i, "name": f"@user{i}"} for i in range(REQUIRED_PLAYERS + 5)
         ]
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": 124,
-            "yes_voters": voters,
-            "update_task": None,
-            "last_message_text": "",
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": 124,
+                "yes_voters": voters,
+                "update_task": None,
+                "last_message_text": "",
+                "subs": [],
+            },
+        )
 
         mock_bot.edit_message_text = AsyncMock()
 
@@ -202,14 +223,18 @@ class TestUpdatePlayersList:
     async def test_update_players_list_skips_if_no_info_msg(self, mock_bot):
         """Тест пропуска обновления при отсутствии info_msg_id."""
         poll_id = "test_poll_id"
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": None,
-            "yes_voters": [{"id": 1, "name": "@user1"}],
-            "update_task": None,
-            "last_message_text": "",
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": None,
+                "yes_voters": [{"id": 1, "name": "@user1"}],
+                "update_task": None,
+                "last_message_text": "",
+                "subs": [],
+            },
+        )
 
         mock_bot.edit_message_text = AsyncMock()
 
@@ -222,14 +247,18 @@ class TestUpdatePlayersList:
         """Тест пропуска обновления при неизменном тексте."""
         poll_id = "test_poll_id"
         text = "⏳ Идёт сбор голосов..."
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": 124,
-            "yes_voters": [],
-            "update_task": None,
-            "last_message_text": text,
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": 124,
+                "yes_voters": [],
+                "update_task": None,
+                "last_message_text": text,
+                "subs": [],
+            },
+        )
 
         mock_bot.edit_message_text = AsyncMock()
 
@@ -239,7 +268,7 @@ class TestUpdatePlayersList:
         # Должен быть вызван, но если текст совпадает, то не обновляется
         # В реальной реализации проверка происходит после формирования текста
         # Здесь мы просто проверяем, что функция выполнилась
-        assert poll_data[poll_id]["update_task"] is None
+        assert poll_data[poll_id].get("update_task") is None
 
 
 @pytest.mark.asyncio
@@ -258,14 +287,18 @@ class TestClosePoll:
         """Тест успешного закрытия опроса."""
         poll_id = "test_poll_id"
         voters: list[VoterInfo] = [{"id": i, "name": f"@user{i}"} for i in range(5)]
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": 124,
-            "yes_voters": voters,
-            "update_task": None,
-            "last_message_text": "",
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": 124,
+                "yes_voters": voters,
+                "update_task": None,
+                "last_message_text": "",
+                "subs": [],
+            },
+        )
 
         mock_bot.stop_poll = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
@@ -282,14 +315,18 @@ class TestClosePoll:
         voters: list[VoterInfo] = [
             {"id": i, "name": f"@user{i}"} for i in range(REQUIRED_PLAYERS + 3)
         ]
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": 124,
-            "yes_voters": voters,
-            "update_task": None,
-            "last_message_text": "",
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": 124,
+                "yes_voters": voters,
+                "update_task": None,
+                "last_message_text": "",
+                "subs": [],
+            },
+        )
 
         mock_bot.stop_poll = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
@@ -307,15 +344,18 @@ def test_persist_poll_state_roundtrip():
     """Состояние опроса должно сохраняться и восстанавливаться из БД."""
     init_db()
     poll_data.clear()
-    poll_data["poll123"] = {
-        "chat_id": 1,
-        "poll_msg_id": 2,
-        "info_msg_id": 3,
-        "yes_voters": [{"id": 7, "name": "@user7", "update_id": 1}],
-        "update_task": object(),
-        "last_message_text": "cached",
-        "subs": [7],
-    }
+    poll_data["poll123"] = cast(
+        PollDataItem,
+        {
+            "chat_id": 1,
+            "poll_msg_id": 2,
+            "info_msg_id": 3,
+            "yes_voters": [{"id": 7, "name": "@user7", "update_id": 1}],
+            "update_task": object(),
+            "last_message_text": "cached",
+            "subs": [7],
+        },
+    )
 
     persist_poll_state()
 
@@ -328,8 +368,10 @@ def test_persist_poll_state_roundtrip():
     assert "poll123" in poll_data
     restored = poll_data["poll123"]
     assert restored["chat_id"] == 1
-    assert restored["update_task"] is None
-    assert restored["yes_voters"][0]["id"] == 7
+    assert restored.get("update_task") is None
+    yes_voters = restored["yes_voters"]
+    assert len(yes_voters) > 0
+    assert yes_voters[0]["id"] == 7
 
 
 @pytest.mark.asyncio
@@ -343,14 +385,18 @@ class TestHtmlEscapingInPollTexts:
             {"id": 1, "name": "<User&1>"},
             {"id": 2, "name": "NormalUser"},
         ]
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": 124,
-            "yes_voters": voters,
-            "update_task": None,
-            "last_message_text": "",
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": 124,
+                "yes_voters": voters,
+                "update_task": None,
+                "last_message_text": "",
+                "subs": [],
+            },
+        )
 
         mock_bot.edit_message_text = AsyncMock()
 
@@ -365,14 +411,18 @@ class TestHtmlEscapingInPollTexts:
     async def test_update_players_list_includes_legend(self, mock_bot):
         """Текст списка игроков должен содержать легенду эмодзи."""
         poll_id = "test_legend_poll_id"
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": 124,
-            "yes_voters": [{"id": 1, "name": "User"}],
-            "update_task": None,
-            "last_message_text": "",
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": 124,
+                "yes_voters": [{"id": 1, "name": "User"}],
+                "update_task": None,
+                "last_message_text": "",
+                "subs": [],
+            },
+        )
 
         mock_bot.edit_message_text = AsyncMock()
 
@@ -387,14 +437,18 @@ class TestHtmlEscapingInPollTexts:
     async def test_close_poll_includes_legend(self, mock_bot):
         """Финальный текст опроса должен содержать легенду эмодзи."""
         poll_id = "test_close_poll_legend_id"
-        poll_data[poll_id] = {
-            "chat_id": -1001234567890,
-            "poll_msg_id": 123,
-            "info_msg_id": 124,
-            "yes_voters": [{"id": 1, "name": "User"}],
-            "update_task": None,
-            "last_message_text": "",
-        }
+        poll_data[poll_id] = cast(
+            PollDataItem,
+            {
+                "chat_id": -1001234567890,
+                "poll_msg_id": 123,
+                "info_msg_id": 124,
+                "yes_voters": [{"id": 1, "name": "User"}],
+                "update_task": None,
+                "last_message_text": "",
+                "subs": [],
+            },
+        )
 
         mock_bot.stop_poll = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
