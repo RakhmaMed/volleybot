@@ -15,7 +15,6 @@ from aiogram.enums import ParseMode
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from pydantic import BaseModel, Field
 
 from .config import (
     CHAT_ID,
@@ -27,100 +26,27 @@ from .config import (
     WEBHOOK_SSL_PRIV,
     WEBHOOK_URL,
 )
-from .db import BOT_STATE_KEY, init_db, load_state, save_state
+from .db import init_db
 from .handlers import register_handlers
-from .poll import load_persisted_poll_state, persist_poll_state
 from .scheduler import setup_scheduler
+from .services import BotStateService, PollService
 from .utils import load_players
 
 logging.basicConfig(level=logging.INFO)
 
 
-class BotState(BaseModel):
-    """Типизированное состояние бота."""
-
-    bot_enabled: bool = Field(default=True, description="Флаг включения бота")
-    chat_id: int = Field(..., description="ID чата для отправки сообщений")
-
-    model_config = {"frozen": False}  # Разрешаем изменение полей
-
-
-# Инициализация бота и диспетчера
-bot: Bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp: Dispatcher = Dispatcher()
-
-# Глобальное состояние
-_state: BotState = BotState(
-    bot_enabled=True,
-    chat_id=CHAT_ID,
-)
-
-# Инициализация БД и восстановление состояния после рестарта
-init_db()
-
-
-def _restore_bot_state() -> None:
-    """Подтягивает сохранённые значения bot_enabled/chat_id из БД."""
-    stored_state = load_state(BOT_STATE_KEY, default={})
-    if isinstance(stored_state, dict):
-        _state.bot_enabled = bool(stored_state.get("bot_enabled", _state.bot_enabled))
-        try:
-            _state.chat_id = int(stored_state.get("chat_id", _state.chat_id))
-        except (TypeError, ValueError):
-            logging.warning(
-                "Сохранённый chat_id повреждён, оставляем значение из config.json"
-            )
-
-
-def _persist_bot_state() -> None:
-    """Фиксирует текущее состояние бота в БД."""
-    save_state(
-        BOT_STATE_KEY,
-        _state.model_dump(mode="json"),
-    )
-
-
-_restore_bot_state()
-_persist_bot_state()
-
-# Планировщик задач
-scheduler: AsyncIOScheduler = AsyncIOScheduler(timezone="UTC")
-
-
-# Функции доступа к состоянию
-def get_bot_enabled() -> bool:
-    """Возвращает состояние включения бота."""
-    return _state.bot_enabled
-
-
-def set_bot_enabled(value: bool) -> None:
-    """Устанавливает состояние включения бота."""
-    _state.bot_enabled = value
-    _persist_bot_state()
-
-
-def get_chat_id() -> int:
-    """Возвращает ID текущего чата."""
-    return _state.chat_id
-
-
-def set_chat_id(value: int) -> None:
-    """Устанавливает ID текущего чата."""
-    _state.chat_id = value
-    _persist_bot_state()
-
-
-# Регистрация обработчиков
-register_handlers(dp, bot, get_bot_enabled, set_bot_enabled)
-
-
-async def on_startup(bot: Bot) -> None:
+async def on_startup(
+    bot: Bot,
+    scheduler: AsyncIOScheduler,
+    bot_state_service: BotStateService,
+    poll_service: PollService,
+) -> None:
     """Выполняется при запуске бота."""
     # Загружаем список игроков один раз при старте
     load_players()
-    load_persisted_poll_state()
+    poll_service.load_persisted_state()
 
-    setup_scheduler(scheduler, bot, get_chat_id, set_chat_id, get_bot_enabled)
+    setup_scheduler(scheduler, bot, bot_state_service, poll_service)
     scheduler.start()
     logging.info("Планировщик запущен")
 
@@ -134,7 +60,12 @@ async def on_startup(bot: Bot) -> None:
         logging.info("Режим polling активен")
 
 
-async def on_shutdown(bot: Bot) -> None:
+async def on_shutdown(
+    bot: Bot,
+    scheduler: AsyncIOScheduler,
+    bot_state_service: BotStateService,
+    poll_service: PollService,
+) -> None:
     """Выполняется при остановке бота."""
     logging.info("Остановка бота...")
 
@@ -147,14 +78,46 @@ async def on_shutdown(bot: Bot) -> None:
         logging.info("Webhook удален")
 
     await bot.session.close()
-    persist_poll_state()
-    _persist_bot_state()
+    poll_service.persist_state()
+    bot_state_service.persist_state()
 
 
 async def run_polling() -> None:
     """Запуск в режиме polling."""
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
+    # Инициализация БД
+    init_db()
+
+    # Инициализация сервисов
+    bot_state_service = BotStateService(default_chat_id=CHAT_ID)
+    poll_service = PollService()
+
+    # Инициализация бота и диспетчера
+    bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher()
+
+    # Сохраняем сервисы в workflow_data для доступа из handlers
+    dp.workflow_data.update(
+        {
+            "bot_state_service": bot_state_service,
+            "poll_service": poll_service,
+        }
+    )
+
+    # Планировщик задач
+    scheduler = AsyncIOScheduler(timezone="UTC")
+
+    # Регистрация обработчиков
+    register_handlers(dp, bot)
+
+    # Регистрация startup/shutdown
+    async def startup_handler():
+        await on_startup(bot, scheduler, bot_state_service, poll_service)
+
+    async def shutdown_handler():
+        await on_shutdown(bot, scheduler, bot_state_service, poll_service)
+
+    dp.startup.register(startup_handler)
+    dp.shutdown.register(shutdown_handler)
 
     logging.info("Запуск бота в режиме polling")
     await dp.start_polling(bot)
@@ -163,6 +126,28 @@ async def run_polling() -> None:
 def run_webhook() -> None:
     """Запуск в режиме webhook."""
     logging.info("Запуск бота в режиме webhook")
+
+    # Инициализация БД
+    init_db()
+
+    # Инициализация сервисов
+    bot_state_service = BotStateService(default_chat_id=CHAT_ID)
+    poll_service = PollService()
+
+    # Инициализация бота и диспетчера
+    bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher()
+
+    # Сохраняем сервисы в workflow_data для доступа из handlers
+    dp.workflow_data.update(
+        {
+            "bot_state_service": bot_state_service,
+            "poll_service": poll_service,
+        }
+    )
+
+    # Планировщик задач
+    scheduler = AsyncIOScheduler(timezone="UTC")
 
     # Настройка SSL
     ssl_context: ssl.SSLContext | None = None
@@ -177,9 +162,18 @@ def run_webhook() -> None:
         logging.error(f"Ошибка при загрузке SSL сертификатов: {e}")
         exit(1)
 
+    # Регистрация обработчиков
+    register_handlers(dp, bot)
+
     # Регистрируем startup/shutdown
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
+    async def startup_handler():
+        await on_startup(bot, scheduler, bot_state_service, poll_service)
+
+    async def shutdown_handler():
+        await on_shutdown(bot, scheduler, bot_state_service, poll_service)
+
+    dp.startup.register(startup_handler)
+    dp.shutdown.register(shutdown_handler)
 
     # Создаём aiohttp приложение
     app: web.Application = web.Application()

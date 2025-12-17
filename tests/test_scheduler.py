@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from src.config import PollSchedule
 from src.scheduler import create_close_poll_job, create_poll_job, setup_scheduler
+from src.services import BotStateService, PollService
 
 
 @pytest.mark.asyncio
@@ -17,66 +18,49 @@ class TestCreatePollJob:
     async def test_create_poll_job_calls_send_poll(self):
         """Тест создания задачи отправки опроса."""
         bot = MagicMock()
-        chat_id = [-1001234567890]  # Используем список для изменения
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
 
-        def get_chat_id():
-            return chat_id[0]
+        # Мокаем метод send_poll
+        poll_service.send_poll = AsyncMock(return_value=-1001234567890)
 
-        def set_chat_id(value: int):
-            chat_id[0] = value
+        job = create_poll_job(
+            bot,
+            "Test message",
+            "test_poll",
+            bot_state_service,
+            poll_service,
+        )
 
-        def get_bot_enabled():
-            return True
+        await job()
 
-        with patch("src.scheduler.send_poll", new_callable=AsyncMock) as mock_send_poll:
-            mock_send_poll.return_value = -1001234567890
-
-            job = create_poll_job(
-                bot,
-                "Test message",
-                "test_poll",
-                get_chat_id,
-                set_chat_id,
-                get_bot_enabled,
-            )
-
-            await job()
-
-            mock_send_poll.assert_called_once()
-            assert mock_send_poll.call_args[0][1] == -1001234567890
-            assert mock_send_poll.call_args[0][2] == "Test message"
-            assert mock_send_poll.call_args[0][3] == "test_poll"
+        poll_service.send_poll.assert_called_once()
+        assert poll_service.send_poll.call_args[0][1] == -1001234567890
+        assert poll_service.send_poll.call_args[0][2] == "Test message"
+        assert poll_service.send_poll.call_args[0][3] == "test_poll"
 
     async def test_create_poll_job_updates_chat_id_on_migration(self):
         """Тест обновления chat_id при миграции группы."""
         bot = MagicMock()
-        chat_id = [-1001234567890]
         new_chat_id = -1009876543210
 
-        def get_chat_id():
-            return chat_id[0]
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
 
-        def set_chat_id(value: int):
-            chat_id[0] = value
+        # Мокаем метод send_poll для возврата нового chat_id
+        poll_service.send_poll = AsyncMock(return_value=new_chat_id)
 
-        def get_bot_enabled():
-            return True
+        job = create_poll_job(
+            bot,
+            "Test message",
+            "test_poll",
+            bot_state_service,
+            poll_service,
+        )
 
-        with patch("src.scheduler.send_poll", new_callable=AsyncMock) as mock_send_poll:
-            mock_send_poll.return_value = new_chat_id
+        await job()
 
-            job = create_poll_job(
-                bot,
-                "Test message",
-                "test_poll",
-                get_chat_id,
-                set_chat_id,
-                get_bot_enabled,
-            )
-
-            await job()
-
-            assert chat_id[0] == new_chat_id
+        assert bot_state_service.get_chat_id() == new_chat_id
 
 
 @pytest.mark.asyncio
@@ -86,16 +70,17 @@ class TestCreateClosePollJob:
     async def test_create_close_poll_job_calls_close_poll(self):
         """Тест создания задачи закрытия опроса."""
         bot = MagicMock()
+        poll_service = PollService()
 
-        with patch(
-            "src.scheduler.close_poll", new_callable=AsyncMock
-        ) as mock_close_poll:
-            job = create_close_poll_job(bot, "test_poll")
+        # Мокаем метод close_poll
+        poll_service.close_poll = AsyncMock()
 
-            await job()
+        job = create_close_poll_job(bot, "test_poll", poll_service)
 
-            mock_close_poll.assert_called_once()
-            assert mock_close_poll.call_args[0][1] == "test_poll"
+        await job()
+
+        poll_service.close_poll.assert_called_once()
+        assert poll_service.close_poll.call_args[0][1] == "test_poll"
 
 
 class TestSetupScheduler:
@@ -105,15 +90,8 @@ class TestSetupScheduler:
         """Тест настройки планировщика с валидной конфигурацией."""
         scheduler = AsyncIOScheduler(timezone="UTC")
         bot = MagicMock()
-
-        def get_chat_id():
-            return -1001234567890
-
-        def set_chat_id(value: int):
-            pass
-
-        def get_bot_enabled():
-            return True
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
 
         # Мокаем конфигурацию
         test_polls = [
@@ -130,7 +108,7 @@ class TestSetupScheduler:
         ]
 
         with patch("src.scheduler.POLLS_SCHEDULE", test_polls):
-            setup_scheduler(scheduler, bot, get_chat_id, set_chat_id, get_bot_enabled)
+            setup_scheduler(scheduler, bot, bot_state_service, poll_service)
 
             # Проверяем, что задачи добавлены
             jobs = scheduler.get_jobs()
@@ -140,18 +118,11 @@ class TestSetupScheduler:
         """Тест настройки планировщика с пустой конфигурацией."""
         scheduler = AsyncIOScheduler(timezone="UTC")
         bot = MagicMock()
-
-        def get_chat_id():
-            return -1001234567890
-
-        def set_chat_id(value: int):
-            pass
-
-        def get_bot_enabled():
-            return True
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
 
         with patch("src.scheduler.POLLS_SCHEDULE", []):
-            setup_scheduler(scheduler, bot, get_chat_id, set_chat_id, get_bot_enabled)
+            setup_scheduler(scheduler, bot, bot_state_service, poll_service)
 
             jobs = scheduler.get_jobs()
             assert len(jobs) == 0

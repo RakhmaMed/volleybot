@@ -1,4 +1,4 @@
-"""Тесты для модуля poll."""
+"""Тесты для модуля poll и PollService."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,18 +8,8 @@ from aiogram.methods import SendPoll
 
 from src.config import REQUIRED_PLAYERS
 from src.db import POLL_STATE_KEY, init_db, load_state
-from src.poll import (
-    PollData,
-    VoterInfo,
-    close_poll,
-    load_persisted_poll_state,
-    persist_poll_state,
-    poll_data,
-    send_poll,
-    sort_voters_by_update_id,
-    update_players_list,
-    update_tasks,
-)
+from src.poll import PollData, VoterInfo, sort_voters_by_update_id
+from src.services import PollService
 
 
 def test_sort_voters_by_update_id_orders_updates():
@@ -35,13 +25,91 @@ def test_sort_voters_by_update_id_orders_updates():
     assert [v.id for v in sorted_voters] == [3, 1, 2]
 
 
+class TestPollService:
+    """Тесты для PollService."""
+
+    def test_poll_service_initialization(self):
+        """Тест инициализации сервиса."""
+        service = PollService()
+        assert not service.has_active_polls()
+        assert service.get_all_polls() == {}
+
+    def test_poll_service_has_poll(self):
+        """Тест проверки существования опроса."""
+        service = PollService()
+        service._poll_data["test_id"] = PollData(
+            chat_id=123, poll_msg_id=456, yes_voters=[], subs=[]
+        )
+        assert service.has_poll("test_id")
+        assert not service.has_poll("nonexistent")
+
+    def test_poll_service_get_poll_data(self):
+        """Тест получения данных опроса."""
+        service = PollService()
+        poll_data = PollData(chat_id=123, poll_msg_id=456, yes_voters=[], subs=[])
+        service._poll_data["test_id"] = poll_data
+
+        assert service.get_poll_data("test_id") == poll_data
+        assert service.get_poll_data("nonexistent") is None
+
+    def test_poll_service_delete_poll(self):
+        """Тест удаления опроса."""
+        service = PollService()
+        service._poll_data["test_id"] = PollData(
+            chat_id=123, poll_msg_id=456, yes_voters=[], subs=[]
+        )
+        service._update_tasks["test_id"] = None
+
+        service.delete_poll("test_id")
+
+        assert not service.has_poll("test_id")
+        assert "test_id" not in service._update_tasks
+
+    def test_poll_service_clear_all_polls(self):
+        """Тест очистки всех опросов."""
+        service = PollService()
+        service._poll_data["poll1"] = PollData(
+            chat_id=123, poll_msg_id=456, yes_voters=[], subs=[]
+        )
+        service._poll_data["poll2"] = PollData(
+            chat_id=789, poll_msg_id=101, yes_voters=[], subs=[]
+        )
+
+        service.clear_all_polls()
+
+        assert not service.has_active_polls()
+        assert service._update_tasks == {}
+
+    def test_poll_service_update_voters(self):
+        """Тест обновления списка голосующих."""
+        service = PollService()
+        service._poll_data["test_id"] = PollData(
+            chat_id=123,
+            poll_msg_id=456,
+            yes_voters=[VoterInfo(id=1, name="User1", update_id=1)],
+            subs=[],
+        )
+
+        # Добавляем нового голосующего
+        result = service.update_voters("test_id", 2, "User2", 2, True)
+        assert len(result) == 2
+        assert result[0].id == 1
+        assert result[1].id == 2
+
+        # Убираем голосующего
+        result = service.update_voters("test_id", 2, "User2", 3, False)
+        assert len(result) == 1
+        assert result[0].id == 1
+
+
 @pytest.mark.asyncio
 class TestSendPoll:
     """Тесты для функции send_poll."""
 
     async def test_send_poll_when_bot_disabled(self, mock_bot):
         """Тест отправки опроса при выключенном боте."""
-        result = await send_poll(
+        service = PollService()
+        result = await service.send_poll(
             mock_bot,
             chat_id=-1001234567890,
             question="Test question",
@@ -54,6 +122,8 @@ class TestSendPoll:
 
     async def test_send_poll_success(self, mock_bot):
         """Тест успешной отправки опроса."""
+        service = PollService()
+
         mock_poll_message = MagicMock()
         mock_poll_message.poll.id = "test_poll_id"
         mock_poll_message.message_id = 123
@@ -61,10 +131,7 @@ class TestSendPoll:
         mock_bot.send_message = AsyncMock(return_value=MagicMock(message_id=124))
         mock_bot.pin_chat_message = AsyncMock()
 
-        poll_data.clear()
-        update_tasks.clear()
-
-        result = await send_poll(
+        result = await service.send_poll(
             mock_bot,
             chat_id=-1001234567890,
             question="Test question",
@@ -76,11 +143,14 @@ class TestSendPoll:
         mock_bot.send_poll.assert_called_once()
         mock_bot.send_message.assert_called_once()
         mock_bot.pin_chat_message.assert_called_once()
-        assert "test_poll_id" in poll_data
-        assert poll_data["test_poll_id"].yes_voters == []
+        assert service.has_poll("test_poll_id")
+        poll_data = service.get_poll_data("test_poll_id")
+        assert poll_data.yes_voters == []
 
     async def test_send_poll_handles_migration(self, mock_bot):
         """Тест обработки миграции группы в супергруппу."""
+        service = PollService()
+
         new_chat_id = -1009876543210
         # Создаём мок исключения с нужным атрибутом
         migration_error = TelegramMigrateToChat(
@@ -96,9 +166,7 @@ class TestSendPoll:
         mock_bot.send_poll = AsyncMock(side_effect=migration_error)
         mock_bot.send_message = AsyncMock()
 
-        poll_data.clear()
-
-        result = await send_poll(
+        result = await service.send_poll(
             mock_bot,
             chat_id=-1001234567890,
             question="Test question",
@@ -111,13 +179,13 @@ class TestSendPoll:
 
     async def test_send_poll_handles_general_error(self, mock_bot):
         """Тест обработки общей ошибки при отправке опроса."""
+        service = PollService()
+
         mock_bot.send_poll = AsyncMock(side_effect=Exception("Network error"))
         mock_bot.send_message = AsyncMock()
 
-        poll_data.clear()
-
-        with patch("src.poll.save_error_dump") as mock_save:
-            result = await send_poll(
+        with patch("src.services.poll_service.save_error_dump") as mock_save:
+            result = await service.send_poll(
                 mock_bot,
                 chat_id=-1001234567890,
                 question="Test question",
@@ -136,8 +204,9 @@ class TestUpdatePlayersList:
 
     async def test_update_players_list_empty(self, mock_bot):
         """Тест обновления списка при отсутствии голосов."""
+        service = PollService()
         poll_id = "test_poll_id"
-        poll_data[poll_id] = PollData(
+        service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=124,
@@ -145,12 +214,12 @@ class TestUpdatePlayersList:
             last_message_text="",
             subs=[],
         )
-        update_tasks[poll_id] = None
+        service._update_tasks[poll_id] = None
 
         mock_bot.edit_message_text = AsyncMock()
 
-        with patch("src.poll.asyncio.sleep", new_callable=AsyncMock):
-            await update_players_list(mock_bot, poll_id)
+        with patch("src.services.poll_service.asyncio.sleep", new_callable=AsyncMock):
+            await service._update_players_list(mock_bot, poll_id)
 
         mock_bot.edit_message_text.assert_called_once()
         call_args = mock_bot.edit_message_text.call_args
@@ -158,12 +227,13 @@ class TestUpdatePlayersList:
 
     async def test_update_players_list_less_than_required(self, mock_bot):
         """Тест обновления списка при недостаточном количестве игроков."""
+        service = PollService()
         poll_id = "test_poll_id"
         voters: list[VoterInfo] = [
             VoterInfo(id=1, name="@user1"),
             VoterInfo(id=2, name="@user2"),
         ]
-        poll_data[poll_id] = PollData(
+        service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=124,
@@ -171,12 +241,12 @@ class TestUpdatePlayersList:
             last_message_text="",
             subs=[],
         )
-        update_tasks[poll_id] = None
+        service._update_tasks[poll_id] = None
 
         mock_bot.edit_message_text = AsyncMock()
 
-        with patch("src.poll.asyncio.sleep", new_callable=AsyncMock):
-            await update_players_list(mock_bot, poll_id)
+        with patch("src.services.poll_service.asyncio.sleep", new_callable=AsyncMock):
+            await service._update_players_list(mock_bot, poll_id)
 
         mock_bot.edit_message_text.assert_called_once()
         call_args = mock_bot.edit_message_text.call_args
@@ -186,11 +256,12 @@ class TestUpdatePlayersList:
 
     async def test_update_players_list_with_reserves(self, mock_bot):
         """Тест обновления списка с запасными игроками."""
+        service = PollService()
         poll_id = "test_poll_id"
         voters: list[VoterInfo] = [
             VoterInfo(id=i, name=f"@user{i}") for i in range(REQUIRED_PLAYERS + 5)
         ]
-        poll_data[poll_id] = PollData(
+        service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=124,
@@ -198,12 +269,12 @@ class TestUpdatePlayersList:
             last_message_text="",
             subs=[],
         )
-        update_tasks[poll_id] = None
+        service._update_tasks[poll_id] = None
 
         mock_bot.edit_message_text = AsyncMock()
 
-        with patch("src.poll.asyncio.sleep", new_callable=AsyncMock):
-            await update_players_list(mock_bot, poll_id)
+        with patch("src.services.poll_service.asyncio.sleep", new_callable=AsyncMock):
+            await service._update_players_list(mock_bot, poll_id)
 
         mock_bot.edit_message_text.assert_called_once()
         call_args = mock_bot.edit_message_text.call_args
@@ -214,8 +285,9 @@ class TestUpdatePlayersList:
 
     async def test_update_players_list_skips_if_no_info_msg(self, mock_bot):
         """Тест пропуска обновления при отсутствии info_msg_id."""
+        service = PollService()
         poll_id = "test_poll_id"
-        poll_data[poll_id] = PollData(
+        service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=None,  # Нет info_msg_id
@@ -223,21 +295,22 @@ class TestUpdatePlayersList:
             last_message_text="",
             subs=[],
         )
-        update_tasks[poll_id] = None
+        service._update_tasks[poll_id] = None
 
         mock_bot.edit_message_text = AsyncMock()
 
-        with patch("src.poll.asyncio.sleep", new_callable=AsyncMock):
-            await update_players_list(mock_bot, poll_id)
+        with patch("src.services.poll_service.asyncio.sleep", new_callable=AsyncMock):
+            await service._update_players_list(mock_bot, poll_id)
 
         # Без info_msg_id обновление должно быть пропущено
         mock_bot.edit_message_text.assert_not_called()
 
     async def test_update_players_list_skips_if_text_unchanged(self, mock_bot):
         """Тест пропуска обновления при неизменном тексте."""
+        service = PollService()
         poll_id = "test_poll_id"
         text = "⏳ Идёт сбор голосов...\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
-        poll_data[poll_id] = PollData(
+        service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=124,
@@ -245,15 +318,15 @@ class TestUpdatePlayersList:
             last_message_text=text,
             subs=[],
         )
-        update_tasks[poll_id] = None
+        service._update_tasks[poll_id] = None
 
         mock_bot.edit_message_text = AsyncMock()
 
-        with patch("src.poll.asyncio.sleep", new_callable=AsyncMock):
-            await update_players_list(mock_bot, poll_id)
+        with patch("src.services.poll_service.asyncio.sleep", new_callable=AsyncMock):
+            await service._update_players_list(mock_bot, poll_id)
 
         mock_bot.edit_message_text.assert_not_called()
-        assert update_tasks[poll_id] is None
+        assert service._update_tasks[poll_id] is None
 
 
 @pytest.mark.asyncio
@@ -262,17 +335,18 @@ class TestClosePoll:
 
     async def test_close_poll_no_active_polls(self, mock_bot):
         """Тест закрытия опроса при отсутствии активных опросов."""
-        poll_data.clear()
+        service = PollService()
 
-        await close_poll(mock_bot, "test_poll")
+        await service.close_poll(mock_bot, "test_poll")
 
         mock_bot.stop_poll.assert_not_called()
 
     async def test_close_poll_success(self, mock_bot):
         """Тест успешного закрытия опроса."""
+        service = PollService()
         poll_id = "test_poll_id"
         voters: list[VoterInfo] = [VoterInfo(id=1, name="@user1")]
-        poll_data[poll_id] = PollData(
+        service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=124,
@@ -280,24 +354,25 @@ class TestClosePoll:
             last_message_text="",
             subs=[],
         )
-        update_tasks[poll_id] = None
+        service._update_tasks[poll_id] = None
 
         mock_bot.stop_poll = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
 
-        await close_poll(mock_bot, "test_poll")
+        await service.close_poll(mock_bot, "test_poll")
 
         mock_bot.stop_poll.assert_called_once()
         mock_bot.edit_message_text.assert_called_once()
-        assert poll_id not in poll_data
+        assert not service.has_poll(poll_id)
 
     async def test_close_poll_with_full_team(self, mock_bot):
         """Тест закрытия опроса с полным составом."""
+        service = PollService()
         poll_id = "test_poll_id"
         voters: list[VoterInfo] = [
             VoterInfo(id=i, name=f"@user{i}") for i in range(REQUIRED_PLAYERS + 5)
         ]
-        poll_data[poll_id] = PollData(
+        service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=124,
@@ -305,12 +380,12 @@ class TestClosePoll:
             last_message_text="",
             subs=[],
         )
-        update_tasks[poll_id] = None
+        service._update_tasks[poll_id] = None
 
         mock_bot.stop_poll = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
 
-        await close_poll(mock_bot, "test_poll")
+        await service.close_poll(mock_bot, "test_poll")
 
         call_args = mock_bot.edit_message_text.call_args
         assert "✅" in call_args.kwargs["text"]
@@ -322,10 +397,9 @@ class TestClosePoll:
 def test_persist_poll_state_roundtrip():
     """Состояние опроса должно сохраняться и восстанавливаться из БД."""
     init_db()
-    poll_data.clear()
-    update_tasks.clear()
+    service = PollService()
 
-    poll_data["poll123"] = PollData(
+    service._poll_data["poll123"] = PollData(
         chat_id=1,
         poll_msg_id=2,
         info_msg_id=3,
@@ -333,21 +407,20 @@ def test_persist_poll_state_roundtrip():
         last_message_text="cached",
         subs=[7],
     )
-    update_tasks["poll123"] = None
+    service._update_tasks["poll123"] = None
 
-    persist_poll_state()
+    service.persist_state()
 
     stored = load_state(POLL_STATE_KEY, default={})
     assert "poll123" in stored
     # update_task не должен сериализоваться
     assert "update_task" not in stored["poll123"]
 
-    poll_data.clear()
-    update_tasks.clear()
-    load_persisted_poll_state()
+    service2 = PollService()
+    service2.load_persisted_state()
 
-    assert "poll123" in poll_data
-    restored = poll_data["poll123"]
+    assert service2.has_poll("poll123")
+    restored = service2.get_poll_data("poll123")
     assert restored.chat_id == 1
     assert restored.poll_msg_id == 2
     assert restored.info_msg_id == 3
@@ -363,12 +436,13 @@ class TestHtmlEscapingInPollTexts:
 
     async def test_update_players_list_escapes_html(self, mock_bot):
         """Имена игроков с HTML-символами должны экранироваться."""
+        service = PollService()
         poll_id = "test_html_poll_id"
         voters: list[VoterInfo] = [
             VoterInfo(id=1, name="<User&1>"),
             VoterInfo(id=2, name="NormalUser"),
         ]
-        poll_data[poll_id] = PollData(
+        service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=124,
@@ -376,12 +450,12 @@ class TestHtmlEscapingInPollTexts:
             last_message_text="",
             subs=[],
         )
-        update_tasks[poll_id] = None
+        service._update_tasks[poll_id] = None
 
         mock_bot.edit_message_text = AsyncMock()
 
-        with patch("src.poll.asyncio.sleep", new_callable=AsyncMock):
-            await update_players_list(mock_bot, poll_id)
+        with patch("src.services.poll_service.asyncio.sleep", new_callable=AsyncMock):
+            await service._update_players_list(mock_bot, poll_id)
 
         mock_bot.edit_message_text.assert_called_once()
         text = mock_bot.edit_message_text.call_args.kwargs["text"]
@@ -390,8 +464,9 @@ class TestHtmlEscapingInPollTexts:
 
     async def test_update_players_list_includes_legend(self, mock_bot):
         """Текст списка игроков должен содержать легенду эмодзи."""
+        service = PollService()
         poll_id = "test_legend_poll_id"
-        poll_data[poll_id] = PollData(
+        service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=124,
@@ -399,12 +474,12 @@ class TestHtmlEscapingInPollTexts:
             last_message_text="",
             subs=[],
         )
-        update_tasks[poll_id] = None
+        service._update_tasks[poll_id] = None
 
         mock_bot.edit_message_text = AsyncMock()
 
-        with patch("src.poll.asyncio.sleep", new_callable=AsyncMock):
-            await update_players_list(mock_bot, poll_id)
+        with patch("src.services.poll_service.asyncio.sleep", new_callable=AsyncMock):
+            await service._update_players_list(mock_bot, poll_id)
 
         mock_bot.edit_message_text.assert_called_once()
         text = mock_bot.edit_message_text.call_args.kwargs["text"]
@@ -413,8 +488,9 @@ class TestHtmlEscapingInPollTexts:
 
     async def test_close_poll_includes_legend(self, mock_bot):
         """Финальный текст опроса должен содержать легенду эмодзи."""
+        service = PollService()
         poll_id = "test_close_poll_legend_id"
-        poll_data[poll_id] = PollData(
+        service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=124,
@@ -422,12 +498,12 @@ class TestHtmlEscapingInPollTexts:
             last_message_text="",
             subs=[],
         )
-        update_tasks[poll_id] = None
+        service._update_tasks[poll_id] = None
 
         mock_bot.stop_poll = AsyncMock()
         mock_bot.edit_message_text = AsyncMock()
 
-        await close_poll(mock_bot, "test_poll")
+        await service.close_poll(mock_bot, "test_poll")
 
         mock_bot.edit_message_text.assert_called_once()
         text = mock_bot.edit_message_text.call_args.kwargs["text"]

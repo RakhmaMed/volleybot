@@ -8,17 +8,16 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from .config import POLLS_SCHEDULE, PollSchedule
-from .poll import close_poll, send_poll
+from .config import POLLS_SCHEDULE
+from .services import BotStateService, PollService
 
 
 def create_poll_job(
     bot: Bot,
     message: str,
     poll_name: str,
-    get_chat_id: Callable[[], int],
-    set_chat_id: Callable[[int], None],
-    get_bot_enabled: Callable[[], bool],
+    bot_state_service: BotStateService,
+    poll_service: PollService,
     subs: list[int] | None = None,
 ) -> Callable[[], Awaitable[None]]:
     """
@@ -28,39 +27,42 @@ def create_poll_job(
         bot: Экземпляр бота
         message: Текст опроса
         poll_name: Название опроса
-        get_chat_id: Функция получения текущего chat_id
-        set_chat_id: Функция установки chat_id
-        get_bot_enabled: Функция получения состояния бота
+        bot_state_service: Сервис состояния бота
+        poll_service: Сервис опросов
+        subs: Список ID подписчиков
 
     Returns:
         Асинхронная функция-задача для планировщика
     """
 
     async def job() -> None:
-        chat_id: int = get_chat_id()
-        new_chat_id: int = await send_poll(
-            bot, chat_id, message, poll_name, get_bot_enabled(), subs
+        chat_id: int = bot_state_service.get_chat_id()
+        new_chat_id: int = await poll_service.send_poll(
+            bot, chat_id, message, poll_name, bot_state_service.is_enabled(), subs
         )
         if new_chat_id != chat_id:
-            set_chat_id(new_chat_id)
+            bot_state_service.set_chat_id(new_chat_id)
 
     return job
 
 
-def create_close_poll_job(bot: Bot, poll_name: str) -> Callable[[], Awaitable[None]]:
+def create_close_poll_job(
+    bot: Bot, poll_name: str, poll_service: PollService
+) -> Callable[[], Awaitable[None]]:
     """
     Создаёт асинхронную задачу для закрытия опроса.
 
     Args:
         bot: Экземпляр бота
         poll_name: Название опроса
+        poll_service: Сервис опросов
 
     Returns:
         Асинхронная функция-задача для планировщика
     """
 
     async def job() -> None:
-        await close_poll(bot, poll_name)
+        await poll_service.close_poll(bot, poll_name)
 
     return job
 
@@ -68,9 +70,8 @@ def create_close_poll_job(bot: Bot, poll_name: str) -> Callable[[], Awaitable[No
 def setup_scheduler(
     scheduler: AsyncIOScheduler,
     bot: Bot,
-    get_chat_id: Callable[[], int],
-    set_chat_id: Callable[[int], None],
-    get_bot_enabled: Callable[[], bool],
+    bot_state_service: BotStateService,
+    poll_service: PollService,
 ) -> None:
     """
     Настройка планировщика задач из конфигурации.
@@ -78,9 +79,8 @@ def setup_scheduler(
     Args:
         scheduler: Экземпляр планировщика
         bot: Экземпляр бота
-        get_chat_id: Функция получения текущего chat_id
-        set_chat_id: Функция установки chat_id
-        get_bot_enabled: Функция получения состояния бота
+        bot_state_service: Сервис состояния бота
+        poll_service: Сервис опросов
     """
     if not POLLS_SCHEDULE:
         logging.warning("Расписание опросов не найдено в config.json")
@@ -118,7 +118,7 @@ def setup_scheduler(
         subs: list[int] = poll_config.subs
 
         poll_job: Callable[[], Awaitable[None]] = create_poll_job(
-            bot, message, poll_name, get_chat_id, set_chat_id, get_bot_enabled, subs
+            bot, message, poll_name, bot_state_service, poll_service, subs
         )
 
         scheduler.add_job(
@@ -150,7 +150,9 @@ def setup_scheduler(
         if close_day != "*":
             close_trigger_kwargs["day_of_week"] = close_day
 
-        close_job: Callable[[], Awaitable[None]] = create_close_poll_job(bot, poll_name)
+        close_job: Callable[[], Awaitable[None]] = create_close_poll_job(
+            bot, poll_name, poll_service
+        )
 
         scheduler.add_job(
             close_job,

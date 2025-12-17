@@ -1,38 +1,22 @@
 """Обработчики команд бота."""
 
-import asyncio
 import logging
-from collections.abc import Callable
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.filters import Command
 from aiogram.types import Message, PollAnswer, Update
 
-from .poll import (
-    VoterInfo,
-    persist_poll_state,
-    poll_data,
-    sort_voters_by_update_id,
-    update_players_list,
-    update_tasks,
-)
+from .services import BotStateService, PollService
 from .utils import get_player_name, is_admin
 
 
-def register_handlers(
-    dp: Dispatcher,
-    bot: Bot,
-    get_bot_enabled: Callable[[], bool],
-    set_bot_enabled: Callable[[bool], None],
-) -> None:
+def register_handlers(dp: Dispatcher, bot: Bot) -> None:
     """
     Регистрирует все обработчики команд.
 
     Args:
         dp: Диспетчер бота
         bot: Экземпляр бота
-        get_bot_enabled: Функция получения состояния бота
-        set_bot_enabled: Функция установки состояния бота
     """
 
     # Создаём роутер для обработчиков
@@ -53,11 +37,14 @@ def register_handlers(
             )
             return
 
-        if get_bot_enabled():
+        # Получаем сервис из workflow_data
+        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
+
+        if bot_state_service.is_enabled():
             await message.reply("✅ Бот уже включен и работает.")
             logging.info(f"Бот уже включен. Команда от администратора @{user.username}")
         else:
-            set_bot_enabled(True)
+            bot_state_service.set_enabled(True)
             await message.reply(
                 "✅ Бот включен. Опросы будут создаваться по расписанию."
             )
@@ -80,13 +67,16 @@ def register_handlers(
             )
             return
 
-        if not get_bot_enabled():
+        # Получаем сервис из workflow_data
+        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
+
+        if not bot_state_service.is_enabled():
             await message.reply("⚠️ Бот уже выключен.")
             logging.info(
                 f"Бот уже выключен. Команда от администратора @{user.username}"
             )
         else:
-            set_bot_enabled(False)
+            bot_state_service.set_enabled(False)
             await message.reply(
                 "⏸️ Бот выключен. Опросы не будут создаваться до включения."
             )
@@ -140,35 +130,38 @@ def register_handlers(
             f"(ID: {user.id}), голос: {selected}, update_id: {update_id}"
         )
 
-        if poll_id not in poll_data:
+        # Получаем сервис из workflow_data
+        poll_service: PollService = dp.workflow_data["poll_service"]
+
+        if not poll_service.has_poll(poll_id):
             return
 
-        data = poll_data[poll_id]
-        yes_voters: list[VoterInfo] = data.yes_voters
+        data = poll_service.get_poll_data(poll_id)
+        if data is None:
+            return
 
-        # Удаляем пользователя, если был
-        yes_voters = [v for v in yes_voters if v.id != user.id]
+        voted_yes = 0 in selected  # Да
+        subs: list[int] = data.subs
+        name: str = get_player_name(user, subs)
 
-        if 0 in selected:  # Да
-            subs: list[int] = data.subs
-            name: str = get_player_name(user, subs)
-            yes_voters.append(VoterInfo(id=user.id, name=name, update_id=update_id))
-
-        sorted_yes_voters = sort_voters_by_update_id(yes_voters)
-        data.yes_voters = sorted_yes_voters
+        # Обновляем список голосующих
+        sorted_yes_voters = poll_service.update_voters(
+            poll_id=poll_id,
+            user_id=user.id,
+            user_name=name,
+            update_id=update_id,
+            voted_yes=voted_yes,
+        )
         logging.info(f"Обновленный список голосующих: {sorted_yes_voters}")
 
         # Отменяем предыдущую задачу обновления
-        if poll_id in update_tasks and update_tasks[poll_id] is not None:
-            update_tasks[poll_id].cancel()
-            logging.debug("Предыдущая задача обновления отменена")
+        poll_service.cancel_update_task(poll_id)
 
         # Создаём новую задачу обновления с задержкой
-        update_tasks[poll_id] = asyncio.create_task(update_players_list(bot, poll_id))
-        logging.debug("Создана новая задача отложенного обновления (10 сек)")
+        poll_service.create_update_task(poll_id, bot)
 
         # Сохраняем текущее состояние опросов для восстановления после перезапуска
-        persist_poll_state()
+        poll_service.persist_state()
 
     @router.message()
     async def log_any_message(message: Message) -> None:
