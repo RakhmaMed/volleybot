@@ -47,25 +47,24 @@ cd volleybot
 
 ### 2. Создайте `config.json`
 
+Скопируйте пример конфигурации и отредактируйте под свои нужды:
+
+```bash
+cp config.example.json config.json
+```
+
+Минимальная конфигурация для старта:
+
 ```json
 {
   "telegram_token": "YOUR_BOT_TOKEN",
   "chat_id": "YOUR_CHAT_ID",
   "admin_username": "YOUR_USERNAME",
-  "polls": [
-    {
-      "name": "опрос для среды",
-      "message": "Волейбол завтра (среда) в 18:00",
-      "open_day": "tue",
-      "open_hour_utc": 15,
-      "open_minute_utc": 0,
-      "close_day": "wed",
-      "close_hour_utc": 15,
-      "close_minute_utc": 0
-    }
-  ]
+  "polls": []
 }
 ```
+
+📚 **Подробная документация:** См. [docs/CONFIGURATION.md](docs/CONFIGURATION.md) для описания всех параметров конфигурации.
 
 ### 3. Установите зависимости
 
@@ -111,59 +110,25 @@ python -m src.bot
 
 ### Конфигурационный файл `config.json`
 
-**Минимальная конфигурация (режим polling):**
+Используйте `config.example.json` как шаблон:
 
-```json
-{
-  "telegram_token": "YOUR_BOT_TOKEN",
-  "chat_id": "YOUR_CHAT_ID",
-  "admin_username": "YOUR_USERNAME",
-  "polls": []
-}
+```bash
+cp config.example.json config.json
 ```
 
-**Полная конфигурация (с webhook):**
-
-```json
-{
-  "telegram_token": "YOUR_BOT_TOKEN",
-  "chat_id": "YOUR_CHAT_ID",
-  "admin_username": "YOUR_USERNAME",
-  "webhook_host": "https://yourdomain.com",
-  "webhook_path": "/webhook",
-  "webhook_port": 8443,
-  "ssl_cert_path": "/app/certs/fullchain.pem",
-  "ssl_key_path": "/app/certs/privkey.pem",
-  "polls": [
-    {
-      "name": "название опроса",
-      "message": "текст сообщения с опросом",
-      "open_day": "mon",
-      "open_hour_utc": 10,
-      "open_minute_utc": 0,
-      "close_day": "mon",
-      "close_hour_utc": 18,
-      "close_minute_utc": 0
-    }
-  ]
-}
-```
-
-**Параметры:**
+**Основные параметры:**
 
 - `telegram_token` — токен бота от @BotFather
 - `chat_id` — ID чата/группы (для групп начинается с минуса)
 - `admin_username` — username администратора (без @)
-- `webhook_host` — URL вашего домена (если используете webhook)
-- `webhook_path` — путь для webhook (например, `/webhook`)
-- `webhook_port` — порт для webhook (обычно 8443)
-- `ssl_cert_path` — путь к SSL сертификату
-- `ssl_key_path` — путь к приватному ключу SSL
+- `required_players` — количество игроков (по умолчанию: 18)
+- `poll_options` — варианты ответа (по умолчанию: ["Да", "Нет"])
+- `scheduler_timezone` — таймзона планировщика (по умолчанию: "UTC")
+- `log_level` — уровень логирования (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- `webhook_host` — URL домена для webhook (оставьте пустым для polling режима)
 - `polls` — массив опросов с расписанием
 
-**Дни недели:** `mon`, `tue`, `wed`, `thu`, `fri`, `sat`, `sun`
-
-**Время:** указывается в UTC (не забудьте скорректировать для вашего часового пояса)
+📚 **Подробная документация по всем параметрам:** [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 
 ## 🏃 Запуск
 

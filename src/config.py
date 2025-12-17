@@ -9,8 +9,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-logging.basicConfig(level=logging.INFO)
-
 
 class PollSchedule(BaseModel):
     """Модель конфигурации одного опроса."""
@@ -83,6 +81,34 @@ class BotConfig(BaseModel):
     required_players: Annotated[int, Field(ge=1)] = Field(
         default=18, description="Необходимое количество игроков"
     )
+    poll_options: list[str] = Field(
+        default_factory=lambda: ["Да", "Нет"],
+        min_length=2,
+        description="Опции опроса",
+    )
+
+    # Настройки планировщика
+    scheduler_timezone: str = Field(
+        default="UTC", description="Таймзона для планировщика задач"
+    )
+
+    # Настройки логирования
+    log_level: str = Field(
+        default="INFO",
+        description="Уровень логирования (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        """Валидация уровня логирования."""
+        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        v_upper = v.upper()
+        if v_upper not in valid_levels:
+            raise ValueError(
+                f"log_level должен быть одним из {valid_levels}, получено: {v}"
+            )
+        return v_upper
 
     @field_validator("admin_username")
     @classmethod
@@ -119,10 +145,15 @@ def get_config() -> BotConfig:
         config_path = Path(__file__).parent.parent / "config.json"
         try:
             _config = load_config_from_file(config_path)
+            # Настраиваем логирование на основе конфигурации
+            log_level = getattr(logging, _config.log_level, logging.INFO)
+            logging.basicConfig(level=log_level, force=True)
             logging.info("Конфигурация успешно загружена и валидирована")
             if _config.polls:
                 logging.info(f"Загружено {len(_config.polls)} опросов в расписании")
         except Exception as e:
+            # Используем дефолтный уровень для ошибки
+            logging.basicConfig(level=logging.INFO, force=True)
             logging.error(f"Ошибка загрузки конфигурации: {e}")
             raise
     return _config
@@ -139,6 +170,9 @@ if config_file.exists():
     ADMIN_USERNAME: str = config.admin_username
     POLLS_SCHEDULE: list[PollSchedule] = config.polls
     REQUIRED_PLAYERS: int = config.required_players
+    POLL_OPTIONS: tuple[str, ...] = tuple(config.poll_options)
+    SCHEDULER_TIMEZONE: str = config.scheduler_timezone
+    LOG_LEVEL: str = config.log_level
 
     # Webhook настройки
     WEBHOOK_HOST: str = config.webhook_host
@@ -158,9 +192,6 @@ if config_file.exists():
             WEBHOOK_URL = f"{host_with_port}{WEBHOOK_PATH}"
         else:
             WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-
-    # Настройки опросов
-    POLL_OPTIONS: tuple[str, ...] = ("Да", "Нет")
 else:
     # Для тестов - используем значения по умолчанию
     TOKEN = "test_token"
@@ -168,10 +199,12 @@ else:
     ADMIN_USERNAME = "test_admin"
     POLLS_SCHEDULE = []
     REQUIRED_PLAYERS = 18
+    POLL_OPTIONS = ("Да", "Нет")
+    SCHEDULER_TIMEZONE = "UTC"
+    LOG_LEVEL = "INFO"
     WEBHOOK_HOST = ""
     WEBHOOK_PATH = "/webhook"
     WEBHOOK_PORT = 8443
     WEBHOOK_SSL_CERT = "/app/certs/fullchain.pem"
     WEBHOOK_SSL_PRIV = "/app/certs/privkey.pem"
     WEBHOOK_URL = ""
-    POLL_OPTIONS = ("Да", "Нет")

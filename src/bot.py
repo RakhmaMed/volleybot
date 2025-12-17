@@ -20,6 +20,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from .config import (
     CHAT_ID,
+    LOG_LEVEL,
+    SCHEDULER_TIMEZONE,
     TOKEN,
     WEBHOOK_HOST,
     WEBHOOK_PATH,
@@ -34,7 +36,7 @@ from .scheduler import setup_scheduler
 from .services import BotStateService, PollService
 from .utils import load_players
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 
 
 async def on_startup(
@@ -106,7 +108,7 @@ async def run_polling() -> None:
     )
 
     # Планировщик задач
-    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
 
     # Регистрация обработчиков
     register_handlers(dp, bot)
@@ -149,7 +151,7 @@ def run_webhook() -> None:
     )
 
     # Планировщик задач
-    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
 
     # Настройка SSL
     ssl_context: ssl.SSLContext | None = None

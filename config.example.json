@@ -1,0 +1,67 @@
+{
+  "_comment_telegram": "=== Настройки Telegram ===",
+  "telegram_token": "YOUR_BOT_TOKEN_HERE",
+  "chat_id": -1001234567890,
+  "admin_username": "your_username",
+
+  "_comment_webhook": "=== Настройки Webhook (опционально, для production) ===",
+  "_comment_webhook_note": "Оставьте webhook_host пустым для режима polling (разработка)",
+  "webhook_host": "",
+  "webhook_path": "/webhook",
+  "webhook_port": 8443,
+
+  "_comment_ssl": "=== SSL сертификаты (требуется для webhook) ===",
+  "ssl_cert_path": "/app/certs/fullchain.pem",
+  "ssl_key_path": "/app/certs/privkey.pem",
+
+  "_comment_poll_settings": "=== Настройки опросов ===",
+  "required_players": 18,
+  "poll_options": ["Да", "Нет"],
+
+  "_comment_scheduler": "=== Настройки планировщика ===",
+  "scheduler_timezone": "UTC",
+
+  "_comment_logging": "=== Настройки логирования ===",
+  "_comment_logging_levels": "Доступные уровни: DEBUG, INFO, WARNING, ERROR, CRITICAL",
+  "log_level": "INFO",
+
+  "_comment_polls": "=== Расписание опросов ===",
+  "_comment_polls_note": "Список опросов с расписанием открытия и закрытия",
+  "polls": [
+    {
+      "_comment": "Пример опроса на среду",
+      "name": "wednesday_poll",
+      "message": "Волейбол в среду в 18:00. Кто идет?",
+      "open_day": "tue",
+      "open_hour_utc": 15,
+      "open_minute_utc": 0,
+      "close_day": "wed",
+      "close_hour_utc": 12,
+      "close_minute_utc": 0,
+      "subs": []
+    },
+    {
+      "_comment": "Пример опроса на воскресенье",
+      "name": "sunday_poll",
+      "message": "Волейбол в воскресенье в 10:00. Записываемся!",
+      "open_day": "fri",
+      "open_hour_utc": 18,
+      "open_minute_utc": 0,
+      "close_day": "sun",
+      "close_hour_utc": 6,
+      "close_minute_utc": 0,
+      "subs": []
+    }
+  ],
+
+  "_comment_days": "=== Справка по дням недели ===",
+  "_comment_days_values": "mon, tue, wed, thu, fri, sat, sun или * (каждый день)",
+
+  "_comment_time": "=== Справка по времени ===",
+  "_comment_time_note": "Время указывается в UTC. Для МСК добавьте +3 часа",
+  "_comment_time_example": "15:00 UTC = 18:00 МСК",
+
+  "_comment_subs": "=== Подписчики ===",
+  "_comment_subs_note": "Список Telegram ID пользователей для уведомлений (опционально)",
+  "_comment_subs_example": "subs: [123456789, 987654321]"
+}
