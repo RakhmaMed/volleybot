@@ -29,13 +29,14 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         """Команда для включения бота (только для администратора)."""
         user = message.from_user
         if user is None:
-            logging.error("Получена команда /start без информации о пользователе")
+            logging.error("❌ Получена команда /start без информации о пользователе")
             return
 
         if not is_admin(user):
             await message.reply("Ты кто? Я тебя не знаю. Кыш-кыш-кыш")
             logging.warning(
-                f"Попытка использования /start от неавторизованного пользователя: @{user.username} (ID: {user.id})"
+                f"⚠️ Попытка использования /start от неавторизованного пользователя: "
+                f"@{user.username} (ID: {user.id})"
             )
             return
 
@@ -44,14 +45,16 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         if bot_state_service.is_enabled():
             await message.reply("✅ Бот уже включен и работает.")
-            logging.info(f"Бот уже включен. Команда от администратора @{user.username}")
+            logging.info(
+                f"ℹ️ Бот уже включен. Команда /start от администратора @{user.username} (ID: {user.id})"
+            )
         else:
             bot_state_service.set_enabled(True)
             await message.reply(
                 "✅ Бот включен. Опросы будут создаваться по расписанию."
             )
             logging.info(
-                f"Бот включен администратором @{user.username} (ID: {user.id})"
+                f"✅ Бот ВКЛЮЧЕН администратором @{user.username} (ID: {user.id})"
             )
 
     @router.message(Command("stop"))
@@ -59,13 +62,14 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         """Команда для выключения бота (только для администратора)."""
         user = message.from_user
         if user is None:
-            logging.error("Получена команда /stop без информации о пользователе")
+            logging.error("❌ Получена команда /stop без информации о пользователе")
             return
 
         if not is_admin(user):
             await message.reply("Ты кто? Я тебя не знаю. Кыш-кыш-кыш")
             logging.warning(
-                f"Попытка использования /stop от неавторизованного пользователя: @{user.username} (ID: {user.id})"
+                f"⚠️ Попытка использования /stop от неавторизованного пользователя: "
+                f"@{user.username} (ID: {user.id})"
             )
             return
 
@@ -75,7 +79,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         if not bot_state_service.is_enabled():
             await message.reply("⚠️ Бот уже выключен.")
             logging.info(
-                f"Бот уже выключен. Команда от администратора @{user.username}"
+                f"ℹ️ Бот уже выключен. Команда /stop от администратора @{user.username} (ID: {user.id})"
             )
         else:
             bot_state_service.set_enabled(False)
@@ -83,7 +87,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 "⏸️ Бот выключен. Опросы не будут создаваться до включения."
             )
             logging.info(
-                f"Бот выключен администратором @{user.username} (ID: {user.id})"
+                f"⏸️ Бот ВЫКЛЮЧЕН администратором @{user.username} (ID: {user.id})"
             )
 
     @router.message(Command("chatid"))
@@ -103,12 +107,13 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         from_user = message.from_user
         if from_user is None:
-            logging.error(
-                f"Получена команда /chatid без информации о пользователе. Chat ID: {chat.id}"
+            logging.warning(
+                f"⚠️ Получена команда /chatid без информации о пользователе. Chat ID: {chat.id}"
             )
         else:
             logging.info(
-                f"Запрос ID чата от пользователя @{from_user.username} (ID: {from_user.id}). Chat ID: {chat.id}"
+                f"📋 Запрос ID чата от пользователя @{from_user.username} (ID: {from_user.id}). "
+                f"Chat ID: {chat.id}, Тип: {chat.type}"
             )
 
     @router.poll_answer()
@@ -123,13 +128,13 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         if user is None:
             logging.error(
-                f"Получен ответ на опрос {poll_id} без информации о пользователе"
+                f"❌ Получен ответ на опрос {poll_id} без информации о пользователе"
             )
             return
 
         logging.info(
-            f"Получен новый ответ от пользователя {user.username} "
-            f"(ID: {user.id}), голос: {selected}, update_id: {update_id}"
+            f"🗳️ Получен ответ от пользователя @{user.username or 'unknown'} "
+            f"(ID: {user.id}) на опрос {poll_id}: вариант {selected}, update_id: {update_id}"
         )
 
         # Получаем сервис из workflow_data
@@ -154,7 +159,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             update_id=update_id,
             voted_yes=voted_yes,
         )
-        logging.info(f"Обновленный список голосующих: {sorted_yes_voters}")
+        logging.debug(
+            f"Обновленный список голосующих за опрос {poll_id}: {len(sorted_yes_voters)} чел."
+        )
 
         # Отменяем предыдущую задачу обновления
         poll_service.cancel_update_task(poll_id)
@@ -171,14 +178,14 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         user = message.from_user
         username = f"@{user.username}" if user and user.username else "unknown"
         user_id = user.id if user else "unknown"
-        logging.info(
-            "Получено сообщение id=%s chat_id=%s от %s (ID: %s), тип=%s, текст=%r",
+        logging.debug(
+            "📨 Сообщение: id=%s, chat_id=%s, от=%s (ID: %s), тип=%s, текст=%r",
             message.message_id,
             message.chat.id,
             username,
             user_id,
             message.content_type,
-            message.text,
+            message.text or "",
         )
 
     # Регистрируем роутер в диспетчере

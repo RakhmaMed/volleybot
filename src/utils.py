@@ -31,6 +31,11 @@ def save_error_dump(
         question: Текст вопроса опроса
         chat_id: ID чата
     """
+    # Определяем путь к файлу заранее
+    script_dir: Path = Path(__file__).parent.parent
+    error_file: str = str(script_dir / "error_dump.json")
+
+    logging.debug(f"Сохранение дампа ошибки для опроса '{poll_name}' в чате {chat_id}")
     try:
         error_data: dict[str, Any] = {
             "timestamp": datetime.datetime.now(timezone.utc).isoformat(),
@@ -41,10 +46,6 @@ def save_error_dump(
             "traceback": traceback.format_exc(),
             "chat_id": chat_id,
         }
-
-        # Сохраняем error_dump.json в корне проекта
-        script_dir: Path = Path(__file__).parent.parent
-        error_file: str = str(script_dir / "error_dump.json")
 
         existing_errors: list[dict[str, Any]] = []
         if os.path.exists(error_file):
@@ -59,9 +60,20 @@ def save_error_dump(
         with open(error_file, "w", encoding="utf-8") as f:
             json.dump(existing_errors[-50:], f, ensure_ascii=False, indent=2)
 
-        logging.info(f"Дамп ошибки сохранен в {error_file}")
-    except Exception as e:
-        logging.error(f"Не удалось сохранить дамп ошибки: {e}")
+        logging.info(
+            f"✅ Дамп ошибки сохранен в {error_file} "
+            f"(всего ошибок в файле: {len(existing_errors[-50:])})"
+        )
+    except json.JSONDecodeError:
+        logging.exception(
+            "❌ Ошибка кодирования JSON при сохранении дампа ошибки. "
+            "Проверьте данные ошибки на сериализуемость."
+        )
+    except OSError:
+        logging.exception(
+            f"❌ Ошибка ввода-вывода при сохранении дампа ошибки в {error_file}. "
+            f"Проверьте права доступа к файлу."
+        )
 
 
 def escape_html(text: str) -> str:
@@ -103,12 +115,17 @@ def load_players() -> None:
     """
     global PLAYERS
 
-    try:
-        script_dir: Path = Path(__file__).parent.parent
-        players_file: Path = script_dir / "players.json"
+    # Определяем путь к файлу заранее
+    script_dir: Path = Path(__file__).parent.parent
+    players_file: Path = script_dir / "players.json"
 
+    logging.debug("Загрузка списка игроков из players.json...")
+    try:
         if not players_file.exists():
-            logging.warning("Файл players.json не найден. Список игроков будет пустым.")
+            logging.warning(
+                f"⚠️ Файл players.json не найден по пути {players_file}. "
+                f"Список игроков будет пустым. Будут использоваться имена из Telegram."
+            )
             PLAYERS = []
             return
 
@@ -116,9 +133,28 @@ def load_players() -> None:
             data: list[dict[str, Any]] = json.load(f)
 
         PLAYERS = data
-        logging.info(f"Загружено {len(PLAYERS)} игроков из players.json")
-    except Exception as e:
-        logging.error(f"Ошибка при загрузке players.json: {e}")
+        logging.info(f"✅ Загружено {len(PLAYERS)} игроков из {players_file}")
+        # Логируем детали на уровне DEBUG
+        ball_donors = sum(1 for p in PLAYERS if p.get("ball_donate") is True)
+        if ball_donors > 0:
+            logging.debug(f"  Донатов мячей: {ball_donors}")
+    except OSError:
+        logging.exception(
+            f"❌ Ошибка ввода-вывода при загрузке {players_file}. "
+            f"Проверьте существование и права доступа к файлу. Список игроков будет пустым."
+        )
+        PLAYERS = []
+    except json.JSONDecodeError:
+        logging.exception(
+            f"❌ Ошибка парсинга JSON в файле {players_file}. "
+            f"Проверьте синтаксис файла. Список игроков будет пустым."
+        )
+        PLAYERS = []
+    except (KeyError, TypeError):
+        logging.exception(
+            f"❌ Неверная структура данных в файле {players_file}. "
+            f"Проверьте формат данных. Список игроков будет пустым."
+        )
         PLAYERS = []
 
 
@@ -143,8 +179,8 @@ def get_player_name(user: User, subs: list[int] | None = None) -> str:
 
     # Если список игроков не загружен, используем имя из Telegram
     if not PLAYERS:
-        logging.warning(
-            "Список игроков пуст или не загружен, используем имя из Telegram"
+        logging.debug(
+            f"Список игроков пуст, используем имя из Telegram для пользователя {user.id}"
         )
     else:
         # Ищем игрока по ID в заранее загруженном списке

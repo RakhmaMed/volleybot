@@ -179,9 +179,13 @@ class TestSendPoll:
 
     async def test_send_poll_handles_general_error(self, mock_bot):
         """Тест обработки общей ошибки при отправке опроса."""
+        from aiogram.exceptions import TelegramAPIError
+
         service = PollService()
 
-        mock_bot.send_poll = AsyncMock(side_effect=Exception("Network error"))
+        mock_bot.send_poll = AsyncMock(
+            side_effect=TelegramAPIError(method="send_poll", message="Network error")
+        )
         mock_bot.send_message = AsyncMock()
 
         with patch("src.services.poll_service.save_error_dump") as mock_save:

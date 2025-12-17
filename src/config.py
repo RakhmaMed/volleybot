@@ -130,6 +130,9 @@ class BotConfig(BaseModel):
 # Глобальная переменная для ленивой загрузки конфигурации
 _config: BotConfig | None = None
 
+# Формат логирования для всего приложения
+LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
 
 def load_config_from_file(config_path: Path) -> BotConfig:
     """Загружает конфигурацию из JSON файла."""
@@ -143,18 +146,44 @@ def get_config() -> BotConfig:
     global _config
     if _config is None:
         config_path = Path(__file__).parent.parent / "config.json"
+
         try:
+            logging.debug(f"Попытка загрузки конфигурации из: {config_path}")
             _config = load_config_from_file(config_path)
             # Настраиваем логирование на основе конфигурации
             log_level = getattr(logging, _config.log_level, logging.INFO)
-            logging.basicConfig(level=log_level, force=True)
-            logging.info("Конфигурация успешно загружена и валидирована")
+            logging.basicConfig(level=log_level, force=True, format=LOG_FORMAT)
+            logging.info(
+                f"✅ Конфигурация успешно загружена из {config_path} (уровень логирования: {_config.log_level})"
+            )
             if _config.polls:
-                logging.info(f"Загружено {len(_config.polls)} опросов в расписании")
-        except Exception as e:
+                logging.info(f"📋 Загружено {len(_config.polls)} опросов в расписании")
+                for poll in _config.polls:
+                    logging.debug(
+                        f"  - {poll.name}: открытие {poll.open_day} {poll.open_hour_utc:02d}:{poll.open_minute_utc:02d} UTC, "
+                        f"закрытие {poll.close_day} {poll.close_hour_utc:02d}:{poll.close_minute_utc:02d} UTC"
+                    )
+        except FileNotFoundError:
             # Используем дефолтный уровень для ошибки
-            logging.basicConfig(level=logging.INFO, force=True)
-            logging.error(f"Ошибка загрузки конфигурации: {e}")
+            logging.basicConfig(level=logging.INFO, force=True, format=LOG_FORMAT)
+            logging.exception(
+                f"❌ Файл конфигурации не найден: {config_path}. "
+                f"Убедитесь, что файл config.json существует в корне проекта."
+            )
+            raise
+        except json.JSONDecodeError:
+            logging.basicConfig(level=logging.INFO, force=True, format=LOG_FORMAT)
+            logging.exception(
+                f"❌ Ошибка парсинга JSON в файле {config_path}. "
+                f"Проверьте синтаксис файла конфигурации."
+            )
+            raise
+        except (ValueError, KeyError):
+            logging.basicConfig(level=logging.INFO, force=True, format=LOG_FORMAT)
+            logging.exception(
+                f"❌ Ошибка валидации конфигурации из {config_path}. "
+                f"Проверьте, что все обязательные поля присутствуют и имеют корректные значения."
+            )
             raise
     return _config
 

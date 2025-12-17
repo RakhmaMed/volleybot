@@ -14,12 +14,14 @@ import ssl
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramAPIError
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from .config import (
     CHAT_ID,
+    LOG_FORMAT,
     LOG_LEVEL,
     SCHEDULER_TIMEZONE,
     TOKEN,
@@ -36,7 +38,10 @@ from .scheduler import setup_scheduler
 from .services import BotStateService, PollService
 from .utils import load_players
 
-logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format=LOG_FORMAT,
+)
 
 
 async def on_startup(
@@ -46,9 +51,14 @@ async def on_startup(
     poll_service: PollService,
 ) -> None:
     """Выполняется при запуске бота."""
+    logging.info("Инициализация бота...")
+
     # Загружаем список игроков один раз при старте
     load_players()
     poll_service.load_persisted_state()
+    logging.debug(
+        f"Активных опросов после восстановления: {len(poll_service.get_all_polls())}"
+    )
 
     setup_scheduler(scheduler, bot, bot_state_service, poll_service)
     scheduler.start()
@@ -56,10 +66,11 @@ async def on_startup(
 
     if WEBHOOK_HOST:
         try:
+            logging.debug(f"Попытка установки webhook на URL: {WEBHOOK_URL}")
             await bot.set_webhook(WEBHOOK_URL)
-            logging.info(f"Webhook установлен: {WEBHOOK_URL}")
-        except Exception as e:
-            logging.error(f"Ошибка установки webhook: {e}")
+            logging.info(f"✅ Webhook успешно установлен: {WEBHOOK_URL}")
+        except (TelegramAPIError, asyncio.TimeoutError, OSError):
+            logging.exception(f"❌ Не удалось установить webhook на {WEBHOOK_URL}")
     else:
         logging.info("Режим polling активен")
 
@@ -71,19 +82,25 @@ async def on_shutdown(
     poll_service: PollService,
 ) -> None:
     """Выполняется при остановке бота."""
-    logging.info("Остановка бота...")
+    logging.info("🛑 Начало процедуры остановки бота...")
 
     if scheduler.running:
+        logging.debug("Остановка планировщика...")
         scheduler.shutdown()
-        logging.info("Планировщик остановлен")
+        logging.info("✅ Планировщик остановлен")
 
     if WEBHOOK_HOST:
+        logging.debug("Удаление webhook...")
         await bot.delete_webhook()
-        logging.info("Webhook удален")
+        logging.info("✅ Webhook удален")
 
+    logging.debug("Закрытие сессии бота...")
     await bot.session.close()
+
+    logging.debug("Сохранение состояния сервисов...")
     poll_service.persist_state()
     bot_state_service.persist_state()
+    logging.info("✅ Бот успешно остановлен")
 
 
 async def run_polling() -> None:
@@ -123,13 +140,16 @@ async def run_polling() -> None:
     dp.startup.register(startup_handler)
     dp.shutdown.register(shutdown_handler)
 
-    logging.info("Запуск бота в режиме polling")
+    logging.info("🚀 Запуск бота в режиме polling...")
     await dp.start_polling(bot)
 
 
 def run_webhook() -> None:
     """Запуск в режиме webhook."""
-    logging.info("Запуск бота в режиме webhook")
+    logging.info("🚀 Запуск бота в режиме webhook")
+    logging.debug(
+        f"Webhook настройки: Host={WEBHOOK_HOST}, Port={WEBHOOK_PORT}, Path={WEBHOOK_PATH}"
+    )
 
     # Инициализация БД
     init_db()
@@ -156,14 +176,23 @@ def run_webhook() -> None:
     # Настройка SSL
     ssl_context: ssl.SSLContext | None = None
     try:
+        logging.debug(
+            f"Загрузка SSL сертификатов: cert={WEBHOOK_SSL_CERT}, key={WEBHOOK_SSL_PRIV}"
+        )
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(WEBHOOK_SSL_CERT, WEBHOOK_SSL_PRIV)
-        logging.info("SSL сертификаты загружены")
-    except FileNotFoundError as e:
-        logging.error(f"Не удалось загрузить SSL сертификаты: {e}")
+        logging.info("✅ SSL сертификаты успешно загружены")
+    except FileNotFoundError:
+        logging.exception(
+            f"❌ Файл сертификата не найден. Убедитесь, что файлы существуют: "
+            f"cert={WEBHOOK_SSL_CERT}, key={WEBHOOK_SSL_PRIV}"
+        )
         exit(1)
-    except Exception as e:
-        logging.error(f"Ошибка при загрузке SSL сертификатов: {e}")
+    except (ssl.SSLError, OSError):
+        logging.exception(
+            f"❌ Не удалось загрузить SSL сертификаты. Проверьте права доступа и формат файлов: "
+            f"cert={WEBHOOK_SSL_CERT}, key={WEBHOOK_SSL_PRIV}"
+        )
         exit(1)
 
     # Регистрация обработчиков
@@ -190,6 +219,7 @@ def run_webhook() -> None:
     setup_application(app, dp, bot=bot)
 
     # Запускаем сервер
+    logging.info(f"🌐 Запуск веб-сервера на порту {WEBHOOK_PORT}...")
     web.run_app(app, host="0.0.0.0", port=WEBHOOK_PORT, ssl_context=ssl_context)
 
 

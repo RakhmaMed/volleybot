@@ -85,10 +85,13 @@ def setup_scheduler(
         poll_service: Сервис опросов
     """
     if not POLLS_SCHEDULE:
-        logging.warning("Расписание опросов не найдено в config.json")
+        logging.warning(
+            "⚠️ Расписание опросов не найдено в config.json. "
+            "Проверьте наличие секции 'polls' в конфигурации."
+        )
         return
 
-    logging.info("Настройка планировщика:")
+    logging.info(f"⏰ Настройка планировщика ({len(POLLS_SCHEDULE)} опросов):")
 
     for idx, poll_config in enumerate(POLLS_SCHEDULE):
         poll_name: str = poll_config.name
@@ -133,12 +136,15 @@ def setup_scheduler(
 
         if open_day == "*":
             logging.info(
-                f"  - ОТКРЫТИЕ: Ежедневно {open_hour_utc:02d}:{open_minute_utc:02d} UTC - {poll_name}"
+                f"  📅 ОТКРЫТИЕ: Ежедневно {open_hour_utc:02d}:{open_minute_utc:02d} UTC - {poll_name}"
             )
         else:
             logging.info(
-                f"  - ОТКРЫТИЕ: {open_day.upper()} {open_hour_utc:02d}:{open_minute_utc:02d} UTC - {poll_name}"
+                f"  📅 ОТКРЫТИЕ: {open_day.upper()} {open_hour_utc:02d}:{open_minute_utc:02d} UTC - {poll_name}"
             )
+
+        if subs:
+            logging.debug(f"     Подписчиков для '{poll_name}': {len(subs)}")
 
         # === Задача закрытия опроса ===
         close_job_id: str = f"poll_close_{idx}"
@@ -166,9 +172,11 @@ def setup_scheduler(
 
         if close_day == "*":
             logging.info(
-                f"  - ЗАКРЫТИЕ: Ежедневно {close_hour_utc:02d}:{close_minute_utc:02d} UTC - {poll_name}"
+                f"  🔒 ЗАКРЫТИЕ: Ежедневно {close_hour_utc:02d}:{close_minute_utc:02d} UTC - {poll_name}"
             )
         else:
             logging.info(
-                f"  - ЗАКРЫТИЕ: {close_day.upper()} {close_hour_utc:02d}:{close_minute_utc:02d} UTC - {poll_name}"
+                f"  🔒 ЗАКРЫТИЕ: {close_day.upper()} {close_hour_utc:02d}:{close_minute_utc:02d} UTC - {poll_name}"
             )
+
+    logging.info(f"✅ Планировщик настроен: {len(POLLS_SCHEDULE) * 2} задач добавлено")
