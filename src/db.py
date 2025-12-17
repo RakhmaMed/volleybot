@@ -1,5 +1,7 @@
 """Утилиты для хранения состояния бота в SQLite."""
 
+from __future__ import annotations
+
 import json
 import logging
 import os

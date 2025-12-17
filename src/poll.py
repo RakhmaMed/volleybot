@@ -1,5 +1,7 @@
 """Модели и утилиты для работы с опросами."""
 
+from __future__ import annotations
+
 from pydantic import BaseModel, Field
 
 

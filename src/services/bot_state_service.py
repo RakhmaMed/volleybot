@@ -1,5 +1,7 @@
 """Сервис для управления состоянием бота."""
 
+from __future__ import annotations
+
 import logging
 
 from pydantic import BaseModel, Field

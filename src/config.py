@@ -1,5 +1,7 @@
 """Загрузка конфигурации и константы приложения с валидацией через Pydantic."""
 
+from __future__ import annotations
+
 import json
 import logging
 from pathlib import Path

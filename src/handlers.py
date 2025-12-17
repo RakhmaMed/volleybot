@@ -1,5 +1,7 @@
 """Обработчики команд бота."""
 
+from __future__ import annotations
+
 import logging
 
 from aiogram import Bot, Dispatcher, Router
