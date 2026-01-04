@@ -12,7 +12,6 @@ class TestConfigLoading:
         """Тест наличия обязательных атрибутов в конфигурации."""
         assert hasattr(config, "TOKEN")
         assert hasattr(config, "CHAT_ID")
-        assert hasattr(config, "ADMIN_USERNAME")
         assert hasattr(config, "POLLS_SCHEDULE")
         assert hasattr(config, "WEBHOOK_PATH")
         assert hasattr(config, "WEBHOOK_PORT")
@@ -28,10 +27,9 @@ class TestConfigLoading:
         """Тест типа chat_id."""
         assert isinstance(config.CHAT_ID, int)
 
-    def test_config_admin_username_is_string(self):
-        """Тест типа admin_username."""
-        assert isinstance(config.ADMIN_USERNAME, str)
-        assert len(config.ADMIN_USERNAME) > 0
+    def test_config_webhook_secret_is_string(self):
+        """Тест типа webhook_secret."""
+        assert isinstance(config.WEBHOOK_SECRET, str)
 
     def test_config_polls_schedule_is_list(self):
         """Тест типа polls_schedule."""

@@ -2,12 +2,17 @@
   "_comment_telegram": "=== Настройки Telegram ===",
   "telegram_token": "YOUR_BOT_TOKEN_HERE",
   "chat_id": -1001234567890,
-  "admin_username": "your_username",
+
+  "_comment_admin": "=== Настройки администраторов ===",
+  "_comment_admin_note": "Администраторы определяются автоматически из списка администраторов группы Telegram",
 
   "_comment_webhook": "=== Настройки Webhook (опционально, для production) ===",
   "_comment_webhook_note": "Оставьте webhook_host пустым для режима polling (разработка)",
   "webhook_host": "",
-  "webhook_path": "/webhook",
+  "webhook_path": "",
+  "_comment_webhook_path": "Оставьте пустым для автогенерации секретного пути из токена",
+  "webhook_secret": "",
+  "_comment_webhook_secret": "РЕКОМЕНДУЕТСЯ: секретный токен для верификации запросов от Telegram",
   "webhook_port": 8443,
 
   "_comment_ssl": "=== SSL сертификаты (требуется для webhook) ===",

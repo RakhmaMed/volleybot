@@ -8,8 +8,8 @@ from aiogram import Bot, Dispatcher, Router
 from aiogram.filters import Command
 from aiogram.types import Message, PollAnswer, Update
 
-from .services import BotStateService, PollService
-from .utils import get_player_name, is_admin
+from .services import AdminService, BotStateService, PollService
+from .utils import get_player_name, rate_limit_check
 
 
 def register_handlers(dp: Dispatcher, bot: Bot) -> None:
@@ -32,16 +32,26 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             logging.error("❌ Получена команда /start без информации о пользователе")
             return
 
-        if not is_admin(user):
+        # Получаем сервисы из workflow_data
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
+
+        # Проверяем, является ли пользователь администратором группы
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+
+        # Проверка rate limit (после проверки админа)
+        rate_limit_error = rate_limit_check(user, is_admin)
+        if rate_limit_error:
+            await message.reply(rate_limit_error)
+            return
+
+        if not is_admin:
             await message.reply("Ты кто? Я тебя не знаю. Кыш-кыш-кыш")
             logging.warning(
                 f"⚠️ Попытка использования /start от неавторизованного пользователя: "
                 f"@{user.username} (ID: {user.id})"
             )
             return
-
-        # Получаем сервис из workflow_data
-        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
 
         if bot_state_service.is_enabled():
             await message.reply("✅ Бот уже включен и работает.")
@@ -65,16 +75,26 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             logging.error("❌ Получена команда /stop без информации о пользователе")
             return
 
-        if not is_admin(user):
+        # Получаем сервисы из workflow_data
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
+
+        # Проверяем, является ли пользователь администратором группы
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+
+        # Проверка rate limit (после проверки админа)
+        rate_limit_error = rate_limit_check(user, is_admin)
+        if rate_limit_error:
+            await message.reply(rate_limit_error)
+            return
+
+        if not is_admin:
             await message.reply("Ты кто? Я тебя не знаю. Кыш-кыш-кыш")
             logging.warning(
                 f"⚠️ Попытка использования /stop от неавторизованного пользователя: "
                 f"@{user.username} (ID: {user.id})"
             )
             return
-
-        # Получаем сервис из workflow_data
-        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
 
         if not bot_state_service.is_enabled():
             await message.reply("⚠️ Бот уже выключен.")
@@ -93,6 +113,14 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
     @router.message(Command("chatid"))
     async def chatid_handler(message: Message) -> None:
         """Команда для получения ID чата."""
+        user = message.from_user
+
+        # Проверка rate limit (эта команда доступна всем, но с лимитом)
+        rate_limit_error = rate_limit_check(user, is_admin=False)
+        if rate_limit_error:
+            await message.reply(rate_limit_error)
+            return
+
         chat = message.chat
         chat_info: str = "📋 *Информация о чате:*\n\n"
         chat_info += f"ID чата: `{chat.id}`\n"
@@ -115,6 +143,49 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 f"📋 Запрос ID чата от пользователя @{from_user.username} (ID: {from_user.id}). "
                 f"Chat ID: {chat.id}, Тип: {chat.type}"
             )
+
+    @router.message(Command("refresh_admins"))
+    async def refresh_admins_handler(message: Message) -> None:
+        """Команда для принудительного обновления кэша администраторов."""
+        user = message.from_user
+        if user is None:
+            logging.error(
+                "❌ Получена команда /refresh_admins без информации о пользователе"
+            )
+            return
+
+        # Получаем сервис администраторов
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+
+        # Проверяем, является ли пользователь администратором группы
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+
+        # Проверка rate limit
+        rate_limit_error = rate_limit_check(user, is_admin)
+        if rate_limit_error:
+            await message.reply(rate_limit_error)
+            return
+
+        if not is_admin:
+            await message.reply("Ты кто? Я тебя не знаю. Кыш-кыш-кыш")
+            logging.warning(
+                f"⚠️ Попытка использования /refresh_admins от неавторизованного пользователя: "
+                f"@{user.username} (ID: {user.id})"
+            )
+            return
+
+        # Обновляем кэш администраторов
+        await admin_service.refresh_cache(bot, message.chat.id)
+        cached_admins = admin_service.get_cached_admins(message.chat.id)
+
+        await message.reply(
+            f"✅ Список администраторов обновлён.\n"
+            f"Найдено администраторов: {len(cached_admins)}"
+        )
+        logging.info(
+            f"🔄 Кэш администраторов обновлён по команде от @{user.username} (ID: {user.id}). "
+            f"Найдено: {len(cached_admins)} администраторов"
+        )
 
     @router.poll_answer()
     async def handle_poll_answer(

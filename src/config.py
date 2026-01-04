@@ -55,11 +55,17 @@ class BotConfig(BaseModel):
     # Telegram настройки
     telegram_token: str = Field(..., min_length=1, description="Токен бота Telegram")
     chat_id: int = Field(..., description="ID чата для отправки опросов")
-    admin_username: str = Field(default="", description="Username администратора бота")
 
     # Webhook настройки
     webhook_host: str = Field(default="", description="Хост для webhook")
-    webhook_path: str = Field(default="/webhook", description="Путь для webhook")
+    webhook_path: str = Field(
+        default="/webhook",
+        description="Путь для webhook (рекомендуется оставить пустым для автогенерации)",
+    )
+    webhook_secret: str = Field(
+        default="",
+        description="Секретный токен для верификации webhook запросов от Telegram",
+    )
     webhook_port: Annotated[int, Field(ge=1, le=65535)] = Field(
         default=8443, description="Порт для webhook"
     )
@@ -109,12 +115,6 @@ class BotConfig(BaseModel):
                 f"log_level должен быть одним из {valid_levels}, получено: {v}"
             )
         return v_upper
-
-    @field_validator("admin_username")
-    @classmethod
-    def normalize_username(cls, v: str) -> str:
-        """Убирает @ из username если есть."""
-        return v.lstrip("@")
 
     @model_validator(mode="after")
     def validate_webhook_config(self) -> "BotConfig":
@@ -188,44 +188,57 @@ def get_config() -> BotConfig:
     return _config
 
 
-# Загружаем конфигурацию при импорте (если config.json существует)
+# Загружаем конфигурацию при импорте (если config.json существует и валиден)
 config_file = Path(__file__).parent.parent / "config.json"
+_config_loaded = False
+
 if config_file.exists():
-    config = get_config()
+    try:
+        config = get_config()
+        _config_loaded = True
 
-    # Экспортируем переменные для обратной совместимости
-    TOKEN: str = config.telegram_token
-    CHAT_ID: int = config.chat_id
-    ADMIN_USERNAME: str = config.admin_username
-    POLLS_SCHEDULE: list[PollSchedule] = config.polls
-    REQUIRED_PLAYERS: int = config.required_players
-    POLL_OPTIONS: tuple[str, ...] = tuple(config.poll_options)
-    SCHEDULER_TIMEZONE: str = config.scheduler_timezone
-    LOG_LEVEL: str = config.log_level
+        # Экспортируем переменные для обратной совместимости
+        TOKEN: str = config.telegram_token
+        CHAT_ID: int = config.chat_id
+        WEBHOOK_SECRET: str = config.webhook_secret
+        POLLS_SCHEDULE: list[PollSchedule] = config.polls
+        REQUIRED_PLAYERS: int = config.required_players
+        POLL_OPTIONS: tuple[str, ...] = tuple(config.poll_options)
+        SCHEDULER_TIMEZONE: str = config.scheduler_timezone
+        LOG_LEVEL: str = config.log_level
 
-    # Webhook настройки
-    WEBHOOK_HOST: str = config.webhook_host
-    WEBHOOK_PATH: str = config.webhook_path
-    WEBHOOK_PORT: int = config.webhook_port
-    WEBHOOK_SSL_CERT: str = config.ssl_cert_path
-    WEBHOOK_SSL_PRIV: str = config.ssl_key_path
+        # Webhook настройки
+        WEBHOOK_HOST: str = config.webhook_host
+        WEBHOOK_PATH: str = config.webhook_path
+        WEBHOOK_PORT: int = config.webhook_port
+        WEBHOOK_SSL_CERT: str = config.ssl_cert_path
+        WEBHOOK_SSL_PRIV: str = config.ssl_key_path
 
-    # Формируем полный URL webhook
-    WEBHOOK_URL: str = ""
-    if WEBHOOK_HOST:
-        from urllib.parse import urlparse
+        # Формируем полный URL webhook
+        WEBHOOK_URL: str = ""
+        if WEBHOOK_HOST:
+            from urllib.parse import urlparse
 
-        parsed = urlparse(WEBHOOK_HOST)
-        if not parsed.port and WEBHOOK_PORT != 443:
-            host_with_port: str = f"{parsed.scheme}://{parsed.netloc}:{WEBHOOK_PORT}"
-            WEBHOOK_URL = f"{host_with_port}{WEBHOOK_PATH}"
-        else:
-            WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-else:
-    # Для тестов - используем значения по умолчанию
+            parsed = urlparse(WEBHOOK_HOST)
+            if not parsed.port and WEBHOOK_PORT != 443:
+                host_with_port: str = (
+                    f"{parsed.scheme}://{parsed.netloc}:{WEBHOOK_PORT}"
+                )
+                WEBHOOK_URL = f"{host_with_port}{WEBHOOK_PATH}"
+            else:
+                WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+    except (ValueError, KeyError):
+        # Конфигурация невалидна - используем значения по умолчанию для тестов
+        logging.warning(
+            "⚠️ Конфигурация невалидна, используются значения по умолчанию (режим тестирования)"
+        )
+        _config_loaded = False
+
+if not _config_loaded:
+    # Для тестов или при невалидной конфигурации - используем значения по умолчанию
     TOKEN = "test_token"
     CHAT_ID = -1001234567890
-    ADMIN_USERNAME = "test_admin"
+    WEBHOOK_SECRET = ""
     POLLS_SCHEDULE = []
     REQUIRED_PLAYERS = 18
     POLL_OPTIONS = ("Да", "Нет")

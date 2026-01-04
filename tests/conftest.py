@@ -3,13 +3,13 @@
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiogram import Bot
-from aiogram.types import Chat, Message, Poll, PollAnswer, User
+from aiogram.types import Chat, ChatMemberOwner, Message, Poll, PollAnswer, User
 
-from src.config import ADMIN_USERNAME
+from src.services import AdminService
 
 
 @pytest.fixture(autouse=True)
@@ -65,9 +65,19 @@ def admin_user() -> User:
         is_bot=False,
         first_name="Test",
         last_name="Admin",
-        username=ADMIN_USERNAME.replace("@", ""),
+        username="test_admin",
         language_code="ru",
     )
+
+
+@pytest.fixture
+def admin_service(admin_user: User) -> AdminService:
+    """Создаёт сервис администраторов с предзаполненным кэшем."""
+    service = AdminService(default_chat_id=-1001234567890)
+    # Предзаполняем кэш администраторами для тестов
+    service._admin_cache[-1001234567890] = {admin_user.id}
+    service._cache_updated_at[-1001234567890] = float("inf")  # Никогда не истекает
+    return service
 
 
 @pytest.fixture

@@ -17,6 +17,8 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
+from aiohttp.typedefs import Handler
+from aiohttp.web import Request, StreamResponse, middleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from .config import (
@@ -28,6 +30,7 @@ from .config import (
     WEBHOOK_HOST,
     WEBHOOK_PATH,
     WEBHOOK_PORT,
+    WEBHOOK_SECRET,
     WEBHOOK_SSL_CERT,
     WEBHOOK_SSL_PRIV,
     WEBHOOK_URL,
@@ -35,8 +38,8 @@ from .config import (
 from .db import init_db
 from .handlers import register_handlers
 from .scheduler import setup_scheduler
-from .services import BotStateService, PollService
-from .utils import load_players
+from .services import AdminService, BotStateService, PollService
+from .utils import generate_webhook_secret_path, is_telegram_ip, load_players
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -49,6 +52,7 @@ async def on_startup(
     scheduler: AsyncIOScheduler,
     bot_state_service: BotStateService,
     poll_service: PollService,
+    effective_webhook_path: str | None = None,
 ) -> None:
     """Выполняется при запуске бота."""
     logging.info("Инициализация бота...")
@@ -66,11 +70,30 @@ async def on_startup(
 
     if WEBHOOK_HOST:
         try:
-            logging.debug(f"Попытка установки webhook на URL: {WEBHOOK_URL}")
-            await bot.set_webhook(WEBHOOK_URL)
-            logging.info(f"✅ Webhook успешно установлен: {WEBHOOK_URL}")
+            # Формируем URL с правильным путём
+            webhook_path = effective_webhook_path or WEBHOOK_PATH
+            if WEBHOOK_URL:
+                # Заменяем путь в URL на эффективный
+                from urllib.parse import urlparse, urlunparse
+
+                parsed = urlparse(WEBHOOK_URL)
+                effective_url = urlunparse(parsed._replace(path=webhook_path))
+            else:
+                effective_url = f"{WEBHOOK_HOST}{webhook_path}"
+
+            logging.debug(f"Попытка установки webhook на URL: {effective_url}")
+
+            # Устанавливаем webhook с секретным токеном если настроен
+            if WEBHOOK_SECRET:
+                await bot.set_webhook(effective_url, secret_token=WEBHOOK_SECRET)
+                logging.info(
+                    f"✅ Webhook успешно установлен: {effective_url} (с секретным токеном)"
+                )
+            else:
+                await bot.set_webhook(effective_url)
+                logging.info(f"✅ Webhook успешно установлен: {effective_url}")
         except (TelegramAPIError, asyncio.TimeoutError, OSError):
-            logging.exception(f"❌ Не удалось установить webhook на {WEBHOOK_URL}")
+            logging.exception("❌ Не удалось установить webhook")
     else:
         logging.info("Режим polling активен")
 
@@ -109,6 +132,7 @@ async def run_polling() -> None:
     init_db()
 
     # Инициализация сервисов
+    admin_service = AdminService(default_chat_id=CHAT_ID)
     bot_state_service = BotStateService(default_chat_id=CHAT_ID)
     poll_service = PollService()
 
@@ -119,6 +143,7 @@ async def run_polling() -> None:
     # Сохраняем сервисы в workflow_data для доступа из handlers
     dp.workflow_data.update(
         {
+            "admin_service": admin_service,
             "bot_state_service": bot_state_service,
             "poll_service": poll_service,
         }
@@ -155,6 +180,7 @@ def run_webhook() -> None:
     init_db()
 
     # Инициализация сервисов
+    admin_service = AdminService(default_chat_id=CHAT_ID)
     bot_state_service = BotStateService(default_chat_id=CHAT_ID)
     poll_service = PollService()
 
@@ -165,6 +191,7 @@ def run_webhook() -> None:
     # Сохраняем сервисы в workflow_data для доступа из handlers
     dp.workflow_data.update(
         {
+            "admin_service": admin_service,
             "bot_state_service": bot_state_service,
             "poll_service": poll_service,
         }
@@ -198,9 +225,16 @@ def run_webhook() -> None:
     # Регистрация обработчиков
     register_handlers(dp, bot)
 
+    # Определяем путь webhook (секретный если не указан явно)
+    effective_webhook_path = (
+        WEBHOOK_PATH if WEBHOOK_PATH else generate_webhook_secret_path(TOKEN)
+    )
+
     # Регистрируем startup/shutdown
     async def startup_handler():
-        await on_startup(bot, scheduler, bot_state_service, poll_service)
+        await on_startup(
+            bot, scheduler, bot_state_service, poll_service, effective_webhook_path
+        )
 
     async def shutdown_handler():
         await on_shutdown(bot, scheduler, bot_state_service, poll_service)
@@ -208,12 +242,63 @@ def run_webhook() -> None:
     dp.startup.register(startup_handler)
     dp.shutdown.register(shutdown_handler)
 
-    # Создаём aiohttp приложение
-    app: web.Application = web.Application()
+    # Создаём middleware для проверки безопасности webhook
+    @middleware
+    async def security_middleware(
+        request: Request,
+        handler: Handler,
+    ) -> StreamResponse:
+        """Middleware для проверки безопасности входящих webhook запросов."""
+        # Получаем реальный IP (учитываем прокси)
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            client_ip = forwarded_for.split(",")[0].strip()
+        else:
+            client_ip = request.remote if request.remote else "unknown"
+
+        # Проверяем IP только для webhook пути
+        webhook_path = (
+            WEBHOOK_PATH if WEBHOOK_PATH else generate_webhook_secret_path(TOKEN)
+        )
+        if request.path == webhook_path:
+            # Проверяем что запрос от Telegram
+            if client_ip != "unknown" and not is_telegram_ip(client_ip):
+                logging.warning(
+                    f"🚫 Отклонен webhook запрос от не-Telegram IP: {client_ip}"
+                )
+                return web.Response(status=403, text="Forbidden")
+
+            # Проверяем секретный токен если настроен
+            if WEBHOOK_SECRET:
+                request_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+                if request_secret != WEBHOOK_SECRET:
+                    logging.warning(
+                        f"🚫 Отклонен webhook запрос с неверным секретным токеном от {client_ip}"
+                    )
+                    return web.Response(status=403, text="Forbidden")
+
+        return await handler(request)
+
+    # Создаём aiohttp приложение с middleware безопасности
+    app: web.Application = web.Application(middlewares=[security_middleware])
+
+    # Определяем путь webhook (секретный если не указан явно)
+    effective_webhook_path = (
+        WEBHOOK_PATH if WEBHOOK_PATH else generate_webhook_secret_path(TOKEN)
+    )
 
     # Настраиваем webhook handler
     webhook_handler: SimpleRequestHandler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-    webhook_handler.register(app, path=WEBHOOK_PATH)
+    webhook_handler.register(app, path=effective_webhook_path)
+
+    logging.info(f"🔐 Webhook path: {effective_webhook_path}")
+    if WEBHOOK_SECRET:
+        logging.info("🔐 Webhook secret token verification: ENABLED")
+    else:
+        logging.warning(
+            "⚠️ БЕЗОПАСНОСТЬ: webhook_secret не настроен. "
+            "Рекомендуется добавить webhook_secret в config.json"
+        )
 
     # Настраиваем приложение с диспетчером
     setup_application(app, dp, bot=bot)

@@ -3,20 +3,30 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
+import ipaddress
 import json
 import logging
 import os
+import time
 import traceback
+from collections import defaultdict
 from datetime import timezone
 from pathlib import Path
 from typing import Any
 
 from aiogram.types import User
 
-from .config import ADMIN_USERNAME
-
 # Глобальный кэш списка игроков
 PLAYERS: list[dict[str, Any]] = []
+
+# Rate limiting: хранение времени последних запросов
+# Структура: {user_id: [timestamp1, timestamp2, ...]}
+_RATE_LIMIT_CACHE: dict[int, list[float]] = defaultdict(list)
+
+# Настройки rate limiting
+RATE_LIMIT_WINDOW = 60  # Окно в секундах
+RATE_LIMIT_MAX_REQUESTS = 10  # Максимум запросов в окне
 
 
 def save_error_dump(
@@ -90,22 +100,105 @@ def escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def is_admin(user: User) -> bool:
+def is_rate_limited(user_id: int) -> bool:
     """
-    Проверяет, является ли пользователь администратором.
+    Проверяет, превышен ли лимит запросов для пользователя.
 
     Args:
-        user: Объект пользователя Telegram
+        user_id: ID пользователя Telegram
 
     Returns:
-        True если пользователь является администратором, иначе False
+        True если лимит превышен, иначе False
     """
-    username: str | None = user.username
-    if not username:
+    current_time = time.time()
+    window_start = current_time - RATE_LIMIT_WINDOW
+
+    # Очищаем старые записи
+    _RATE_LIMIT_CACHE[user_id] = [
+        t for t in _RATE_LIMIT_CACHE[user_id] if t > window_start
+    ]
+
+    # Проверяем лимит
+    if len(_RATE_LIMIT_CACHE[user_id]) >= RATE_LIMIT_MAX_REQUESTS:
+        return True
+
+    # Добавляем текущий запрос
+    _RATE_LIMIT_CACHE[user_id].append(current_time)
+    return False
+
+
+def rate_limit_check(user: User | None, is_admin: bool = False) -> str | None:
+    """
+    Проверяет rate limit для пользователя.
+
+    Args:
+        user: Объект пользователя Telegram или None
+        is_admin: Флаг, является ли пользователь администратором
+
+    Returns:
+        Сообщение об ошибке если лимит превышен, иначе None
+    """
+    if user is None:
+        return None
+
+    # Администраторы не ограничены
+    if is_admin:
+        return None
+
+    if is_rate_limited(user.id):
+        logging.warning(
+            f"⚠️ Rate limit превышен для пользователя @{user.username} (ID: {user.id})"
+        )
+        return "⚠️ Слишком много запросов. Подождите минуту."
+
+    return None
+
+
+def generate_webhook_secret_path(token: str) -> str:
+    """
+    Генерирует секретный путь для webhook на основе токена бота.
+
+    Использует хеш токена для создания непредсказуемого пути,
+    который невозможно угадать без знания токена.
+
+    Args:
+        token: Токен бота Telegram
+
+    Returns:
+        Секретный путь вида /webhook_<hash>
+    """
+    # Используем SHA256 хеш токена
+    token_hash = hashlib.sha256(token.encode()).hexdigest()[:32]
+    return f"/webhook_{token_hash}"
+
+
+# Диапазоны IP-адресов Telegram для webhook
+# Источник: https://core.telegram.org/bots/webhooks#the-short-version
+TELEGRAM_IP_RANGES = [
+    ipaddress.ip_network("149.154.160.0/20"),
+    ipaddress.ip_network("91.108.4.0/22"),
+]
+
+
+def is_telegram_ip(ip_str: str) -> bool:
+    """
+    Проверяет, принадлежит ли IP-адрес диапазонам Telegram.
+
+    Args:
+        ip_str: IP-адрес в строковом формате
+
+    Returns:
+        True если IP принадлежит Telegram, иначе False
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        for network in TELEGRAM_IP_RANGES:
+            if ip in network:
+                return True
         return False
-    admin_username_clean: str = ADMIN_USERNAME.replace("@", "")
-    username_clean: str = username.replace("@", "")
-    return username_clean == admin_username_clean
+    except ValueError:
+        logging.warning(f"⚠️ Некорректный IP-адрес: {ip_str}")
+        return False
 
 
 def load_players() -> None:
