@@ -36,7 +36,7 @@ from .config import (
     WEBHOOK_URL,
 )
 from .db import init_db
-from .handlers import register_handlers
+from .handlers import register_handlers, setup_bot_commands
 from .scheduler import setup_scheduler
 from .services import AdminService, BotStateService, PollService
 from .utils import generate_webhook_secret_path, is_telegram_ip, load_players
@@ -67,6 +67,9 @@ async def on_startup(
     setup_scheduler(scheduler, bot, bot_state_service, poll_service)
     scheduler.start()
     logging.info("Планировщик запущен")
+
+    # Регистрируем команды бота в меню Telegram
+    await setup_bot_commands(bot)
 
     if WEBHOOK_HOST:
         try:

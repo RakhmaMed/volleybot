@@ -6,10 +6,52 @@ import logging
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.filters import Command
-from aiogram.types import Message, PollAnswer, Update
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllChatAdministrators,
+    BotCommandScopeAllGroupChats,
+    Message,
+    PollAnswer,
+    Update,
+)
 
+from .config import CHAT_ID, POLLS_SCHEDULE, SCHEDULER_TIMEZONE
 from .services import AdminService, BotStateService, PollService
 from .utils import get_player_name, rate_limit_check
+
+
+async def setup_bot_commands(bot: Bot) -> None:
+    """
+    Устанавливает список команд бота для отображения в меню Telegram.
+
+    Args:
+        bot: Экземпляр бота
+    """
+    # Команды для всех пользователей в группах
+    user_commands = [
+        BotCommand(command="help", description="Показать справку по командам"),
+        BotCommand(command="schedule", description="Показать расписание опросов"),
+    ]
+
+    # Команды для администраторов (включая пользовательские)
+    admin_commands = [
+        BotCommand(command="help", description="Показать справку по командам"),
+        BotCommand(command="schedule", description="Показать расписание опросов"),
+        BotCommand(command="start", description="Включить бота"),
+        BotCommand(command="stop", description="Выключить бота"),
+    ]
+
+    # Устанавливаем команды для обычных пользователей в группах
+    await bot.set_my_commands(
+        commands=user_commands, scope=BotCommandScopeAllGroupChats()
+    )
+
+    # Устанавливаем команды для администраторов всех групп
+    await bot.set_my_commands(
+        commands=admin_commands, scope=BotCommandScopeAllChatAdministrators()
+    )
+
+    logging.info("✅ Команды бота зарегистрированы в меню Telegram")
 
 
 def register_handlers(dp: Dispatcher, bot: Bot) -> None:
@@ -110,82 +152,82 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 f"⏸️ Бот ВЫКЛЮЧЕН администратором @{user.username} (ID: {user.id})"
             )
 
-    @router.message(Command("chatid"))
-    async def chatid_handler(message: Message) -> None:
-        """Команда для получения ID чата."""
+    @router.message(Command("help"))
+    async def help_handler(message: Message) -> None:
+        """Команда для отображения справки по командам бота."""
         user = message.from_user
 
-        # Проверка rate limit (эта команда доступна всем, но с лимитом)
+        # Проверка rate limit
         rate_limit_error = rate_limit_check(user, is_admin=False)
         if rate_limit_error:
             await message.reply(rate_limit_error)
             return
 
-        chat = message.chat
-        chat_info: str = "📋 *Информация о чате:*\n\n"
-        chat_info += f"ID чата: `{chat.id}`\n"
-        chat_info += f"Тип: {chat.type}\n"
+        help_text = (
+            "🏐 <b>Volleyball Bot — Справка</b>\n\n"
+            "<b>Доступные команды:</b>\n"
+            "/help — показать эту справку\n"
+            "/schedule — показать расписание опросов\n\n"
+            "<b>Команды для администраторов:</b>\n"
+            "/start — включить бота\n"
+            "/stop — выключить бота\n\n"
+            "<b>Как пользоваться:</b>\n"
+            "Бот автоматически создаёт опросы по расписанию. "
+            "Голосуйте «Да», если планируете участвовать в игре."
+        )
 
-        if chat.title:
-            chat_info += f"Название: {chat.title}\n"
-        if chat.username:
-            chat_info += f"Username: @{chat.username}\n"
+        await message.reply(help_text)
 
-        await message.reply(chat_info, parse_mode="Markdown")
-
-        from_user = message.from_user
-        if from_user is None:
-            logging.warning(
-                f"⚠️ Получена команда /chatid без информации о пользователе. Chat ID: {chat.id}"
-            )
-        else:
+        if user:
             logging.info(
-                f"📋 Запрос ID чата от пользователя @{from_user.username} (ID: {from_user.id}). "
-                f"Chat ID: {chat.id}, Тип: {chat.type}"
+                f"📖 Запрос справки от пользователя @{user.username} (ID: {user.id})"
             )
 
-    @router.message(Command("refresh_admins"))
-    async def refresh_admins_handler(message: Message) -> None:
-        """Команда для принудительного обновления кэша администраторов."""
+    @router.message(Command("schedule"))
+    async def schedule_handler(message: Message) -> None:
+        """Команда для отображения расписания опросов."""
         user = message.from_user
-        if user is None:
-            logging.error(
-                "❌ Получена команда /refresh_admins без информации о пользователе"
-            )
-            return
-
-        # Получаем сервис администраторов
-        admin_service: AdminService = dp.workflow_data["admin_service"]
-
-        # Проверяем, является ли пользователь администратором группы
-        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
 
         # Проверка rate limit
-        rate_limit_error = rate_limit_check(user, is_admin)
+        rate_limit_error = rate_limit_check(user, is_admin=False)
         if rate_limit_error:
             await message.reply(rate_limit_error)
             return
 
-        if not is_admin:
-            await message.reply("Ты кто? Я тебя не знаю. Кыш-кыш-кыш")
-            logging.warning(
-                f"⚠️ Попытка использования /refresh_admins от неавторизованного пользователя: "
-                f"@{user.username} (ID: {user.id})"
-            )
+        if not POLLS_SCHEDULE:
+            await message.reply("📅 Расписание опросов пока не настроено.")
             return
 
-        # Обновляем кэш администраторов
-        await admin_service.refresh_cache(bot, message.chat.id)
-        cached_admins = admin_service.get_cached_admins(message.chat.id)
+        # Маппинг дней недели на русский
+        days_ru = {
+            "mon": "Пн",
+            "tue": "Вт",
+            "wed": "Ср",
+            "thu": "Чт",
+            "fri": "Пт",
+            "sat": "Сб",
+            "sun": "Вс",
+            "*": "Ежедневно",
+        }
 
-        await message.reply(
-            f"✅ Список администраторов обновлён.\n"
-            f"Найдено администраторов: {len(cached_admins)}"
+        schedule_text = (
+            f"📅 <b>Расписание опросов</b> (часовой пояс: {SCHEDULER_TIMEZONE})\n\n"
         )
-        logging.info(
-            f"🔄 Кэш администраторов обновлён по команде от @{user.username} (ID: {user.id}). "
-            f"Найдено: {len(cached_admins)} администраторов"
-        )
+
+        for poll in POLLS_SCHEDULE:
+            open_day = days_ru.get(poll.open_day, poll.open_day)
+            close_day = days_ru.get(poll.close_day, poll.close_day)
+
+            schedule_text += f"<b>🏐 {poll.name}</b>\n"
+            schedule_text += f"   Открытие: {open_day} {poll.open_hour_utc:02d}:{poll.open_minute_utc:02d}\n"
+            schedule_text += f"   Закрытие: {close_day} {poll.close_hour_utc:02d}:{poll.close_minute_utc:02d}\n\n"
+
+        await message.reply(schedule_text)
+
+        if user:
+            logging.info(
+                f"📅 Запрос расписания от пользователя @{user.username} (ID: {user.id})"
+            )
 
     @router.poll_answer()
     async def handle_poll_answer(
