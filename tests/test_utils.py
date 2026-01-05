@@ -122,6 +122,54 @@ class TestAdminService:
         # При ошибке возвращается False
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_is_admin_uses_default_chat_for_private_chat(
+        self, admin_service, mock_bot, admin_user
+    ):
+        """Тест что для приватных чатов (положительный ID) используется default_chat_id."""
+        admin_member = MagicMock()
+        admin_member.user = admin_user
+        mock_bot.get_chat_administrators = AsyncMock(return_value=[admin_member])
+
+        private_chat_id = 5013132836  # Положительный ID = приватный чат
+
+        await admin_service.is_admin(mock_bot, admin_user, chat_id=private_chat_id)
+
+        # Должен вызываться с default_chat_id (-1001234567890), а не с private_chat_id
+        mock_bot.get_chat_administrators.assert_called_once_with(-1001234567890)
+
+    @pytest.mark.asyncio
+    async def test_refresh_cache_uses_default_chat_for_private_chat(
+        self, admin_service, mock_bot, admin_user
+    ):
+        """Тест что refresh_cache использует default_chat_id для приватных чатов."""
+        admin_member = MagicMock()
+        admin_member.user = admin_user
+        mock_bot.get_chat_administrators = AsyncMock(return_value=[admin_member])
+
+        private_chat_id = 5013132836  # Положительный ID = приватный чат
+
+        await admin_service.refresh_cache(mock_bot, chat_id=private_chat_id)
+
+        # Должен вызываться с default_chat_id (-1001234567890), а не с private_chat_id
+        mock_bot.get_chat_administrators.assert_called_once_with(-1001234567890)
+
+    @pytest.mark.asyncio
+    async def test_is_admin_uses_group_chat_id_for_groups(
+        self, admin_service, mock_bot, admin_user
+    ):
+        """Тест что для групповых чатов (отрицательный ID) используется переданный chat_id."""
+        admin_member = MagicMock()
+        admin_member.user = admin_user
+        mock_bot.get_chat_administrators = AsyncMock(return_value=[admin_member])
+
+        group_chat_id = -1009999999999  # Отрицательный ID = групповой чат
+
+        await admin_service.is_admin(mock_bot, admin_user, chat_id=group_chat_id)
+
+        # Должен вызываться с переданным group_chat_id
+        mock_bot.get_chat_administrators.assert_called_once_with(group_chat_id)
+
 
 class TestRateLimiting:
     """Тесты для rate limiting."""

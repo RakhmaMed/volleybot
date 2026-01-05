@@ -95,9 +95,14 @@ class AdminService:
 
         Args:
             bot: Экземпляр бота
-            chat_id: ID чата (если None, используется default_chat_id)
+            chat_id: ID чата (если None или приватный чат, используется default_chat_id)
         """
-        target_chat_id = chat_id or self._default_chat_id
+        # Если chat_id положительный (приватный чат) или None, используем default_chat_id
+        # Групповые чаты имеют отрицательные ID
+        if chat_id is None or chat_id > 0:
+            target_chat_id = self._default_chat_id
+        else:
+            target_chat_id = chat_id
 
         async with self._cache_lock:
             admin_ids = await self._fetch_admins(bot, target_chat_id)
@@ -113,12 +118,17 @@ class AdminService:
         Args:
             bot: Экземпляр бота
             user: Объект пользователя Telegram
-            chat_id: ID чата для проверки (если None, используется default_chat_id)
+            chat_id: ID чата для проверки (если None или приватный чат, используется default_chat_id)
 
         Returns:
             True если пользователь является администратором, иначе False
         """
-        target_chat_id = chat_id or self._default_chat_id
+        # Если chat_id положительный (приватный чат) или None, используем default_chat_id
+        # Групповые чаты имеют отрицательные ID
+        if chat_id is None or chat_id > 0:
+            target_chat_id = self._default_chat_id
+        else:
+            target_chat_id = chat_id
 
         # Проверяем кэш
         if not self._is_cache_valid(target_chat_id):
