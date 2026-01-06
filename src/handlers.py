@@ -219,8 +219,10 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             game_day = days_ru.get(poll.game_day, poll.game_day)
 
             schedule_text += f"<b>🏐 {poll.name}</b>\n"
-            schedule_text += f"   Открытие: {open_day} {poll.open_hour_utc:02d}:{poll.open_minute_utc:02d}\n"
-            schedule_text += f"   Игра: {game_day} {poll.game_hour_utc:02d}:{poll.game_minute_utc:02d}\n\n"
+            schedule_text += f"   📬 Опрос: {open_day} {poll.open_hour_utc:02d}:{poll.open_minute_utc:02d}\n"
+            schedule_text += f"   🏐 Игра: {game_day} {poll.game_hour_utc:02d}:{poll.game_minute_utc:02d}\n\n"
+
+        schedule_text += "<i>* Опрос закрывается за 30 минут до начала игры.</i>"
 
         await message.reply(schedule_text)
 
