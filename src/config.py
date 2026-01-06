@@ -14,6 +14,7 @@ class PollSchedule(BaseModel):
     """Модель конфигурации одного опроса."""
 
     name: str = Field(..., min_length=1, description="Название опроса")
+    place: str = Field(default="", description="Место проведения игры")
     message: str = Field(..., min_length=1, description="Текст вопроса опроса")
     open_day: str = Field(
         default="*",

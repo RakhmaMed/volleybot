@@ -1,11 +1,13 @@
 """Тесты для обработчиков команд."""
 
-from unittest.mock import AsyncMock, MagicMock
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.types import Chat, Message, PollAnswer, Update, User
 
+from src.config import PollSchedule
 from src.handlers import register_handlers
 from src.services import AdminService, BotStateService, PollService
 
@@ -169,6 +171,67 @@ class TestStopCommand:
         assert bot_state_service.is_enabled() is True
         bot_state_service.set_enabled(False)
         assert bot_state_service.is_enabled() is False
+
+
+@pytest.mark.asyncio
+class TestScheduleCommand:
+    """Тесты для команды /schedule."""
+
+    async def test_schedule_command(self, regular_user, mock_admin_service):
+        """Тест вывода команды /schedule."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
+
+        dp.workflow_data.update(
+            {
+                "admin_service": mock_admin_service,
+                "bot_state_service": bot_state_service,
+                "poll_service": poll_service,
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        polls = [
+            PollSchedule(
+                name="Test Poll",
+                place="Test Place",
+                message="Test Message",
+                open_day="mon",
+                open_hour_utc=10,
+                open_minute_utc=0,
+                game_day="tue",
+                game_hour_utc=15,  # 18:00 MSK (UTC+3)
+                game_minute_utc=30,
+            )
+        ]
+
+        chat = Chat(id=123, type="private")
+        message = Message(
+            message_id=1,
+            date=datetime.now(),
+            chat=chat,
+            from_user=regular_user,
+            text="/schedule",
+        )
+        update = Update(update_id=1, message=message)
+
+        with patch("src.handlers.POLLS_SCHEDULE", polls):
+            await dp.feed_update(bot, update)
+
+        assert bot.called
+
+        call_args = bot.call_args
+        method = call_args.args[0]
+        text = method.text
+
+        assert text is not None
+        assert "📅 <b>Расписание игр</b> (время МСК)" in text
+        assert "Вторник 18:30 (Test Place)" in text
+        assert "ℹ️ Опрос начинается за день до игры в 19:00" in text
 
 
 @pytest.mark.asyncio
