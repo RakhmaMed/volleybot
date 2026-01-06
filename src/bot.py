@@ -64,6 +64,9 @@ async def on_startup(
         f"Активных опросов после восстановления: {len(poll_service.get_all_polls())}"
     )
 
+    # Устанавливаем команды бота
+    await setup_bot_commands(bot)
+
     setup_scheduler(scheduler, bot, bot_state_service, poll_service)
     scheduler.start()
     logging.info("Планировщик запущен")

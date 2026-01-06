@@ -43,6 +43,9 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="stop", description="Выключить бота"),
     ]
 
+    # Устанавливаем команды для приватных чатов (по умолчанию, без scope)
+    await bot.set_my_commands(commands=user_commands)
+
     # Устанавливаем команды для обычных пользователей в группах
     await bot.set_my_commands(
         commands=user_commands, scope=BotCommandScopeAllGroupChats()
