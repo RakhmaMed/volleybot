@@ -198,62 +198,66 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             await message.reply("🏐 Расписание игр пока не настроено.")
             return
 
-        # Маппинг дней недели на русский (полные названия)
-        days_ru = {
-            "mon": "Понедельник",
-            "tue": "Вторник",
-            "wed": "Среда",
-            "thu": "Четверг",
-            "fri": "Пятница",
-            "sat": "Суббота",
-            "sun": "Воскресенье",
-            "*": "Ежедневно",
-        }
+        try:
+            # Маппинг дней недели на русский (полные названия)
+            days_ru = {
+                "mon": "Понедельник",
+                "tue": "Вторник",
+                "wed": "Среда",
+                "thu": "Четверг",
+                "fri": "Пятница",
+                "sat": "Суббота",
+                "sun": "Воскресенье",
+                "*": "Ежедневно",
+            }
 
-        # Порядок дней для вычисления следующего дня
-        days_order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+            # Порядок дней для вычисления следующего дня
+            days_order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
-        def utc_to_msk(day: str, hour: int, minute: int) -> tuple[str, int, int]:
-            """Конвертация времени из UTC в МСК (UTC+3)."""
-            msk_hour = hour + 3
-            msk_day = day
+            def utc_to_msk(day: str, hour: int, minute: int) -> tuple[str, int, int]:
+                """Конвертация времени из UTC в МСК (UTC+3)."""
+                msk_hour = hour + 3
+                msk_day = day
 
-            if msk_hour >= 24:
-                msk_hour -= 24
-                # Переход на следующий день
-                if day != "*":
-                    day_idx = days_order.index(day)
-                    msk_day = days_order[(day_idx + 1) % 7]
+                if msk_hour >= 24:
+                    msk_hour -= 24
+                    # Переход на следующий день
+                    if day != "*" and day in days_order:
+                        day_idx = days_order.index(day)
+                        msk_day = days_order[(day_idx + 1) % 7]
 
-            return msk_day, msk_hour, minute
+                return msk_day, msk_hour, minute
 
-        schedule_text = "🏐 <b>Расписание игр</b> <i>(время МСК)</i>\n\n"
+            schedule_text = "🏐 <b>Расписание игр</b> <i>(время МСК)</i>\n\n"
 
-        for poll in POLLS_SCHEDULE:
-            # Конвертируем время игры в МСК
-            game_day_msk, game_hour_msk, game_minute_msk = utc_to_msk(
-                poll.game_day, poll.game_hour_utc, poll.game_minute_utc
-            )
-            # Конвертируем время опроса в МСК
-            open_day_msk, open_hour_msk, open_minute_msk = utc_to_msk(
-                poll.open_day, poll.open_hour_utc, poll.open_minute_utc
-            )
+            for poll in POLLS_SCHEDULE:
+                # Конвертируем время игры в МСК
+                game_day_msk, game_hour_msk, game_minute_msk = utc_to_msk(
+                    poll.game_day, poll.game_hour_utc, poll.game_minute_utc
+                )
+                # Конвертируем время опроса в МСК
+                open_day_msk, open_hour_msk, open_minute_msk = utc_to_msk(
+                    poll.open_day, poll.open_hour_utc, poll.open_minute_utc
+                )
 
-            game_day_text = days_ru.get(game_day_msk, game_day_msk)
-            open_day_text = days_ru.get(open_day_msk, open_day_msk)
+                game_day_text = days_ru.get(game_day_msk, game_day_msk)
+                open_day_text = days_ru.get(open_day_msk, open_day_msk)
 
-            schedule_text += f"<b>🏐 {poll.name}</b>\n"
-            schedule_text += f"    ⏰ <b>{game_day_text}, {game_hour_msk:02d}:{game_minute_msk:02d}</b>\n"
-            schedule_text += f"    📬 Опрос: {open_day_text}, {open_hour_msk:02d}:{open_minute_msk:02d}\n\n"
+                schedule_text += f"<b>🏐 {poll.name}</b>\n"
+                schedule_text += f"    ⏰ <b>{game_day_text}, {game_hour_msk:02d}:{game_minute_msk:02d}</b>\n"
+                schedule_text += f"    📬 Опрос: {open_day_text}, {open_hour_msk:02d}:{open_minute_msk:02d}\n\n"
 
-        schedule_text += "<i>Опрос закрывается за 30 минут до начала игры.</i>"
+            schedule_text += "<i>Опрос закрывается за 30 минут до начала игры.</i>"
 
-        await message.reply(schedule_text)
+            await message.reply(schedule_text)
 
-        if user:
-            logging.info(
-                f"📅 Запрос расписания от пользователя @{user.username} (ID: {user.id})"
-            )
+            if user:
+                logging.info(
+                    f"📅 Запрос расписания от пользователя @{user.username} (ID: {user.id})"
+                )
+        except Exception as e:
+            logging.error(f"❌ Ошибка в schedule_handler: {e}")
+            await message.reply("❌ Произошла ошибка при получении расписания.")
 
     @router.poll_answer()
     async def handle_poll_answer(
