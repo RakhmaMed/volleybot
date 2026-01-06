@@ -226,9 +226,9 @@ URL вашего сервера для webhook. Если пустой, бот р
       "open_day": "tue",
       "open_hour_utc": 15,
       "open_minute_utc": 0,
-      "close_day": "wed",
-      "close_hour_utc": 12,
-      "close_minute_utc": 0,
+      "game_day": "wed",
+      "game_hour_utc": 12,
+      "game_minute_utc": 0,
       "subs": []
     }
   ]
@@ -262,15 +262,15 @@ URL вашего сервера для webhook. Если пустой, бот р
 
 Минута открытия опроса в UTC.
 
-##### `close_day` (string, по умолчанию: "\*")
+##### `game_day` (string, по умолчанию: "\*")
 
 День недели для закрытия опроса.
 
-##### `close_hour_utc` (integer, 0-23, по умолчанию: 0)
+##### `game_hour_utc` (integer, 0-23, по умолчанию: 0)
 
 Час закрытия опроса в UTC.
 
-##### `close_minute_utc` (integer, 0-59, по умолчанию: 0)
+##### `game_minute_utc` (integer, 0-59, по умолчанию: 0)
 
 Минута закрытия опроса в UTC.
 
@@ -312,9 +312,9 @@ URL вашего сервера для webhook. Если пустой, бот р
       "open_day": "tue",
       "open_hour_utc": 15,
       "open_minute_utc": 0,
-      "close_day": "wed",
-      "close_hour_utc": 12,
-      "close_minute_utc": 0,
+      "game_day": "wed",
+      "game_hour_utc": 12,
+      "game_minute_utc": 0,
       "subs": []
     }
   ]
@@ -346,9 +346,9 @@ URL вашего сервера для webhook. Если пустой, бот р
       "open_day": "tue",
       "open_hour_utc": 15,
       "open_minute_utc": 0,
-      "close_day": "wed",
-      "close_hour_utc": 12,
-      "close_minute_utc": 0,
+      "game_day": "wed",
+      "game_hour_utc": 12,
+      "game_minute_utc": 0,
       "subs": []
     },
     {
@@ -357,9 +357,9 @@ URL вашего сервера для webhook. Если пустой, бот р
       "open_day": "fri",
       "open_hour_utc": 18,
       "open_minute_utc": 0,
-      "close_day": "sun",
-      "close_hour_utc": 6,
-      "close_minute_utc": 0,
+      "game_day": "sun",
+      "game_hour_utc": 6,
+      "game_minute_utc": 0,
       "subs": []
     }
   ]
@@ -405,9 +405,9 @@ UTC_час = МСК_час - 3
   "open_day": "tue",
   "open_hour_utc": 15,
   "open_minute_utc": 0,
-  "close_day": "wed",
-  "close_hour_utc": 12,
-  "close_minute_utc": 0,
+  "game_day": "wed",
+  "game_hour_utc": 12,
+  "game_minute_utc": 0,
   "subs": []
 }
 ```

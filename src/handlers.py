@@ -164,7 +164,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         help_text = (
-            "🏐 <b>Volleyball Bot — Справка</b>\n\n"
+            "🏐 <b>Volleybot — Справка</b>\n\n"
             "<b>Доступные команды:</b>\n"
             "/help — показать эту справку\n"
             "/schedule — показать расписание опросов\n\n"
@@ -216,11 +216,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         for poll in POLLS_SCHEDULE:
             open_day = days_ru.get(poll.open_day, poll.open_day)
-            close_day = days_ru.get(poll.close_day, poll.close_day)
+            game_day = days_ru.get(poll.game_day, poll.game_day)
 
             schedule_text += f"<b>🏐 {poll.name}</b>\n"
             schedule_text += f"   Открытие: {open_day} {poll.open_hour_utc:02d}:{poll.open_minute_utc:02d}\n"
-            schedule_text += f"   Закрытие: {close_day} {poll.close_hour_utc:02d}:{poll.close_minute_utc:02d}\n\n"
+            schedule_text += f"   Игра: {game_day} {poll.game_hour_utc:02d}:{poll.game_minute_utc:02d}\n\n"
 
         await message.reply(schedule_text)
 

@@ -68,9 +68,6 @@ async def on_startup(
     scheduler.start()
     logging.info("Планировщик запущен")
 
-    # Регистрируем команды бота в меню Telegram
-    await setup_bot_commands(bot)
-
     if WEBHOOK_HOST:
         try:
             # Формируем URL с правильным путём

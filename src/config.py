@@ -25,21 +25,21 @@ class PollSchedule(BaseModel):
     open_minute_utc: Annotated[int, Field(ge=0, le=59)] = Field(
         default=0, description="Минута открытия опроса (UTC, 0-59)"
     )
-    close_day: str = Field(
+    game_day: str = Field(
         default="*",
-        description="День закрытия опроса (mon/tue/wed/thu/fri/sat/sun или *)",
+        description="День проведения игры (mon/tue/wed/thu/fri/sat/sun или *)",
     )
-    close_hour_utc: Annotated[int, Field(ge=0, le=23)] = Field(
-        default=0, description="Час закрытия опроса (UTC, 0-23)"
+    game_hour_utc: Annotated[int, Field(ge=0, le=23)] = Field(
+        default=0, description="Час проведения игры (UTC, 0-23)"
     )
-    close_minute_utc: Annotated[int, Field(ge=0, le=59)] = Field(
-        default=0, description="Минута закрытия опроса (UTC, 0-59)"
+    game_minute_utc: Annotated[int, Field(ge=0, le=59)] = Field(
+        default=0, description="Минута проведения игры (UTC, 0-59)"
     )
     subs: list[int] = Field(
         default_factory=list, description="Список ID подписчиков для этого опроса"
     )
 
-    @field_validator("open_day", "close_day")
+    @field_validator("open_day", "game_day")
     @classmethod
     def validate_day(cls, v: str) -> str:
         """Валидация дня недели."""
@@ -161,7 +161,7 @@ def get_config() -> BotConfig:
                 for poll in _config.polls:
                     logging.debug(
                         f"  - {poll.name}: открытие {poll.open_day} {poll.open_hour_utc:02d}:{poll.open_minute_utc:02d} UTC, "
-                        f"закрытие {poll.close_day} {poll.close_hour_utc:02d}:{poll.close_minute_utc:02d} UTC"
+                        f"игра {poll.game_day} {poll.game_hour_utc:02d}:{poll.game_minute_utc:02d} UTC"
                     )
         except FileNotFoundError:
             # Используем дефолтный уровень для ошибки

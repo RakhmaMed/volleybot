@@ -102,10 +102,10 @@ def setup_scheduler(
         open_hour_utc: int = poll_config.open_hour_utc
         open_minute_utc: int = poll_config.open_minute_utc
 
-        # Время закрытия опроса
-        close_day: str = poll_config.close_day
-        close_hour_utc: int = poll_config.close_hour_utc
-        close_minute_utc: int = poll_config.close_minute_utc
+        # Время проведения игры
+        game_day: str = poll_config.game_day
+        game_hour_utc: int = poll_config.game_hour_utc
+        game_minute_utc: int = poll_config.game_minute_utc
 
         # === Задача открытия опроса ===
         open_job_id: str = f"poll_open_{idx}"
@@ -149,14 +149,28 @@ def setup_scheduler(
         # === Задача закрытия опроса ===
         close_job_id: str = f"poll_close_{idx}"
 
+        # Закрываем опрос за 30 минут до игры
+        total_close_minutes = (game_hour_utc * 60 + game_minute_utc - 30) % (24 * 60)
+        close_hour_utc = total_close_minutes // 60
+        close_minute_utc = total_close_minutes % 60
+        current_close_day = game_day
+
         close_trigger_kwargs: dict[str, Any] = {
             "hour": close_hour_utc,
             "minute": close_minute_utc,
             "timezone": "UTC",
         }
 
-        if close_day != "*":
-            close_trigger_kwargs["day_of_week"] = close_day
+        if game_day != "*":
+            # Если время закрытия перешло на предыдущий день, корректируем день недели
+            if game_hour_utc * 60 + game_minute_utc < 30:
+                days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+                try:
+                    day_idx = days.index(game_day)
+                    current_close_day = days[(day_idx - 1) % 7]
+                except ValueError:
+                    pass
+            close_trigger_kwargs["day_of_week"] = current_close_day
 
         close_job: Callable[[], Awaitable[None]] = create_close_poll_job(
             bot, poll_name, poll_service
@@ -170,13 +184,13 @@ def setup_scheduler(
             replace_existing=True,
         )
 
-        if close_day == "*":
+        if game_day == "*":
             logging.info(
-                f"  🔒 ЗАКРЫТИЕ: Ежедневно {close_hour_utc:02d}:{close_minute_utc:02d} UTC - {poll_name}"
+                f"  🔒 ЗАКРЫТИЕ: Ежедневно {close_hour_utc:02d}:{close_minute_utc:02d} UTC (игра в {game_hour_utc:02d}:{game_minute_utc:02d}) - {poll_name}"
             )
         else:
             logging.info(
-                f"  🔒 ЗАКРЫТИЕ: {close_day.upper()} {close_hour_utc:02d}:{close_minute_utc:02d} UTC - {poll_name}"
+                f"  🔒 ЗАКРЫТИЕ: {current_close_day.upper()} {close_hour_utc:02d}:{close_minute_utc:02d} UTC (игра {game_day.upper()} в {game_hour_utc:02d}:{game_minute_utc:02d}) - {poll_name}"
             )
 
     logging.info(f"✅ Планировщик настроен: {len(POLLS_SCHEDULE) * 2} задач добавлено")

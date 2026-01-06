@@ -40,9 +40,9 @@
       "open_day": "tue",
       "open_hour_utc": 15,
       "open_minute_utc": 0,
-      "close_day": "wed",
-      "close_hour_utc": 12,
-      "close_minute_utc": 0,
+      "game_day": "wed",
+      "game_hour_utc": 12,
+      "game_minute_utc": 0,
       "subs": []
     },
     {
@@ -52,9 +52,9 @@
       "open_day": "fri",
       "open_hour_utc": 18,
       "open_minute_utc": 0,
-      "close_day": "sun",
-      "close_hour_utc": 6,
-      "close_minute_utc": 0,
+      "game_day": "sun",
+      "game_hour_utc": 6,
+      "game_minute_utc": 0,
       "subs": []
     }
   ],

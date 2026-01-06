@@ -37,9 +37,9 @@ def temp_config_file(tmp_path: Path) -> Path:
                 "open_day": "mon",
                 "open_hour_utc": 10,
                 "open_minute_utc": 0,
-                "close_day": "tue",
-                "close_hour_utc": 10,
-                "close_minute_utc": 0,
+                "game_day": "tue",
+                "game_hour_utc": 10,
+                "game_minute_utc": 0,
             }
         ],
     }
