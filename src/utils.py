@@ -26,7 +26,7 @@ _RATE_LIMIT_CACHE: dict[int, list[float]] = defaultdict(list)
 
 # Настройки rate limiting
 RATE_LIMIT_WINDOW = 60  # Окно в секундах
-RATE_LIMIT_MAX_REQUESTS = 10  # Максимум запросов в окне
+RATE_LIMIT_MAX_REQUESTS = 20  # Максимум запросов в окне
 
 
 def save_error_dump(

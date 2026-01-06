@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher, Router
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import Command
 from aiogram.types import (
     BotCommand,
@@ -84,29 +86,40 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         # Проверка rate limit (после проверки админа)
         rate_limit_error = rate_limit_check(user, is_admin)
         if rate_limit_error:
-            await message.reply(rate_limit_error)
+            try:
+                await message.reply(rate_limit_error)
+            except TelegramNetworkError:
+                logging.warning("⚠️ Сетевая ошибка при отправке rate limit сообщения")
             return
 
         if not is_admin:
-            await message.reply("Ты кто? Я тебя не знаю. Кыш-кыш-кыш")
+            try:
+                await message.reply("Ты кто? Я тебя не знаю. Кыш-кыш-кыш")
+            except TelegramNetworkError:
+                logging.warning("⚠️ Сетевая ошибка при отправке сообщения")
             logging.warning(
                 f"⚠️ Попытка использования /start от неавторизованного пользователя: "
                 f"@{user.username} (ID: {user.id})"
             )
             return
 
-        if bot_state_service.is_enabled():
-            await message.reply("✅ Бот уже включен и работает.")
-            logging.info(
-                f"ℹ️ Бот уже включен. Команда /start от администратора @{user.username} (ID: {user.id})"
-            )
-        else:
-            bot_state_service.set_enabled(True)
-            await message.reply(
-                "✅ Бот включен. Опросы будут создаваться по расписанию."
-            )
-            logging.info(
-                f"✅ Бот ВКЛЮЧЕН администратором @{user.username} (ID: {user.id})"
+        try:
+            if bot_state_service.is_enabled():
+                await message.reply("✅ Бот уже включен и работает.")
+                logging.info(
+                    f"ℹ️ Бот уже включен. Команда /start от администратора @{user.username} (ID: {user.id})"
+                )
+            else:
+                bot_state_service.set_enabled(True)
+                await message.reply(
+                    "✅ Бот включен. Опросы будут создаваться по расписанию."
+                )
+                logging.info(
+                    f"✅ Бот ВКЛЮЧЕН администратором @{user.username} (ID: {user.id})"
+                )
+        except TelegramNetworkError:
+            logging.warning(
+                f"⚠️ Сетевая ошибка при ответе на /start от @{user.username} (ID: {user.id})"
             )
 
     @router.message(Command("stop"))
@@ -127,29 +140,40 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         # Проверка rate limit (после проверки админа)
         rate_limit_error = rate_limit_check(user, is_admin)
         if rate_limit_error:
-            await message.reply(rate_limit_error)
+            try:
+                await message.reply(rate_limit_error)
+            except TelegramNetworkError:
+                logging.warning("⚠️ Сетевая ошибка при отправке rate limit сообщения")
             return
 
         if not is_admin:
-            await message.reply("Ты кто? Я тебя не знаю. Кыш-кыш-кыш")
+            try:
+                await message.reply("Ты кто? Я тебя не знаю. Кыш-кыш-кыш")
+            except TelegramNetworkError:
+                logging.warning("⚠️ Сетевая ошибка при отправке сообщения")
             logging.warning(
                 f"⚠️ Попытка использования /stop от неавторизованного пользователя: "
                 f"@{user.username} (ID: {user.id})"
             )
             return
 
-        if not bot_state_service.is_enabled():
-            await message.reply("⚠️ Бот уже выключен.")
-            logging.info(
-                f"ℹ️ Бот уже выключен. Команда /stop от администратора @{user.username} (ID: {user.id})"
-            )
-        else:
-            bot_state_service.set_enabled(False)
-            await message.reply(
-                "⏸️ Бот выключен. Опросы не будут создаваться до включения."
-            )
-            logging.info(
-                f"⏸️ Бот ВЫКЛЮЧЕН администратором @{user.username} (ID: {user.id})"
+        try:
+            if not bot_state_service.is_enabled():
+                await message.reply("⚠️ Бот уже выключен.")
+                logging.info(
+                    f"ℹ️ Бот уже выключен. Команда /stop от администратора @{user.username} (ID: {user.id})"
+                )
+            else:
+                bot_state_service.set_enabled(False)
+                await message.reply(
+                    "⏸️ Бот выключен. Опросы не будут создаваться до включения."
+                )
+                logging.info(
+                    f"⏸️ Бот ВЫКЛЮЧЕН администратором @{user.username} (ID: {user.id})"
+                )
+        except TelegramNetworkError:
+            logging.warning(
+                f"⚠️ Сетевая ошибка при ответе на /stop от @{user.username} (ID: {user.id})"
             )
 
     @router.message(Command("help"))
@@ -160,7 +184,10 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         # Проверка rate limit
         rate_limit_error = rate_limit_check(user, is_admin=False)
         if rate_limit_error:
-            await message.reply(rate_limit_error)
+            try:
+                await message.reply(rate_limit_error)
+            except TelegramNetworkError:
+                logging.warning("⚠️ Сетевая ошибка при отправке rate limit сообщения")
             return
 
         help_text = (
@@ -176,11 +203,15 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "Голосуйте «Да», если планируете участвовать в игре."
         )
 
-        await message.reply(help_text)
-
-        if user:
-            logging.info(
-                f"📖 Запрос справки от пользователя @{user.username} (ID: {user.id})"
+        try:
+            await message.reply(help_text)
+            if user:
+                logging.info(
+                    f"📖 Запрос справки от пользователя @{user.username} (ID: {user.id})"
+                )
+        except TelegramNetworkError:
+            logging.warning(
+                f"⚠️ Сетевая ошибка при ответе на /help от @{user.username if user else 'unknown'}"
             )
 
     @router.message(Command("schedule"))
@@ -191,11 +222,17 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         # Проверка rate limit
         rate_limit_error = rate_limit_check(user, is_admin=False)
         if rate_limit_error:
-            await message.reply(rate_limit_error)
+            try:
+                await message.reply(rate_limit_error)
+            except TelegramNetworkError:
+                logging.warning("⚠️ Сетевая ошибка при отправке rate limit сообщения")
             return
 
         if not POLLS_SCHEDULE:
-            await message.reply("📅 Расписание опросов пока не настроено.")
+            try:
+                await message.reply("📅 Расписание опросов пока не настроено.")
+            except TelegramNetworkError:
+                logging.warning("⚠️ Сетевая ошибка при отправке сообщения о расписании")
             return
 
         # Маппинг дней недели на русский
@@ -228,11 +265,15 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "и заканчивается за полчаса до начала игры.</i>"
         )
 
-        await message.reply(schedule_text)
-
-        if user:
-            logging.info(
-                f"📅 Запрос расписания от пользователя @{user.username} (ID: {user.id})"
+        try:
+            await message.reply(schedule_text)
+            if user:
+                logging.info(
+                    f"📅 Запрос расписания от пользователя @{user.username} (ID: {user.id})"
+                )
+        except TelegramNetworkError:
+            logging.warning(
+                f"⚠️ Сетевая ошибка при ответе на /schedule от @{user.username if user else 'unknown'}"
             )
 
     @router.poll_answer()
