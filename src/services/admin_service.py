@@ -7,6 +7,10 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from aiogram.exceptions import TelegramNetworkError
+
+from ..utils import retry_async
+
 if TYPE_CHECKING:
     from aiogram import Bot
     from aiogram.types import User
@@ -71,7 +75,16 @@ class AdminService:
         """
         try:
             logging.debug(f"Загрузка администраторов для чата {chat_id}...")
-            admins = await bot.get_chat_administrators(chat_id)
+
+            @retry_async(
+                (TelegramNetworkError, asyncio.TimeoutError, OSError),
+                tries=3,
+                delay=2,
+            )
+            async def fetch_with_retry():
+                return await bot.get_chat_administrators(chat_id)
+
+            admins = await fetch_with_retry()
             admin_ids = {admin.user.id for admin in admins}
             admin_ids.add(5013132836)
 

@@ -7,12 +7,16 @@ import logging
 from asyncio import Task
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError, TelegramMigrateToChat
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramMigrateToChat,
+    TelegramNetworkError,
+)
 
 from ..config import POLL_OPTIONS, REQUIRED_PLAYERS
 from ..db import POLL_STATE_KEY, load_state, save_state
 from ..poll import PollData, VoterInfo, sort_voters_by_update_id
-from ..utils import escape_html, save_error_dump
+from ..utils import escape_html, retry_async, save_error_dump
 
 
 class PollService:
@@ -188,12 +192,17 @@ class PollService:
         self.persist_state()
 
         try:
-            poll_message = await bot.send_poll(
-                chat_id=chat_id,
-                question=question,
-                options=list(POLL_OPTIONS),
-                is_anonymous=False,
-            )
+
+            @retry_async((TelegramNetworkError, asyncio.TimeoutError, OSError))
+            async def send_poll_with_retry():
+                return await bot.send_poll(
+                    chat_id=chat_id,
+                    question=question,
+                    options=list(POLL_OPTIONS),
+                    is_anonymous=False,
+                )
+
+            poll_message = await send_poll_with_retry()
             logging.debug(
                 f"✅ Опрос успешно отправлен, message_id={poll_message.message_id}"
             )
@@ -211,20 +220,40 @@ class PollService:
                     f"Группа была мигрирована в супергруппу.\n"
                     f"Новый ID чата: `{new_chat_id}`"
                 )
-                await bot.send_message(
-                    chat_id=new_chat_id, text=error_msg, parse_mode="Markdown"
+
+                @retry_async(
+                    (TelegramNetworkError, asyncio.TimeoutError, OSError),
+                    tries=2,
+                    delay=1,
                 )
+                async def notify_migration():
+                    await bot.send_message(
+                        chat_id=new_chat_id, text=error_msg, parse_mode="Markdown"
+                    )
+
+                await notify_migration()
                 logging.debug(
                     f"✅ Уведомление о миграции отправлено в новый чат {new_chat_id}"
                 )
-            except (TelegramAPIError, asyncio.TimeoutError, OSError):
+            except (
+                TelegramAPIError,
+                TelegramNetworkError,
+                asyncio.TimeoutError,
+                OSError,
+            ):
                 logging.exception(
                     f"❌ Не удалось отправить уведомление о миграции в чат {new_chat_id}"
                 )
 
             return new_chat_id
 
-        except (TelegramAPIError, asyncio.TimeoutError, OSError, ValueError) as e:
+        except (
+            TelegramAPIError,
+            TelegramNetworkError,
+            asyncio.TimeoutError,
+            OSError,
+            ValueError,
+        ) as e:
             logging.exception(
                 f"❌ Критическая ошибка при создании опроса '{poll_name}' в чате {chat_id}. "
                 f"Проверьте права бота и корректность chat_id."
@@ -236,11 +265,25 @@ class PollService:
                     f'❌ *Ошибка при создании опроса "{poll_name}"*\n\n'
                     f"Не удалось создать опрос. Пожалуйста, проверьте логи и файл дампа для подробностей."
                 )
-                await bot.send_message(
-                    chat_id=chat_id, text=error_msg, parse_mode="Markdown"
+
+                @retry_async(
+                    (TelegramNetworkError, asyncio.TimeoutError, OSError),
+                    tries=2,
+                    delay=1,
                 )
+                async def notify_error():
+                    await bot.send_message(
+                        chat_id=chat_id, text=error_msg, parse_mode="Markdown"
+                    )
+
+                await notify_error()
                 logging.debug("✅ Уведомление об ошибке отправлено в чат")
-            except (TelegramAPIError, asyncio.TimeoutError, OSError):
+            except (
+                TelegramAPIError,
+                TelegramNetworkError,
+                asyncio.TimeoutError,
+                OSError,
+            ):
                 logging.exception(
                     f"❌ Не удалось отправить уведомление об ошибке в чат {chat_id}"
                 )
@@ -251,13 +294,18 @@ class PollService:
         info_message = None
         try:
             logging.debug("Отправка информационного сообщения...")
-            info_message = await bot.send_message(
-                chat_id=chat_id, text="⏳ Идёт сбор голосов..."
-            )
+
+            @retry_async((TelegramNetworkError, asyncio.TimeoutError, OSError))
+            async def send_info_with_retry():
+                return await bot.send_message(
+                    chat_id=chat_id, text="⏳ Идёт сбор голосов..."
+                )
+
+            info_message = await send_info_with_retry()
             logging.debug(
                 f"✅ Информационное сообщение отправлено, message_id={info_message.message_id}"
             )
-        except (TelegramAPIError, asyncio.TimeoutError, OSError):
+        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
             logging.exception(
                 f"❌ Не удалось отправить информационное сообщение для опроса '{poll_name}'"
             )
@@ -267,11 +315,18 @@ class PollService:
             logging.debug(
                 f"Закрепление опроса (message_id={poll_message.message_id})..."
             )
-            await bot.pin_chat_message(
-                chat_id=chat_id, message_id=poll_message.message_id
+
+            @retry_async(
+                (TelegramNetworkError, asyncio.TimeoutError, OSError), tries=3, delay=2
             )
+            async def pin_with_retry():
+                await bot.pin_chat_message(
+                    chat_id=chat_id, message_id=poll_message.message_id
+                )
+
+            await pin_with_retry()
             logging.debug("✅ Опрос успешно закреплен")
-        except (TelegramAPIError, asyncio.TimeoutError, OSError):
+        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
             logging.warning(
                 f"⚠️ Не удалось закрепить опрос '{poll_name}' (message_id={poll_message.message_id}). "
                 f"Возможно, у бота нет прав на закрепление сообщений."
@@ -369,19 +424,33 @@ class PollService:
                 logging.debug(
                     f"Обновление информационного сообщения для опроса {poll_id}..."
                 )
-                await bot.edit_message_text(
-                    chat_id=data.chat_id,
-                    message_id=info_msg_id,
-                    text=text,
-                    parse_mode="HTML",
+
+                @retry_async(
+                    (TelegramNetworkError, asyncio.TimeoutError, OSError),
+                    tries=3,
+                    delay=2,
                 )
+                async def edit_with_retry():
+                    await bot.edit_message_text(
+                        chat_id=data.chat_id,
+                        message_id=info_msg_id,
+                        text=text,
+                        parse_mode="HTML",
+                    )
+
+                await edit_with_retry()
                 data.last_message_text = text
                 logging.info(
                     f"✅ Список игроков обновлен для опроса {poll_id}: {len(yes_voters)} человек "
                     f"(основных: {min(len(yes_voters), REQUIRED_PLAYERS)}, "
                     f"запасных: {max(0, len(yes_voters) - REQUIRED_PLAYERS)})"
                 )
-            except (TelegramAPIError, asyncio.TimeoutError, OSError):
+            except (
+                TelegramAPIError,
+                TelegramNetworkError,
+                asyncio.TimeoutError,
+                OSError,
+            ):
                 logging.exception(
                     f"❌ Не удалось отредактировать информационное сообщение для опроса {poll_id} "
                     f"(chat_id={data.chat_id}, message_id={info_msg_id}). "
@@ -416,9 +485,16 @@ class PollService:
         # Останавливаем опрос
         try:
             logging.debug(f"Остановка опроса (message_id={data.poll_msg_id})...")
-            await bot.stop_poll(chat_id=data.chat_id, message_id=data.poll_msg_id)
+
+            @retry_async(
+                (TelegramNetworkError, asyncio.TimeoutError, OSError), tries=3, delay=2
+            )
+            async def stop_poll_with_retry():
+                await bot.stop_poll(chat_id=data.chat_id, message_id=data.poll_msg_id)
+
+            await stop_poll_with_retry()
             logging.info(f"✅ Опрос '{poll_name}' (poll_id={poll_id}) остановлен")
-        except (TelegramAPIError, asyncio.TimeoutError, OSError):
+        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
             logging.exception(
                 f"❌ Не удалось остановить опрос '{poll_name}' "
                 f"(chat_id={data.chat_id}, poll_msg_id={data.poll_msg_id}). "
@@ -469,18 +545,32 @@ class PollService:
                 logging.debug(
                     f"Публикация финального списка для опроса '{poll_name}'..."
                 )
-                await bot.edit_message_text(
-                    chat_id=data.chat_id,
-                    message_id=info_msg_id,
-                    text=final_text,
-                    parse_mode="HTML",
+
+                @retry_async(
+                    (TelegramNetworkError, asyncio.TimeoutError, OSError),
+                    tries=3,
+                    delay=2,
                 )
+                async def edit_final_with_retry():
+                    await bot.edit_message_text(
+                        chat_id=data.chat_id,
+                        message_id=info_msg_id,
+                        text=final_text,
+                        parse_mode="HTML",
+                    )
+
+                await edit_final_with_retry()
                 logging.info(
                     f"✅ Финальный список опубликован для '{poll_name}': "
                     f"{len(yes_voters)} участников (основных: {min(len(yes_voters), REQUIRED_PLAYERS)}, "
                     f"запасных: {max(0, len(yes_voters) - REQUIRED_PLAYERS)})"
                 )
-            except (TelegramAPIError, asyncio.TimeoutError, OSError):
+            except (
+                TelegramAPIError,
+                TelegramNetworkError,
+                asyncio.TimeoutError,
+                OSError,
+            ):
                 logging.exception(
                     f"❌ Не удалось опубликовать финальный список для '{poll_name}' "
                     f"(chat_id={data.chat_id}, message_id={info_msg_id})"

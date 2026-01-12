@@ -14,7 +14,7 @@ import ssl
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 from aiohttp.typedefs import Handler
@@ -39,7 +39,12 @@ from .db import init_db
 from .handlers import register_handlers, setup_bot_commands
 from .scheduler import setup_scheduler
 from .services import AdminService, BotStateService, PollService
-from .utils import generate_webhook_secret_path, is_telegram_ip, load_players
+from .utils import (
+    generate_webhook_secret_path,
+    is_telegram_ip,
+    load_players,
+    retry_async,
+)
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -87,15 +92,25 @@ async def on_startup(
             logging.debug(f"Попытка установки webhook на URL: {effective_url}")
 
             # Устанавливаем webhook с секретным токеном если настроен
-            if WEBHOOK_SECRET:
-                await bot.set_webhook(effective_url, secret_token=WEBHOOK_SECRET)
-                logging.info(
-                    f"✅ Webhook успешно установлен: {effective_url} (с секретным токеном)"
-                )
-            else:
-                await bot.set_webhook(effective_url)
-                logging.info(f"✅ Webhook успешно установлен: {effective_url}")
-        except (TelegramAPIError, asyncio.TimeoutError, OSError):
+            @retry_async(
+                (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError),
+                tries=None,
+                delay=2,
+                backoff=2.0,
+                max_delay=60.0,
+            )
+            async def set_webhook_with_retry():
+                if WEBHOOK_SECRET:
+                    await bot.set_webhook(effective_url, secret_token=WEBHOOK_SECRET)
+                    logging.info(
+                        f"✅ Webhook успешно установлен: {effective_url} (с секретным токеном)"
+                    )
+                else:
+                    await bot.set_webhook(effective_url)
+                    logging.info(f"✅ Webhook успешно установлен: {effective_url}")
+
+            await set_webhook_with_retry()
+        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
             logging.exception("❌ Не удалось установить webhook")
     else:
         logging.info("Режим polling активен")
@@ -117,8 +132,20 @@ async def on_shutdown(
 
     if WEBHOOK_HOST:
         logging.debug("Удаление webhook...")
-        await bot.delete_webhook()
-        logging.info("✅ Webhook удален")
+
+        @retry_async(
+            (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError),
+            tries=3,
+            delay=2,
+        )
+        async def delete_webhook_with_retry():
+            await bot.delete_webhook()
+
+        try:
+            await delete_webhook_with_retry()
+            logging.info("✅ Webhook удален")
+        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
+            logging.warning("⚠️ Не удалось удалить webhook при выключении")
 
     logging.debug("Закрытие сессии бота...")
     await bot.session.close()

@@ -17,11 +17,18 @@ from aiogram.types import (
     Update,
 )
 
-from .config import CHAT_ID, POLLS_SCHEDULE, SCHEDULER_TIMEZONE
+from .config import POLLS_SCHEDULE
 from .services import AdminService, BotStateService, PollService
-from .utils import get_player_name, rate_limit_check
+from .utils import get_player_name, rate_limit_check, retry_async
 
 
+@retry_async(
+    (TelegramNetworkError, asyncio.TimeoutError, OSError),
+    tries=None,
+    delay=2,
+    backoff=2.0,
+    max_delay=60.0,
+)
 async def setup_bot_commands(bot: Bot) -> None:
     """
     Устанавливает список команд бота для отображения в меню Telegram.

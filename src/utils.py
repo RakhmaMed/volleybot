@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
+import functools
 import hashlib
 import ipaddress
 import json
@@ -27,6 +29,58 @@ _RATE_LIMIT_CACHE: dict[int, list[float]] = defaultdict(list)
 # Настройки rate limiting
 RATE_LIMIT_WINDOW = 60  # Окно в секундах
 RATE_LIMIT_MAX_REQUESTS = 20  # Максимум запросов в окне
+
+
+def retry_async(
+    exceptions: type[Exception] | tuple[type[Exception], ...],
+    tries: int | None = 3,
+    delay: float = 1.0,
+    backoff: float = 2.0,
+    max_delay: float = 60.0,
+    logger: logging.Logger | None = None,
+):
+    """
+    Декоратор для повторных попыток выполнения асинхронной функции.
+
+    Args:
+        exceptions: Исключение или кортеж исключений для отлова
+        tries: Максимальное количество попыток (0 или None для бесконечности)
+        delay: Начальная задержка между попытками (сек)
+        backoff: Множитель задержки после каждой попытки
+        max_delay: Максимальная задержка между попытками (сек)
+        logger: Логгер для записи предупреждений о попытках
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            _tries, _delay = tries, delay
+            attempt = 1
+            while True:
+                try:
+                    return await func(*args, **kwargs)
+                except exceptions as e:
+                    # Если количество попыток ограничено и мы его достигли
+                    if _tries is not None and _tries > 0 and attempt >= _tries:
+                        raise e
+
+                    tries_left = f"{_tries - attempt}" if _tries and _tries > 0 else "∞"
+                    msg = (
+                        f"⚠️ Ошибка в {func.__name__}: {type(e).__name__}: {e}. "
+                        f"Повтор через {_delay}с... (осталось попыток: {tries_left})"
+                    )
+                    if logger:
+                        logger.warning(msg)
+                    else:
+                        logging.warning(msg)
+
+                    await asyncio.sleep(_delay)
+                    attempt += 1
+                    _delay = min(_delay * backoff, max_delay)
+
+        return wrapper
+
+    return decorator
 
 
 def save_error_dump(
