@@ -152,7 +152,7 @@ class PollService:
                 VoterInfo(id=user_id, name=user_name, update_id=update_id)
             )
 
-        sorted_yes_voters = sort_voters_by_update_id(yes_voters)
+        sorted_yes_voters = sort_voters_by_update_id(yes_voters, data.subs)
         data.yes_voters = sorted_yes_voters
         return sorted_yes_voters
 
@@ -371,7 +371,9 @@ class PollService:
             return
 
         data = self._poll_data[poll_id]
-        yes_voters: list[VoterInfo] = sort_voters_by_update_id(data.yes_voters)
+        yes_voters: list[VoterInfo] = sort_voters_by_update_id(
+            data.yes_voters, data.subs
+        )
         data.yes_voters = yes_voters
 
         # Формируем текст (HTML-разметка)

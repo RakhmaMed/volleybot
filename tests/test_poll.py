@@ -25,6 +25,22 @@ def test_sort_voters_by_update_id_orders_updates():
     assert [v.id for v in sorted_voters] == [3, 1, 2]
 
 
+def test_sort_voters_by_subscription():
+    """Сортировка должна ставить подписчиков в начало списка."""
+    voters: list[VoterInfo] = [
+        VoterInfo(id=1, name="User1", update_id=10),
+        VoterInfo(id=2, name="Sub1", update_id=20),
+        VoterInfo(id=3, name="User2", update_id=5),
+    ]
+    subs = [2]  # Sub1 имеет подписку
+
+    sorted_voters = sort_voters_by_update_id(voters, subs)
+
+    # Sub1 (id=2) должен быть первым, несмотря на update_id=20
+    # Затем User2 (id=3, update_id=5) и User1 (id=1, update_id=10)
+    assert [v.id for v in sorted_voters] == [2, 3, 1]
+
+
 class TestPollService:
     """Тесты для PollService."""
 
@@ -87,14 +103,15 @@ class TestPollService:
             chat_id=123,
             poll_msg_id=456,
             yes_voters=[VoterInfo(id=1, name="User1", update_id=1)],
-            subs=[],
+            subs=[2],  # User2 будет подписчиком
         )
 
-        # Добавляем нового голосующего
+        # Добавляем нового голосующего (подписчика)
         result = service.update_voters("test_id", 2, "User2", 2, True)
         assert len(result) == 2
-        assert result[0].id == 1
-        assert result[1].id == 2
+        # User2 (подписчик) должен быть первым, хотя проголосовал позже (update_id=2)
+        assert result[0].id == 2
+        assert result[1].id == 1
 
         # Убираем голосующего
         result = service.update_voters("test_id", 2, "User2", 3, False)

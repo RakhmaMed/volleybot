@@ -34,6 +34,20 @@ class PollData(BaseModel):
     model_config = {"arbitrary_types_allowed": True, "frozen": False}
 
 
-def sort_voters_by_update_id(voters: list[VoterInfo]) -> list[VoterInfo]:
-    """Возвращает список голосовавших, отсортированный по update_id (порядок событий)."""
-    return sorted(voters, key=lambda v: (v.update_id, v.id))
+def sort_voters_by_update_id(
+    voters: list[VoterInfo], subs: list[int] | None = None
+) -> list[VoterInfo]:
+    """
+    Возвращает список голосовавших, отсортированный по наличию подписки и update_id.
+    Игроки с подпиской всегда отображаются вверху списка.
+    """
+    # Сначала идут игроки с подпиской, затем остальные.
+    # Внутри каждой группы сохраняется порядок голосования (по update_id).
+    return sorted(
+        voters,
+        key=lambda v: (
+            v.id not in (subs or []),
+            v.update_id,
+            v.id,
+        ),
+    )

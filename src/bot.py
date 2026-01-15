@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import ssl
 
 from aiogram import Bot, Dispatcher
@@ -76,10 +77,10 @@ async def on_startup(
     scheduler.start()
     logging.info("Планировщик запущен")
 
-    if WEBHOOK_HOST:
+    if effective_webhook_path:
         try:
             # Формируем URL с правильным путём
-            webhook_path = effective_webhook_path or WEBHOOK_PATH
+            webhook_path = effective_webhook_path
             if WEBHOOK_URL:
                 # Заменяем путь в URL на эффективный
                 from urllib.parse import urlparse, urlunparse
@@ -121,6 +122,7 @@ async def on_shutdown(
     scheduler: AsyncIOScheduler,
     bot_state_service: BotStateService,
     poll_service: PollService,
+    is_webhook: bool = False,
 ) -> None:
     """Выполняется при остановке бота."""
     logging.info("🛑 Начало процедуры остановки бота...")
@@ -130,7 +132,7 @@ async def on_shutdown(
         scheduler.shutdown()
         logging.info("✅ Планировщик остановлен")
 
-    if WEBHOOK_HOST:
+    if is_webhook:
         logging.debug("Удаление webhook...")
 
         @retry_async(
@@ -190,7 +192,9 @@ async def run_polling() -> None:
         await on_startup(bot, scheduler, bot_state_service, poll_service)
 
     async def shutdown_handler():
-        await on_shutdown(bot, scheduler, bot_state_service, poll_service)
+        await on_shutdown(
+            bot, scheduler, bot_state_service, poll_service, is_webhook=False
+        )
 
     dp.startup.register(startup_handler)
     dp.shutdown.register(shutdown_handler)
@@ -201,6 +205,15 @@ async def run_polling() -> None:
 
 def run_webhook() -> None:
     """Запуск в режиме webhook."""
+    # Проверяем наличие сертификатов для webhook
+    if not os.path.exists(WEBHOOK_SSL_CERT) or not os.path.exists(WEBHOOK_SSL_PRIV):
+        logging.warning(
+            f"⚠️ Файлы сертификатов не найдены: cert={WEBHOOK_SSL_CERT}, key={WEBHOOK_SSL_PRIV}"
+        )
+        logging.info("🔄 Переключение в режим polling...")
+        asyncio.run(run_polling())
+        return
+
     logging.info("🚀 Запуск бота в режиме webhook")
     logging.debug(
         f"Webhook настройки: Host={WEBHOOK_HOST}, Port={WEBHOOK_PORT}, Path={WEBHOOK_PATH}"
@@ -239,18 +252,11 @@ def run_webhook() -> None:
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(WEBHOOK_SSL_CERT, WEBHOOK_SSL_PRIV)
         logging.info("✅ SSL сертификаты успешно загружены")
-    except FileNotFoundError:
-        logging.exception(
-            f"❌ Файл сертификата не найден. Убедитесь, что файлы существуют: "
-            f"cert={WEBHOOK_SSL_CERT}, key={WEBHOOK_SSL_PRIV}"
-        )
-        exit(1)
-    except (ssl.SSLError, OSError):
-        logging.exception(
-            f"❌ Не удалось загрузить SSL сертификаты. Проверьте права доступа и формат файлов: "
-            f"cert={WEBHOOK_SSL_CERT}, key={WEBHOOK_SSL_PRIV}"
-        )
-        exit(1)
+    except (ssl.SSLError, OSError, FileNotFoundError) as e:
+        logging.error(f"❌ Ошибка при загрузке SSL сертификатов: {e}")
+        logging.info("🔄 Переключение в режим polling...")
+        asyncio.run(run_polling())
+        return
 
     # Регистрация обработчиков
     register_handlers(dp, bot)
@@ -267,7 +273,9 @@ def run_webhook() -> None:
         )
 
     async def shutdown_handler():
-        await on_shutdown(bot, scheduler, bot_state_service, poll_service)
+        await on_shutdown(
+            bot, scheduler, bot_state_service, poll_service, is_webhook=True
+        )
 
     dp.startup.register(startup_handler)
     dp.shutdown.register(shutdown_handler)
