@@ -402,9 +402,9 @@ class TestGetPlayerName:
     """Тесты для функции get_player_name."""
 
     def test_get_player_name_with_fullname_in_players(self):
-        """Пользователь с fullname в players.json показывает имя и @username."""
+        """Пользователь с fullname в БД показывает имя и @username."""
         user = User(
-            id=185633965,  # ID из players.json с fullname "Кисик"
+            id=185633965,  # ID из БД с fullname "Кисик"
             is_bot=False,
             first_name="Test",
             username="kkiiissik",
@@ -435,7 +435,7 @@ class TestGetPlayerName:
         assert result == "@what_goes_around"
 
     def test_get_player_name_not_in_players_with_username(self):
-        """Пользователь не в players.json, но с username."""
+        """Пользователь не в БД, но с username."""
         user = User(id=999999999, is_bot=False, first_name="Test", username="new_user")
 
         with patch("src.utils.PLAYERS", []):
@@ -487,7 +487,7 @@ class TestGetPlayerName:
         assert result == "Test&lt;&gt;"
 
     def test_get_player_name_empty_fullname_uses_telegram_name(self):
-        """Пустой fullname в players.json - используется имя из Telegram."""
+        """Пустой fullname в БД - используется имя из Telegram."""
         user = User(
             id=123, is_bot=False, first_name="TelegramName", username="testuser"
         )

@@ -168,6 +168,26 @@ def delete_state(key: str) -> None:
         )
 
 
+def get_all_players() -> list[dict[str, Any]]:
+    """Возвращает список всех игроков из базы данных."""
+    try:
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT id, name, fullname, ball_donate, balance FROM players"
+            )
+            players = []
+            for row in cursor.fetchall():
+                player = dict(row)
+                # Преобразуем 0/1 в bool для совместимости с логикой, ожидавшей JSON
+                player["ball_donate"] = bool(player["ball_donate"])
+                players.append(player)
+            return players
+    except sqlite3.Error:
+        logging.exception("❌ Ошибка при получении списка всех игроков")
+        return []
+
+
 def get_players_with_balance() -> list[dict[str, Any]]:
     """Возвращает список игроков с ненулевым балансом."""
     try:

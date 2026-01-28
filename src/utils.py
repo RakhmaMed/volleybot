@@ -257,62 +257,38 @@ def is_telegram_ip(ip_str: str) -> bool:
 
 def load_players() -> None:
     """
-    Загружает список игроков из файла players.json при старте приложения.
+    Загружает список игроков из базы данных при старте приложения.
     Результат кэшируется в глобальной переменной PLAYERS.
     """
     global PLAYERS
 
-    # Определяем путь к файлу заранее
-    script_dir: Path = Path(__file__).parent.parent
-    players_file: Path = script_dir / "players.json"
-
-    logging.debug("Загрузка списка игроков из players.json...")
+    logging.debug("Загрузка списка игроков из базы данных...")
     try:
-        if not players_file.exists():
-            logging.warning(
-                f"⚠️ Файл players.json не найден по пути {players_file}. "
-                f"Список игроков будет пустым. Будут использоваться имена из Telegram."
-            )
-            PLAYERS = []
-            return
+        from .db import get_all_players
 
-        with open(players_file, "r", encoding="utf-8") as f:
-            data: list[dict[str, Any]] = json.load(f)
+        PLAYERS = get_all_players()
+        logging.info(f"✅ Загружено {len(PLAYERS)} игроков из БД")
 
-        PLAYERS = data
-        logging.info(f"✅ Загружено {len(PLAYERS)} игроков из {players_file}")
         # Логируем детали на уровне DEBUG
         ball_donors = sum(1 for p in PLAYERS if p.get("ball_donate") is True)
         if ball_donors > 0:
             logging.debug(f"  Донатов мячей: {ball_donors}")
-    except OSError:
+    except Exception:
         logging.exception(
-            f"❌ Ошибка ввода-вывода при загрузке {players_file}. "
-            f"Проверьте существование и права доступа к файлу. Список игроков будет пустым."
-        )
-        PLAYERS = []
-    except json.JSONDecodeError:
-        logging.exception(
-            f"❌ Ошибка парсинга JSON в файле {players_file}. "
-            f"Проверьте синтаксис файла. Список игроков будет пустым."
-        )
-        PLAYERS = []
-    except (KeyError, TypeError):
-        logging.exception(
-            f"❌ Неверная структура данных в файле {players_file}. "
-            f"Проверьте формат данных. Список игроков будет пустым."
+            "❌ Ошибка при загрузке списка игроков из БД. Список игроков будет пустым."
         )
         PLAYERS = []
 
 
 def get_player_name(user: User, subs: list[int] | None = None) -> str:
     """
-    Получает имя игрока по ID из players.json, используя fullname если он есть.
+    Получает имя игрока по ID из базы данных (через кэш PLAYERS), используя fullname если он есть.
     Если fullname пустой или не найден, возвращает имя из Telegram.
     Возвращает текст с упоминанием @username для открытия профиля (не чата).
 
     Args:
         user: Объект пользователя Telegram
+        subs: Список ID пользователей с подпиской
 
     Returns:
         Текст с именем игрока и упоминанием @username (кликабельно, открывает профиль)
