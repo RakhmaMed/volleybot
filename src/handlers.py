@@ -374,6 +374,50 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 f"⚠️ Сетевая ошибка при ответе на /balance от @{user.username if user else 'unknown'}"
             )
 
+    @router.message(Command("webhookinfo"))
+    async def webhookinfo_handler(message: Message) -> None:
+        """Команда для проверки статуса webhook (только для администратора)."""
+        user = message.from_user
+        if user is None:
+            return
+
+        # Получаем сервисы из workflow_data
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+
+        # Проверяем, является ли пользователь администратором
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+
+        if not is_admin:
+            return
+
+        try:
+            webhook_info = await bot.get_webhook_info()
+            info_text = (
+                f"🔍 <b>Webhook Info</b>\n\n"
+                f"URL: <code>{webhook_info.url}</code>\n"
+                f"Pending updates: {webhook_info.pending_update_count}\n"
+                f"Max connections: {webhook_info.max_connections}\n"
+            )
+
+            if webhook_info.last_error_date:
+                info_text += f"\n⚠️ Last error: {webhook_info.last_error_message}\n"
+                info_text += f"Last error date: {webhook_info.last_error_date}\n"
+
+            if webhook_info.allowed_updates:
+                info_text += (
+                    f"\nAllowed updates: {', '.join(webhook_info.allowed_updates)}"
+                )
+            else:
+                info_text += f"\n✅ All update types allowed"
+
+            await message.reply(info_text)
+            logging.info(
+                f"🔍 Webhook info запрошен админом @{user.username} (ID: {user.id})"
+            )
+        except Exception as e:
+            await message.reply(f"❌ Ошибка получения webhook info: {e}")
+            logging.error(f"❌ Ошибка при получении webhook info: {e}")
+
     @router.message(Command("pay"))
     async def pay_handler(message: Message) -> None:
         """Команда для изменения баланса игрока (только для администратора)."""
@@ -461,6 +505,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                                 else f"ID: {p['id']}"
                             )
                             callback_data = f"pay_select:{p['id']}:{amount}"
+                            logging.info(
+                                f"🔘 Создана кнопка: text='{p_name}', callback_data='{callback_data}'"
+                            )
                             keyboard.append(
                                 [
                                     InlineKeyboardButton(
@@ -470,9 +517,15 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                             )
 
                         reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-                        await message.reply(
+                        logging.info(
+                            f"📤 Отправка сообщения с {len(keyboard)} кнопками для выбора игрока"
+                        )
+                        sent_message = await message.reply(
                             f"❓ Найдено несколько игроков ({len(players)}). Выберите нужного:",
                             reply_markup=reply_markup,
+                        )
+                        logging.info(
+                            f"✅ Сообщение с кнопками отправлено, message_id={sent_message.message_id}"
                         )
                         return
 
