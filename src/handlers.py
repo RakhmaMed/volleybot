@@ -518,11 +518,14 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 )
 
     @router.callback_query(lambda c: c.data and c.data.startswith("pay_select:"))
-    async def process_pay_select(callback_query: CallbackQuery):
+    async def process_pay_select(callback_query: CallbackQuery, bot: Bot):
         """Обработка выбора игрока из списка для изменения баланса."""
         user = callback_query.from_user
         if user is None:
+            logging.error("❌ Callback query without user")
             return
+
+        logging.info(f"Обработка pay_select от {user.id}: {callback_query.data}")
 
         # Получаем сервисы из workflow_data
         admin_service: AdminService = dp.workflow_data["admin_service"]
@@ -533,6 +536,10 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         )
 
         if not is_admin:
+            logging.warning(
+                f"🚫 Попытка несанкционированного изменения баланса через callback: "
+                f"@{user.username} (ID: {user.id})"
+            )
             await callback_query.answer(
                 "❌ У вас нет прав для этого действия.", show_alert=True
             )
@@ -544,8 +551,12 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             await callback_query.answer("❌ Ошибка данных.")
             return
 
-        target_user_id = int(data_parts[1])
-        amount = int(data_parts[2])
+        try:
+            target_user_id = int(data_parts[1])
+            amount = int(data_parts[2])
+        except ValueError:
+            await callback_query.answer("❌ Ошибка формата данных.")
+            return
 
         if update_player_balance(target_user_id, amount):
             new_balance_data = get_player_balance(target_user_id)
@@ -557,11 +568,17 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             if new_balance_data:
                 p_name = f"<b>{new_balance_data['fullname'] or new_balance_data['name'] or f'ID: {target_user_id}'}</b>"
 
-            await callback_query.message.edit_text(
-                f"✅ Баланс {p_name} изменен на {amount} ₽.\n"
-                f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
-                parse_mode="HTML",
-            )
+            try:
+                await callback_query.message.edit_text(
+                    f"✅ Баланс {p_name} изменен на {amount} ₽.\n"
+                    f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
+                    parse_mode="HTML",
+                )
+                await callback_query.answer("✅ Баланс обновлен")
+            except Exception as e:
+                logging.error(f"❌ Ошибка при редактировании сообщения: {e}")
+                await callback_query.answer("✅ Баланс обновлен")
+
             logging.info(
                 f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс через меню: "
                 f"ID={target_user_id}, сумма={amount}"

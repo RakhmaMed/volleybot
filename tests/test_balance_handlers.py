@@ -330,8 +330,18 @@ class TestPayCallback:
 
         mock_update.assert_called_with(1, 500)
         assert bot.called
-        method = bot.call_args.args[0]
-        assert "Баланс <b>Alim B.</b> изменен на 500 ₽" in method.text
+        # Проверяем вызов редактирования сообщения (EditMessageText)
+        # Теперь вызовов несколько (edit_text и answer), поэтому ищем нужный в call_args_list
+        edit_call = next(
+            (
+                c
+                for c in bot.call_args_list
+                if "Баланс <b>Alim B.</b>" in getattr(c.args[0], "text", "")
+            ),
+            None,
+        )
+        assert edit_call is not None
+        assert "Баланс <b>Alim B.</b> изменен на 500 ₽" in edit_call.args[0].text
 
 
 @pytest.mark.asyncio
