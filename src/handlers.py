@@ -518,14 +518,28 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 )
 
     @router.callback_query(lambda c: c.data and c.data.startswith("pay_select:"))
-    async def process_pay_select(callback_query: CallbackQuery, bot: Bot):
+    async def process_pay_select(callback_query: CallbackQuery):
         """Обработка выбора игрока из списка для изменения баланса."""
+        logging.info(f"🔔 Получен callback query: {callback_query.data}")
+
         user = callback_query.from_user
         if user is None:
-            logging.error("❌ Callback query without user")
+            logging.error("❌ callback_query.from_user is None")
+            await callback_query.answer(
+                "❌ Ошибка: нет информации о пользователе", show_alert=True
+            )
             return
 
-        logging.info(f"Обработка pay_select от {user.id}: {callback_query.data}")
+        if callback_query.message is None:
+            logging.error("❌ callback_query.message is None")
+            await callback_query.answer(
+                "❌ Ошибка: сообщение не найдено", show_alert=True
+            )
+            return
+
+        logging.info(
+            f"🔔 Callback от @{user.username} (ID: {user.id}), chat_id={callback_query.message.chat.id}"
+        )
 
         # Получаем сервисы из workflow_data
         admin_service: AdminService = dp.workflow_data["admin_service"]
@@ -536,10 +550,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         )
 
         if not is_admin:
-            logging.warning(
-                f"🚫 Попытка несанкционированного изменения баланса через callback: "
-                f"@{user.username} (ID: {user.id})"
-            )
+            logging.warning(f"⚠️ Неадминский доступ к callback от @{user.username}")
             await callback_query.answer(
                 "❌ У вас нет прав для этого действия.", show_alert=True
             )
@@ -548,15 +559,21 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         # Парсим callback_data: pay_select:player_id:amount
         data_parts = callback_query.data.split(":")
         if len(data_parts) != 3:
-            await callback_query.answer("❌ Ошибка данных.")
+            logging.error(f"❌ Неверный формат callback_data: {callback_query.data}")
+            await callback_query.answer("❌ Ошибка данных.", show_alert=True)
             return
 
         try:
             target_user_id = int(data_parts[1])
             amount = int(data_parts[2])
-        except ValueError:
-            await callback_query.answer("❌ Ошибка формата данных.")
+        except ValueError as e:
+            logging.error(f"❌ Ошибка парсинга данных: {e}, data={callback_query.data}")
+            await callback_query.answer("❌ Ошибка формата данных.", show_alert=True)
             return
+
+        logging.info(
+            f"📝 Обработка выбора: target_user_id={target_user_id}, amount={amount}"
+        )
 
         if update_player_balance(target_user_id, amount):
             new_balance_data = get_player_balance(target_user_id)
@@ -574,19 +591,28 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
                     parse_mode="HTML",
                 )
-                await callback_query.answer("✅ Баланс обновлен")
+                await callback_query.answer()
+                logging.info(
+                    f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс через меню: "
+                    f"ID={target_user_id}, сумма={amount}"
+                )
             except Exception as e:
                 logging.error(f"❌ Ошибка при редактировании сообщения: {e}")
-                await callback_query.answer("✅ Баланс обновлен")
-
-            logging.info(
-                f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс через меню: "
-                f"ID={target_user_id}, сумма={amount}"
-            )
+                await callback_query.answer("✅ Баланс обновлен", show_alert=True)
         else:
+            logging.error(f"❌ Не удалось обновить баланс для ID={target_user_id}")
             await callback_query.answer(
                 "❌ Не удалось обновить баланс.", show_alert=True
             )
+
+    @router.callback_query()
+    async def debug_all_callbacks(callback_query: CallbackQuery):
+        """Debug: логирует ВСЕ callback query для отладки."""
+        logging.info(
+            f"🔍 DEBUG: Получен неизвестный callback_query: data='{callback_query.data}', "
+            f"from_user={callback_query.from_user.id if callback_query.from_user else None}"
+        )
+        await callback_query.answer("⚠️ Неизвестное действие")
 
     @router.poll_answer()
     async def handle_poll_answer(
