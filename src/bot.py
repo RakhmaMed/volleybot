@@ -14,10 +14,8 @@ import ssl
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
-from aiogram.types import Update
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 from aiohttp.typedefs import Handler
@@ -53,32 +51,6 @@ logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format=LOG_FORMAT,
 )
-
-
-class LoggingMiddleware(BaseMiddleware):
-    """Middleware для логирования всех входящих updates."""
-
-    async def __call__(self, handler, event: Update, data: dict):
-        """Логирует каждый update перед обработкой."""
-        update_type = "unknown"
-        update_info = ""
-
-        if event.message:
-            update_type = "message"
-            update_info = f"text='{event.message.text}'"
-        elif event.callback_query:
-            update_type = "callback_query"
-            update_info = f"data='{event.callback_query.data}'"
-        elif event.poll_answer:
-            update_type = "poll_answer"
-            update_info = f"poll_id={event.poll_answer.poll_id}"
-
-        logging.info(
-            f"📥 Incoming update id={event.update_id}: type={update_type}, {update_info}"
-        )
-
-        # Продолжаем обработку
-        return await handler(event, data)
 
 
 async def on_startup(
@@ -129,11 +101,24 @@ async def on_startup(
                 max_delay=60.0,
             )
             async def set_webhook_with_retry():
-                # Явно указываем все типы updates, которые должен получать бот
+                # ВАЖНО: Явно указываем все типы updates, которые должен получать бот
+                #
+                # Проблема: Если параметр allowed_updates не указан при вызове set_webhook(),
+                # Telegram API сохраняет список из ПРЕДЫДУЩЕЙ установки webhook.
+                # Это может привести к тому, что некоторые типы updates (например, callback_query)
+                # не будут отправляться на webhook, даже если обработчики для них зарегистрированы.
+                #
+                # Симптомы:
+                # - Команды работают (/start, /pay и т.д.)
+                # - Inline кнопки создаются и отображаются
+                # - При нажатии на кнопку ничего не происходит
+                # - В логах НЕ появляется "Incoming update" с типом callback_query
+                #
+                # Решение: Всегда явно указывать allowed_updates при установке webhook
                 allowed_updates = [
-                    "message",
-                    "callback_query",  # КРИТИЧНО: без этого кнопки не работают!
-                    "poll_answer",
+                    "message",  # Обычные текстовые сообщения и команды
+                    "callback_query",  # Нажатия на inline кнопки (КРИТИЧНО!)
+                    "poll_answer",  # Ответы пользователей на опросы
                 ]
 
                 if WEBHOOK_SECRET:
@@ -229,9 +214,6 @@ async def run_polling() -> None:
     # Планировщик задач
     scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
 
-    # Регистрируем middleware для логирования
-    dp.update.middleware(LoggingMiddleware())
-
     # Регистрация обработчиков
     register_handlers(dp, bot)
 
@@ -305,9 +287,6 @@ def run_webhook() -> None:
         logging.info("🔄 Переключение в режим polling...")
         asyncio.run(run_polling())
         return
-
-    # Регистрируем middleware для логирования
-    dp.update.middleware(LoggingMiddleware())
 
     # Регистрация обработчиков
     register_handlers(dp, bot)

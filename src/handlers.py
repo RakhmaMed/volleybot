@@ -66,6 +66,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="pay", description="Изменить баланс игрока"),
         BotCommand(command="start", description="Включить бота"),
         BotCommand(command="stop", description="Выключить бота"),
+        BotCommand(command="webhookinfo", description="Статус webhook"),
     ]
 
     # Устанавливаем команды для приватных чатов (по умолчанию, без scope)
@@ -505,9 +506,6 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                                 else f"ID: {p['id']}"
                             )
                             callback_data = f"pay_select:{p['id']}:{amount}"
-                            logging.info(
-                                f"🔘 Создана кнопка: text='{p_name}', callback_data='{callback_data}'"
-                            )
                             keyboard.append(
                                 [
                                     InlineKeyboardButton(
@@ -517,15 +515,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                             )
 
                         reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-                        logging.info(
-                            f"📤 Отправка сообщения с {len(keyboard)} кнопками для выбора игрока"
-                        )
-                        sent_message = await message.reply(
+                        await message.reply(
                             f"❓ Найдено несколько игроков ({len(players)}). Выберите нужного:",
                             reply_markup=reply_markup,
-                        )
-                        logging.info(
-                            f"✅ Сообщение с кнопками отправлено, message_id={sent_message.message_id}"
                         )
                         return
 
@@ -578,8 +570,6 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
     @router.callback_query(lambda c: c.data and c.data.startswith("pay_select:"))
     async def process_pay_select(callback_query: CallbackQuery):
         """Обработка выбора игрока из списка для изменения баланса."""
-        logging.info(f"🔔 Получен callback query: {callback_query.data}")
-
         user = callback_query.from_user
         if user is None:
             logging.error("❌ callback_query.from_user is None")
@@ -595,10 +585,6 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
             return
 
-        logging.info(
-            f"🔔 Callback от @{user.username} (ID: {user.id}), chat_id={callback_query.message.chat.id}"
-        )
-
         # Получаем сервисы из workflow_data
         admin_service: AdminService = dp.workflow_data["admin_service"]
 
@@ -608,7 +594,6 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         )
 
         if not is_admin:
-            logging.warning(f"⚠️ Неадминский доступ к callback от @{user.username}")
             await callback_query.answer(
                 "❌ У вас нет прав для этого действия.", show_alert=True
             )
@@ -617,21 +602,15 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         # Парсим callback_data: pay_select:player_id:amount
         data_parts = callback_query.data.split(":")
         if len(data_parts) != 3:
-            logging.error(f"❌ Неверный формат callback_data: {callback_query.data}")
             await callback_query.answer("❌ Ошибка данных.", show_alert=True)
             return
 
         try:
             target_user_id = int(data_parts[1])
             amount = int(data_parts[2])
-        except ValueError as e:
-            logging.error(f"❌ Ошибка парсинга данных: {e}, data={callback_query.data}")
+        except ValueError:
             await callback_query.answer("❌ Ошибка формата данных.", show_alert=True)
             return
-
-        logging.info(
-            f"📝 Обработка выбора: target_user_id={target_user_id}, amount={amount}"
-        )
 
         if update_player_balance(target_user_id, amount):
             new_balance_data = get_player_balance(target_user_id)
@@ -643,34 +622,20 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             if new_balance_data:
                 p_name = f"<b>{new_balance_data['fullname'] or new_balance_data['name'] or f'ID: {target_user_id}'}</b>"
 
-            try:
-                await callback_query.message.edit_text(
-                    f"✅ Баланс {p_name} изменен на {amount} ₽.\n"
-                    f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
-                    parse_mode="HTML",
-                )
-                await callback_query.answer()
-                logging.info(
-                    f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс через меню: "
-                    f"ID={target_user_id}, сумма={amount}"
-                )
-            except Exception as e:
-                logging.error(f"❌ Ошибка при редактировании сообщения: {e}")
-                await callback_query.answer("✅ Баланс обновлен", show_alert=True)
+            await callback_query.message.edit_text(
+                f"✅ Баланс {p_name} изменен на {amount} ₽.\n"
+                f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
+                parse_mode="HTML",
+            )
+            await callback_query.answer()
+            logging.info(
+                f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс через меню: "
+                f"ID={target_user_id}, сумма={amount}"
+            )
         else:
-            logging.error(f"❌ Не удалось обновить баланс для ID={target_user_id}")
             await callback_query.answer(
                 "❌ Не удалось обновить баланс.", show_alert=True
             )
-
-    @router.callback_query()
-    async def debug_all_callbacks(callback_query: CallbackQuery):
-        """Debug: логирует ВСЕ callback query для отладки."""
-        logging.info(
-            f"🔍 DEBUG: Получен неизвестный callback_query: data='{callback_query.data}', "
-            f"from_user={callback_query.from_user.id if callback_query.from_user else None}"
-        )
-        await callback_query.answer("⚠️ Неизвестное действие")
 
     @router.poll_answer()
     async def handle_poll_answer(
@@ -749,6 +714,4 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
     # Регистрируем роутер в диспетчере
     dp.include_router(router)
-    logging.info(
-        "✅ Все обработчики зарегистрированы (включая callback_query для pay_select)"
-    )
+    logging.info("✅ Все обработчики команд и событий зарегистрированы")
