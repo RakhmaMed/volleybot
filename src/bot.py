@@ -129,14 +129,31 @@ async def on_startup(
                 max_delay=60.0,
             )
             async def set_webhook_with_retry():
+                # Явно указываем все типы updates, которые должен получать бот
+                allowed_updates = [
+                    "message",
+                    "callback_query",  # КРИТИЧНО: без этого кнопки не работают!
+                    "poll_answer",
+                ]
+
                 if WEBHOOK_SECRET:
-                    await bot.set_webhook(effective_url, secret_token=WEBHOOK_SECRET)
+                    await bot.set_webhook(
+                        effective_url,
+                        secret_token=WEBHOOK_SECRET,
+                        allowed_updates=allowed_updates,
+                    )
                     logging.info(
                         f"✅ Webhook успешно установлен: {effective_url} (с секретным токеном)"
                     )
                 else:
-                    await bot.set_webhook(effective_url)
+                    await bot.set_webhook(
+                        effective_url, allowed_updates=allowed_updates
+                    )
                     logging.info(f"✅ Webhook успешно установлен: {effective_url}")
+
+                logging.info(
+                    f"📋 Разрешенные типы updates: {', '.join(allowed_updates)}"
+                )
 
             await set_webhook_with_retry()
         except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
