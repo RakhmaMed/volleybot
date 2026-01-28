@@ -20,6 +20,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    LinkPreviewOptions,
     Message,
     PollAnswer,
     Update,
@@ -366,7 +367,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 text = "💰 Информация о вашем балансе не найдена. Обратитесь к администратору."
 
         try:
-            await message.reply(text, parse_mode="HTML")
+            await message.reply(
+                text,
+                parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+            )
             logging.info(
                 f"💰 Запрос баланса от {'админа' if is_admin else 'пользователя'} @{user.username} (ID: {user.id})"
             )
@@ -525,6 +530,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                             f"❓ Найдено несколько игроков ({len(players)}). Выберите нужного:\n\n{players_list}",
                             reply_markup=reply_markup,
                             parse_mode="HTML",
+                            link_preview_options=LinkPreviewOptions(is_disabled=True),
                         )
                         return
 
@@ -565,6 +571,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         f"✅ Баланс игрока {player_link} изменен на {amount} ₽.\n"
                         f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
                         parse_mode="HTML",
+                        link_preview_options=LinkPreviewOptions(is_disabled=True),
                     )
                     logging.info(
                         f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс {target_name} (ID: {target_user_id}) на {amount}"
@@ -634,6 +641,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 f"✅ Баланс игрока {player_link} изменен на {amount} ₽.\n"
                 f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
                 parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
             )
             await callback_query.answer()
             logging.info(
