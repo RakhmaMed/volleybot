@@ -450,7 +450,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     if len(players) > 1:
                         keyboard = []
                         for p in players[:10]:  # Ограничим 10 игроками
-                            p_name = p["fullname"] or p["name"] or f"ID: {p['id']}"
+                            p_name = (
+                                f"{p['fullname'] or p['name']} (ID: {p['id']})"
+                                if (p["fullname"] or p["name"])
+                                else f"ID: {p['id']}"
+                            )
                             callback_data = f"pay_select:{p['id']}:{amount}"
                             keyboard.append(
                                 [

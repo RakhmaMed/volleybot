@@ -236,7 +236,7 @@ class TestPayCommand:
         assert isinstance(method.reply_markup, InlineKeyboardMarkup)
         buttons = method.reply_markup.inline_keyboard
         assert len(buttons) == 2
-        assert buttons[0][0].text == "Alim B."
+        assert buttons[0][0].text == "Alim B. (ID: 1)"
         assert buttons[0][0].callback_data == "pay_select:1:500"
 
     @patch("src.handlers.get_player_balance")
