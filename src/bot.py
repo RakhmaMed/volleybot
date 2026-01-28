@@ -14,8 +14,10 @@ import ssl
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
+from aiogram.types import Update
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 from aiohttp.typedefs import Handler
@@ -51,6 +53,32 @@ logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format=LOG_FORMAT,
 )
+
+
+class LoggingMiddleware(BaseMiddleware):
+    """Middleware для логирования всех входящих updates."""
+
+    async def __call__(self, handler, event: Update, data: dict):
+        """Логирует каждый update перед обработкой."""
+        update_type = "unknown"
+        update_info = ""
+
+        if event.message:
+            update_type = "message"
+            update_info = f"text='{event.message.text}'"
+        elif event.callback_query:
+            update_type = "callback_query"
+            update_info = f"data='{event.callback_query.data}'"
+        elif event.poll_answer:
+            update_type = "poll_answer"
+            update_info = f"poll_id={event.poll_answer.poll_id}"
+
+        logging.info(
+            f"📥 Incoming update id={event.update_id}: type={update_type}, {update_info}"
+        )
+
+        # Продолжаем обработку
+        return await handler(event, data)
 
 
 async def on_startup(
@@ -184,6 +212,9 @@ async def run_polling() -> None:
     # Планировщик задач
     scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
 
+    # Регистрируем middleware для логирования
+    dp.update.middleware(LoggingMiddleware())
+
     # Регистрация обработчиков
     register_handlers(dp, bot)
 
@@ -257,6 +288,9 @@ def run_webhook() -> None:
         logging.info("🔄 Переключение в режим polling...")
         asyncio.run(run_polling())
         return
+
+    # Регистрируем middleware для логирования
+    dp.update.middleware(LoggingMiddleware())
 
     # Регистрация обработчиков
     register_handlers(dp, bot)
