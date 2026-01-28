@@ -326,9 +326,14 @@ class PollService:
 
             await pin_with_retry()
             logging.debug("✅ Опрос успешно закреплен")
-        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
-            logging.warning(
-                f"⚠️ Не удалось закрепить опрос '{poll_name}' (message_id={poll_message.message_id}). "
+        except (
+            TelegramAPIError,
+            TelegramNetworkError,
+            asyncio.TimeoutError,
+            OSError,
+        ) as e:
+            logging.exception(
+                f"⚠️ Не удалось закрепить опрос '{poll_name}' (message_id={poll_message.message_id}): {e}. "
                 f"Возможно, у бота нет прав на закрепление сообщений."
             )
 

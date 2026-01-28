@@ -12,12 +12,22 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     Message,
     PollAnswer,
     Update,
 )
 
 from .config import POLLS_SCHEDULE
+from .db import (
+    ensure_player,
+    find_player_by_name,
+    get_player_balance,
+    get_players_with_balance,
+    update_player_balance,
+)
 from .services import AdminService, BotStateService, PollService
 from .utils import get_player_name, rate_limit_check, retry_async
 
@@ -40,12 +50,15 @@ async def setup_bot_commands(bot: Bot) -> None:
     user_commands = [
         BotCommand(command="help", description="Показать справку по командам"),
         BotCommand(command="schedule", description="Показать расписание опросов"),
+        BotCommand(command="balance", description="Показать мой баланс"),
     ]
 
     # Команды для администраторов (включая пользовательские)
     admin_commands = [
         BotCommand(command="help", description="Показать справку по командам"),
         BotCommand(command="schedule", description="Показать расписание опросов"),
+        BotCommand(command="balance", description="Показать долги/балансы"),
+        BotCommand(command="pay", description="Изменить баланс игрока"),
         BotCommand(command="start", description="Включить бота"),
         BotCommand(command="stop", description="Выключить бота"),
     ]
@@ -190,9 +203,17 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
     async def help_handler(message: Message) -> None:
         """Команда для отображения справки по командам бота."""
         user = message.from_user
+        if user is None:
+            return
+
+        # Получаем сервисы из workflow_data
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+
+        # Проверяем, является ли пользователь администратором
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
 
         # Проверка rate limit
-        rate_limit_error = rate_limit_check(user, is_admin=False)
+        rate_limit_error = rate_limit_check(user, is_admin)
         if rate_limit_error:
             try:
                 await message.reply(rate_limit_error)
@@ -204,8 +225,12 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "🏐 <b>Volleybot — Справка</b>\n\n"
             "<b>Доступные команды:</b>\n"
             "/help — показать эту справку\n"
-            "/schedule — показать расписание опросов\n\n"
+            "/schedule — показать расписание опросов\n"
+            "/balance — показать мой баланс\n\n"
             "<b>Команды для администраторов:</b>\n"
+            "/balance — список всех долгов\n"
+            "/pay [сумма] — изменить баланс (в ответ на сообщение)\n"
+            "/pay [имя] [сумма] — найти игрока и изменить баланс\n"
             "/start — включить бота\n"
             "/stop — выключить бота\n\n"
             "<b>Как пользоваться:</b>\n"
@@ -286,6 +311,262 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 f"⚠️ Сетевая ошибка при ответе на /schedule от @{user.username if user else 'unknown'}"
             )
 
+    @router.message(Command("balance"))
+    async def balance_handler(message: Message) -> None:
+        """Команда для отображения баланса/долгов."""
+        user = message.from_user
+        if user is None:
+            return
+
+        # Получаем сервисы из workflow_data
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+
+        # Проверяем, является ли пользователь администратором
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+
+        # Проверка rate limit
+        rate_limit_error = rate_limit_check(user, is_admin)
+        if rate_limit_error:
+            try:
+                await message.reply(rate_limit_error)
+            except TelegramNetworkError:
+                pass
+            return
+
+        if is_admin:
+            # Администратор видит всех с ненулевым балансом
+            players = get_players_with_balance()
+            if not players:
+                text = "💰 Все балансы на нуле. Долгов нет!"
+            else:
+                text = "💰 <b>Список балансов:</b>\n\n"
+                for p in players:
+                    balance = p["balance"]
+                    name = p["fullname"] or p["name"] or f"ID: {p['id']}"
+                    icon = "🔴" if balance < 0 else "🟢"
+                    text += f"{icon} {name}: <b>{balance} ₽</b>\n"
+        else:
+            # Обычный пользователь видит только свой баланс
+            player = get_player_balance(user.id)
+            if player:
+                balance = player["balance"]
+                if balance == 0:
+                    text = "💰 Ваш баланс: <b>0 ₽</b>. Всё в порядке!"
+                elif balance < 0:
+                    text = f"💰 Ваш баланс: <b>{balance} ₽</b>. Пожалуйста, пополните."
+                else:
+                    text = f"💰 Ваш баланс: <b>{balance} ₽</b>. Спасибо за предоплату!"
+            else:
+                text = "💰 Информация о вашем балансе не найдена. Обратитесь к администратору."
+
+        try:
+            await message.reply(text)
+            logging.info(
+                f"💰 Запрос баланса от {'админа' if is_admin else 'пользователя'} @{user.username} (ID: {user.id})"
+            )
+        except TelegramNetworkError:
+            logging.warning(
+                f"⚠️ Сетевая ошибка при ответе на /balance от @{user.username if user else 'unknown'}"
+            )
+
+    @router.message(Command("pay"))
+    async def pay_handler(message: Message) -> None:
+        """Команда для изменения баланса игрока (только для администратора)."""
+        user = message.from_user
+        if user is None:
+            return
+
+        # Получаем сервисы из workflow_data
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+
+        # Проверяем, является ли пользователь администратором
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+
+        if not is_admin:
+            # Обычным игрокам команда недоступна и не показывается
+            return
+
+        args = message.text.split()
+        target_user_id = None
+        amount = 0
+        target_name = ""
+
+        # 1. Если это ответ на сообщение
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target_user = message.reply_to_message.from_user
+            target_user_id = target_user.id
+            # Гарантируем наличие игрока в базе при ответе на сообщение
+            ensure_player(
+                user_id=target_user_id,
+                name=target_user.username,
+                fullname=target_user.full_name,
+            )
+            target_name = (
+                target_user.full_name or target_user.username or f"ID: {target_user_id}"
+            )
+            if len(args) > 1:
+                try:
+                    amount = int(args[1])
+                except ValueError:
+                    await message.reply(
+                        "❌ Ошибка: сумма должна быть числом.\nПример: <code>/pay 500</code>",
+                        parse_mode="HTML",
+                    )
+                    return
+            else:
+                await message.reply(
+                    "❌ Укажите сумму.\nПример: <code>/pay 500</code> (в ответ на сообщение)",
+                    parse_mode="HTML",
+                )
+                return
+        # 2. Если указаны аргументы (Имя/ID/@username Сумма)
+        elif len(args) >= 3:
+            try:
+                amount = int(args[-1])
+                search_query = " ".join(args[1:-1])
+
+                # Проверяем, не является ли запрос ID игрока
+                if search_query.isdigit():
+                    target_user_id = int(search_query)
+                    player = get_player_balance(target_user_id)
+                    if player:
+                        target_name = (
+                            player["fullname"]
+                            or player["name"]
+                            or f"ID: {target_user_id}"
+                        )
+                    else:
+                        await message.reply(
+                            f"❌ Игрок с ID {target_user_id} не найден."
+                        )
+                        return
+                else:
+                    # Поиск по имени или @username (убираем @ если есть)
+                    clean_query = search_query.lstrip("@")
+                    players = find_player_by_name(clean_query)
+                    if not players:
+                        await message.reply(f"❌ Игрок '{search_query}' не найден.")
+                        return
+                    if len(players) > 1:
+                        keyboard = []
+                        for p in players[:10]:  # Ограничим 10 игроками
+                            p_name = p["fullname"] or p["name"] or f"ID: {p['id']}"
+                            callback_data = f"pay_select:{p['id']}:{amount}"
+                            keyboard.append(
+                                [
+                                    InlineKeyboardButton(
+                                        text=p_name, callback_data=callback_data
+                                    )
+                                ]
+                            )
+
+                        reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+                        await message.reply(
+                            f"❓ Найдено несколько игроков ({len(players)}). Выберите нужного:",
+                            reply_markup=reply_markup,
+                        )
+                        return
+
+                    target_user_id = players[0]["id"]
+                    target_name = (
+                        players[0]["fullname"]
+                        or players[0]["name"]
+                        or f"ID: {target_user_id}"
+                    )
+            except ValueError:
+                await message.reply(
+                    "❌ Ошибка: сумма должна быть числом в конце команды.\nПример: <code>/pay Иван 500</code>",
+                    parse_mode="HTML",
+                )
+                return
+        else:
+            await message.reply(
+                "ℹ️ <b>Управление балансом:</b>\n\n"
+                "1. Ответьте на сообщение игрока: <code>/pay 500</code>\n"
+                "2. Поиск по имени: <code>/pay Иван 500</code>\n"
+                "3. По @username: <code>/pay @username 500</code>\n"
+                "4. По ID игрока: <code>/pay 12345678 500</code>\n\n"
+                "<i>Сумма может быть отрицательной для списания.</i>",
+                parse_mode="HTML",
+            )
+            return
+
+        if target_user_id and amount != 0:
+            if update_player_balance(target_user_id, amount):
+                new_balance_data = get_player_balance(target_user_id)
+                new_balance = (
+                    new_balance_data["balance"] if new_balance_data else "неизвестно"
+                )
+                try:
+                    await message.reply(
+                        f"✅ Баланс игрока <b>{target_name}</b> изменен на {amount} ₽.\n"
+                        f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
+                        parse_mode="HTML",
+                    )
+                    logging.info(
+                        f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс {target_name} (ID: {target_user_id}) на {amount}"
+                    )
+                except TelegramNetworkError:
+                    pass
+            else:
+                await message.reply(
+                    "❌ Не удалось обновить баланс. Убедитесь, что игрок взаимодействовал с ботом ранее."
+                )
+
+    @router.callback_query(lambda c: c.data and c.data.startswith("pay_select:"))
+    async def process_pay_select(callback_query: CallbackQuery):
+        """Обработка выбора игрока из списка для изменения баланса."""
+        user = callback_query.from_user
+        if user is None:
+            return
+
+        # Получаем сервисы из workflow_data
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+
+        # Проверяем, является ли пользователь администратором
+        is_admin = await admin_service.is_admin(
+            bot, user, callback_query.message.chat.id
+        )
+
+        if not is_admin:
+            await callback_query.answer(
+                "❌ У вас нет прав для этого действия.", show_alert=True
+            )
+            return
+
+        # Парсим callback_data: pay_select:player_id:amount
+        data_parts = callback_query.data.split(":")
+        if len(data_parts) != 3:
+            await callback_query.answer("❌ Ошибка данных.")
+            return
+
+        target_user_id = int(data_parts[1])
+        amount = int(data_parts[2])
+
+        if update_player_balance(target_user_id, amount):
+            new_balance_data = get_player_balance(target_user_id)
+            new_balance = (
+                new_balance_data["balance"] if new_balance_data else "неизвестно"
+            )
+
+            p_name = "игрока"
+            if new_balance_data:
+                p_name = f"<b>{new_balance_data['fullname'] or new_balance_data['name'] or f'ID: {target_user_id}'}</b>"
+
+            await callback_query.message.edit_text(
+                f"✅ Баланс {p_name} изменен на {amount} ₽.\n"
+                f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
+                parse_mode="HTML",
+            )
+            logging.info(
+                f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс через меню: "
+                f"ID={target_user_id}, сумма={amount}"
+            )
+        else:
+            await callback_query.answer(
+                "❌ Не удалось обновить баланс.", show_alert=True
+            )
+
     @router.poll_answer()
     async def handle_poll_answer(
         poll_answer: PollAnswer, event_update: Update | None = None
@@ -301,6 +582,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 f"❌ Получен ответ на опрос {poll_id} без информации о пользователе"
             )
             return
+
+        # Гарантируем наличие игрока в базе при голосовании
+        ensure_player(user_id=user.id, name=user.username, fullname=user.full_name)
 
         logging.info(
             f"🗳️ Получен ответ от пользователя @{user.username or 'unknown'} "
