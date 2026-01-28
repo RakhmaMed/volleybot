@@ -54,7 +54,7 @@ class BotStateService:
                 )
             except (TypeError, ValueError):
                 logging.warning(
-                    f"⚠️ Сохранённый chat_id повреждён, используем значение из config.json: {self._state.chat_id}"
+                    f"⚠️ Сохранённый chat_id повреждён, используем значение из настроек: {self._state.chat_id}"
                 )
 
             if (

@@ -10,7 +10,7 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from .config import POLLS_SCHEDULE
+from .db import get_poll_templates
 from .services import BotStateService, PollService
 
 
@@ -76,7 +76,7 @@ def setup_scheduler(
     poll_service: PollService,
 ) -> None:
     """
-    Настройка планировщика задач из конфигурации.
+    Настройка планировщика задач из базы данных.
 
     Args:
         scheduler: Экземпляр планировщика
@@ -84,28 +84,27 @@ def setup_scheduler(
         bot_state_service: Сервис состояния бота
         poll_service: Сервис опросов
     """
-    if not POLLS_SCHEDULE:
-        logging.warning(
-            "⚠️ Расписание опросов не найдено в config.json. "
-            "Проверьте наличие секции 'polls' в конфигурации."
-        )
+    poll_templates = get_poll_templates()
+
+    if not poll_templates:
+        logging.warning("⚠️ Расписание опросов не найдено в базе данных.")
         return
 
-    logging.info(f"⏰ Настройка планировщика ({len(POLLS_SCHEDULE)} опросов):")
+    logging.info(f"⏰ Настройка планировщика ({len(poll_templates)} опросов):")
 
-    for idx, poll_config in enumerate(POLLS_SCHEDULE):
-        poll_name: str = poll_config.name
-        message: str = poll_config.message
+    for idx, poll_config in enumerate(poll_templates):
+        poll_name: str = poll_config["name"]
+        message: str = poll_config["message"]
 
         # Время открытия опроса
-        open_day: str = poll_config.open_day
-        open_hour_utc: int = poll_config.open_hour_utc
-        open_minute_utc: int = poll_config.open_minute_utc
+        open_day: str = poll_config.get("open_day", "*")
+        open_hour_utc: int = poll_config.get("open_hour_utc", 0)
+        open_minute_utc: int = poll_config.get("open_minute_utc", 0)
 
         # Время проведения игры
-        game_day: str = poll_config.game_day
-        game_hour_utc: int = poll_config.game_hour_utc
-        game_minute_utc: int = poll_config.game_minute_utc
+        game_day: str = poll_config.get("game_day", "*")
+        game_hour_utc: int = poll_config.get("game_hour_utc", 0)
+        game_minute_utc: int = poll_config.get("game_minute_utc", 0)
 
         # === Задача открытия опроса ===
         open_job_id: str = f"poll_open_{idx}"
@@ -120,7 +119,7 @@ def setup_scheduler(
             open_trigger_kwargs["day_of_week"] = open_day
 
         # Получаем список подписчиков для этого опроса
-        subs: list[int] = poll_config.subs
+        subs: list[int] = poll_config.get("subs", [])
 
         poll_job: Callable[[], Awaitable[None]] = create_poll_job(
             bot, message, poll_name, bot_state_service, poll_service, subs
@@ -193,4 +192,4 @@ def setup_scheduler(
                 f"  🔒 ЗАКРЫТИЕ: {current_close_day.upper()} {close_hour_utc:02d}:{close_minute_utc:02d} UTC (игра {game_day.upper()} в {game_hour_utc:02d}:{game_minute_utc:02d}) - {poll_name}"
             )
 
-    logging.info(f"✅ Планировщик настроен: {len(POLLS_SCHEDULE) * 2} задач добавлено")
+    logging.info(f"✅ Планировщик настроен: {len(poll_templates) * 2} задач добавлено")

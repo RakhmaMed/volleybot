@@ -56,6 +56,37 @@ def init_db() -> None:
             )
             """
         )
+
+        # Таблица для шаблонов опросов
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS poll_templates (
+                name TEXT PRIMARY KEY,
+                place TEXT,
+                message TEXT NOT NULL,
+                open_day TEXT,
+                open_hour_utc INTEGER,
+                open_minute_utc INTEGER,
+                game_day TEXT,
+                game_hour_utc INTEGER,
+                game_minute_utc INTEGER,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        # Таблица для подписок на опросы
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS poll_subscriptions (
+                poll_name TEXT,
+                user_id INTEGER,
+                PRIMARY KEY (poll_name, user_id),
+                FOREIGN KEY (poll_name) REFERENCES poll_templates(name) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES players(id) ON DELETE CASCADE
+            )
+            """
+        )
         conn.commit()
     logging.debug(f"✅ База данных инициализирована: {db_path}")
 
@@ -282,3 +313,96 @@ def ensure_player(
             conn.commit()
     except sqlite3.Error:
         logging.exception(f"❌ Ошибка при регистрации/обновлении игрока {user_id}")
+
+
+def get_poll_templates() -> list[dict[str, Any]]:
+    """Возвращает все шаблоны опросов из БД."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT * FROM poll_templates")
+            templates = []
+            for row in cursor.fetchall():
+                template = dict(row)
+                # Получаем подписчиков для этого опроса
+                sub_cursor = conn.execute(
+                    "SELECT user_id FROM poll_subscriptions WHERE poll_name = ?",
+                    (template["name"],),
+                )
+                template["subs"] = [r[0] for r in sub_cursor.fetchall()]
+                templates.append(template)
+            return templates
+    except sqlite3.Error:
+        logging.exception("❌ Ошибка при получении шаблонов опросов")
+        return []
+
+
+def save_poll_template(template: dict[str, Any]) -> None:
+    """Сохраняет или обновляет шаблон опроса и его подписчиков."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO poll_templates (
+                    name, place, message, open_day, open_hour_utc, open_minute_utc,
+                    game_day, game_hour_utc, game_minute_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    place = excluded.place,
+                    message = excluded.message,
+                    open_day = excluded.open_day,
+                    open_hour_utc = excluded.open_hour_utc,
+                    open_minute_utc = excluded.open_minute_utc,
+                    game_day = excluded.game_day,
+                    game_hour_utc = excluded.game_hour_utc,
+                    game_minute_utc = excluded.game_minute_utc,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    template["name"],
+                    template.get("place", ""),
+                    template["message"],
+                    template.get("open_day", "*"),
+                    template.get("open_hour_utc", 0),
+                    template.get("open_minute_utc", 0),
+                    template.get("game_day", "*"),
+                    template.get("game_hour_utc", 0),
+                    template.get("game_minute_utc", 0),
+                ),
+            )
+
+            # Обновляем подписчиков если они переданы
+            if "subs" in template:
+                conn.execute(
+                    "DELETE FROM poll_subscriptions WHERE poll_name = ?",
+                    (template["name"],),
+                )
+                for user_id in template["subs"]:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO poll_subscriptions (poll_name, user_id) VALUES (?, ?)",
+                        (template["name"], user_id),
+                    )
+            conn.commit()
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка при сохранении шаблона опроса '{template.get('name')}'"
+        )
+
+
+def get_poll_subs(poll_name: str) -> list[int]:
+    """Возвращает список ID подписчиков для конкретного опроса."""
+    try:
+        init_db()
+        with _connect() as conn:
+            cursor = conn.execute(
+                "SELECT user_id FROM poll_subscriptions WHERE poll_name = ?",
+                (poll_name,),
+            )
+            return [row[0] for row in cursor.fetchall()]
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка при получении подписчиков для опроса '{poll_name}'"
+        )
+        return []

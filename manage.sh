@@ -323,7 +323,7 @@ deploy_container() {
             --restart unless-stopped \
             -p $PORT \
             -v "$(pwd)/certs:/app/certs:ro" \
-            -v "$(pwd)/config.json:/app/config.json:ro" \
+            -v "$(pwd)/.env:/app/.env:ro" \
             $IMAGE_NAME
         echo -e "${GREEN}✓ Контейнер запущен в режиме webhook${NC}"
     else
@@ -331,7 +331,7 @@ deploy_container() {
         docker run -d \
             --name $CONTAINER_NAME \
             --restart unless-stopped \
-            -v "$(pwd)/config.json:/app/config.json:ro" \
+            -v "$(pwd)/.env:/app/.env:ro" \
             $IMAGE_NAME
         echo -e "${GREEN}✓ Контейнер запущен в режиме polling${NC}"
         echo -e "${GRAY}  (директория certs не найдена)${NC}"

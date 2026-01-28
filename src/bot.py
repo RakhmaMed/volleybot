@@ -334,8 +334,8 @@ def run_webhook() -> None:
         logging.info("🔐 Webhook secret token verification: ENABLED")
     else:
         logging.warning(
-            "⚠️ БЕЗОПАСНОСТЬ: webhook_secret не настроен. "
-            "Рекомендуется добавить webhook_secret в config.json"
+            "⚠️ БЕЗОПАСНОСТЬ: WEBHOOK_SECRET не настроен. "
+            "Рекомендуется добавить WEBHOOK_SECRET в .env"
         )
 
     # Настраиваем приложение с диспетчером

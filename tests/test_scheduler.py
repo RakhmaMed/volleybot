@@ -4,9 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from pydantic import ValidationError
 
-from src.config import PollSchedule
+from src.db import init_db
 from src.scheduler import create_close_poll_job, create_poll_job, setup_scheduler
 from src.services import BotStateService, PollService
 
@@ -86,69 +85,57 @@ class TestCreateClosePollJob:
 class TestSetupScheduler:
     """Тесты для функции setup_scheduler."""
 
-    def test_setup_scheduler_with_valid_config(self):
-        """Тест настройки планировщика с валидной конфигурацией."""
+    def test_setup_scheduler_with_valid_templates(self, temp_db):
+        """Тест настройки планировщика с шаблонами из БД."""
+        init_db()
         scheduler = AsyncIOScheduler(timezone="UTC")
         bot = MagicMock()
         bot_state_service = BotStateService(default_chat_id=-1001234567890)
         poll_service = PollService()
 
-        # Мокаем конфигурацию
+        # Мокаем данные из БД
         test_polls = [
-            PollSchedule(
-                name="test_poll",
-                message="Test message",
-                open_day="mon",
-                open_hour_utc=10,
-                open_minute_utc=0,
-                game_day="tue",
-                game_hour_utc=10,
-                game_minute_utc=0,
-            )
+            {
+                "name": "test_poll",
+                "message": "Test message",
+                "open_day": "mon",
+                "open_hour_utc": 10,
+                "open_minute_utc": 0,
+                "game_day": "tue",
+                "game_hour_utc": 10,
+                "game_minute_utc": 0,
+                "subs": [],
+            }
         ]
 
-        with patch("src.scheduler.POLLS_SCHEDULE", test_polls):
+        with patch("src.scheduler.get_poll_templates", return_value=test_polls):
             setup_scheduler(scheduler, bot, bot_state_service, poll_service)
 
             # Проверяем, что задачи добавлены
             jobs = scheduler.get_jobs()
             assert len(jobs) == 2  # Одна задача открытия, одна закрытия
 
-    def test_setup_scheduler_with_empty_config(self):
-        """Тест настройки планировщика с пустой конфигурацией."""
+    def test_setup_scheduler_with_empty_db(self, temp_db):
+        """Тест настройки планировщика при отсутствии опросов в БД."""
+        init_db()
         scheduler = AsyncIOScheduler(timezone="UTC")
         bot = MagicMock()
         bot_state_service = BotStateService(default_chat_id=-1001234567890)
         poll_service = PollService()
 
-        with patch("src.scheduler.POLLS_SCHEDULE", []):
+        with patch("src.scheduler.get_poll_templates", return_value=[]):
             setup_scheduler(scheduler, bot, bot_state_service, poll_service)
 
             jobs = scheduler.get_jobs()
             assert len(jobs) == 0
 
-    def test_setup_scheduler_skips_poll_without_message(self):
-        """Тест пропуска опроса без сообщения."""
-        # С Pydantic validation, пустое message не пройдет валидацию
-        # Поэтому этот тест проверяет что валидация работает корректно
-        with pytest.raises(ValidationError):
-            PollSchedule(
-                name="test_poll",
-                message="",  # Пустое сообщение не пройдет валидацию (min_length=1)
-                open_day="mon",
-                open_hour_utc=10,
-                open_minute_utc=0,
-                game_day="tue",
-                game_hour_utc=10,
-                game_minute_utc=0,
-            )
-
     def test_setup_scheduler_poll_closure_timing(
-        self, caplog: pytest.LogCaptureFixture
+        self, caplog: pytest.LogCaptureFixture, temp_db
     ):
         """Тест логики закрытия опроса за 30 минут до игры с учетом переходов через полночь/дни."""
         import logging
 
+        init_db()
         caplog.set_level(logging.INFO)
         scheduler = AsyncIOScheduler(timezone="UTC")
         bot = MagicMock()
@@ -157,41 +144,41 @@ class TestSetupScheduler:
 
         test_polls = [
             # 1. Обычное время: 18:00 -> 17:30
-            PollSchedule(
-                name="normal",
-                message="msg",
-                open_day="wed",
-                open_hour_utc=10,
-                open_minute_utc=0,
-                game_day="wed",
-                game_hour_utc=18,
-                game_minute_utc=0,
-            ),
+            {
+                "name": "normal",
+                "message": "msg",
+                "open_day": "wed",
+                "open_hour_utc": 10,
+                "open_minute_utc": 0,
+                "game_day": "wed",
+                "game_hour_utc": 18,
+                "game_minute_utc": 0,
+            },
             # 2. Переход через полночь: 00:15 -> 23:45 (предыдущий день)
-            PollSchedule(
-                name="midnight_crossover",
-                message="msg",
-                open_day="mon",
-                open_hour_utc=10,
-                open_minute_utc=0,
-                game_day="tue",
-                game_hour_utc=0,
-                game_minute_utc=15,
-            ),
+            {
+                "name": "midnight_crossover",
+                "message": "msg",
+                "open_day": "mon",
+                "open_hour_utc": 10,
+                "open_minute_utc": 0,
+                "game_day": "tue",
+                "game_hour_utc": 0,
+                "game_minute_utc": 15,
+            },
             # 3. Переход через начало недели: Mon 00:20 -> Sun 23:50
-            PollSchedule(
-                name="week_crossover",
-                message="msg",
-                open_day="sat",
-                open_hour_utc=10,
-                open_minute_utc=0,
-                game_day="mon",
-                game_hour_utc=0,
-                game_minute_utc=20,
-            ),
+            {
+                "name": "week_crossover",
+                "message": "msg",
+                "open_day": "sat",
+                "open_hour_utc": 10,
+                "open_minute_utc": 0,
+                "game_day": "mon",
+                "game_hour_utc": 0,
+                "game_minute_utc": 20,
+            },
         ]
 
-        with patch("src.scheduler.POLLS_SCHEDULE", test_polls):
+        with patch("src.scheduler.get_poll_templates", return_value=test_polls):
             setup_scheduler(scheduler, bot, bot_state_service, poll_service)
 
             # Проверяем через логи, так как они содержат вычисленное время закрытия

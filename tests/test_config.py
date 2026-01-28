@@ -2,7 +2,6 @@
 
 # Импортируем config для проверки его структуры
 from src import config
-from src.config import PollSchedule
 
 
 class TestConfigLoading:
@@ -12,11 +11,12 @@ class TestConfigLoading:
         """Тест наличия обязательных атрибутов в конфигурации."""
         assert hasattr(config, "TOKEN")
         assert hasattr(config, "CHAT_ID")
-        assert hasattr(config, "POLLS_SCHEDULE")
         assert hasattr(config, "WEBHOOK_PATH")
         assert hasattr(config, "WEBHOOK_PORT")
         assert hasattr(config, "REQUIRED_PLAYERS")
         assert hasattr(config, "POLL_OPTIONS")
+        assert hasattr(config, "LOG_LEVEL")
+        assert hasattr(config, "SCHEDULER_TIMEZONE")
 
     def test_config_token_is_string(self):
         """Тест типа токена."""
@@ -31,10 +31,6 @@ class TestConfigLoading:
         """Тест типа webhook_secret."""
         assert isinstance(config.WEBHOOK_SECRET, str)
 
-    def test_config_polls_schedule_is_list(self):
-        """Тест типа polls_schedule."""
-        assert isinstance(config.POLLS_SCHEDULE, list)
-
     def test_config_required_players_is_int(self):
         """Тест типа required_players."""
         assert isinstance(config.REQUIRED_PLAYERS, int)
@@ -43,26 +39,21 @@ class TestConfigLoading:
     def test_config_poll_options_is_tuple(self):
         """Тест типа poll_options."""
         assert isinstance(config.POLL_OPTIONS, tuple)
-        assert len(config.POLL_OPTIONS) > 0
+        assert len(config.POLL_OPTIONS) >= 2
+        for option in config.POLL_OPTIONS:
+            assert isinstance(option, str)
+            assert len(option) > 0
 
     def test_config_webhook_url_format(self):
         """Тест формата webhook URL."""
         if config.WEBHOOK_HOST:
             assert config.WEBHOOK_URL.startswith("http")
+            # Проверяем, что путь включен в итоговый URL
             assert config.WEBHOOK_PATH in config.WEBHOOK_URL
         else:
             assert config.WEBHOOK_URL == ""
 
-    def test_config_polls_have_required_fields(self):
-        """Тест наличия обязательных полей в опросах."""
-        for poll in config.POLLS_SCHEDULE:
-            assert isinstance(poll, PollSchedule)
-            assert hasattr(poll, "name")
-            assert hasattr(poll, "message")
-            assert hasattr(poll, "open_day")
-            assert hasattr(poll, "open_hour_utc")
-            assert hasattr(poll, "open_minute_utc")
-            assert hasattr(poll, "game_day")
-            assert hasattr(poll, "game_hour_utc")
-            assert hasattr(poll, "game_minute_utc")
-            assert hasattr(poll, "subs")
+    def test_config_log_level_is_valid(self):
+        """Тест валидности уровня логирования."""
+        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        assert config.LOG_LEVEL in valid_levels

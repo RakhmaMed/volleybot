@@ -1,6 +1,4 @@
 # Конфигурация с секретами
-config.json
-players.json
 certs/
 volleybot.db
 .env

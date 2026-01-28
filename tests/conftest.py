@@ -1,8 +1,6 @@
 """Конфигурация pytest и общие фикстуры."""
 
-import json
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -17,36 +15,6 @@ def temp_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Изолирует SQLite базу для каждого теста."""
     db_path = tmp_path / "volleybot.db"
     monkeypatch.setenv("VOLLEYBOT_DB_PATH", str(db_path))
-
-
-@pytest.fixture
-def temp_config_file(tmp_path: Path) -> Path:
-    """Создаёт временный файл конфигурации для тестов."""
-    config_data: dict[str, Any] = {
-        "telegram_token": "test_token",
-        "chat_id": "-1001234567890",
-        "admin_username": "test_admin",
-        "webhook_path": "/test_webhook",
-        "webhook_port": 8443,
-        "ssl_cert_path": "/test/cert.pem",
-        "ssl_key_path": "/test/key.pem",
-        "polls": [
-            {
-                "name": "test_poll",
-                "message": "Test poll message",
-                "open_day": "mon",
-                "open_hour_utc": 10,
-                "open_minute_utc": 0,
-                "game_day": "tue",
-                "game_hour_utc": 10,
-                "game_minute_utc": 0,
-            }
-        ],
-    }
-    config_file = tmp_path / "config.json"
-    with open(config_file, "w", encoding="utf-8") as f:
-        json.dump(config_data, f)
-    return config_file
 
 
 @pytest.fixture

@@ -334,7 +334,7 @@ function Deploy-Container {
 
     # Проверка наличия директории certs
     $certsPath = Join-Path $PSScriptRoot "certs"
-    $configPath = Join-Path $PSScriptRoot "config.json"
+    $envPath = Join-Path $PSScriptRoot ".env"
 
     if (Test-Path $certsPath) {
         # Запуск с webhook (с сертификатами)
@@ -343,7 +343,7 @@ function Deploy-Container {
             --restart unless-stopped `
             -p $PORT `
             -v "${certsPath}:/app/certs:ro" `
-            -v "${configPath}:/app/config.json:ro" `
+            -v "${envPath}:/app/.env:ro" `
             $IMAGE_NAME
         Write-Host "✓ Контейнер запущен в режиме webhook" -ForegroundColor Green
     } else {
@@ -351,7 +351,7 @@ function Deploy-Container {
         docker run -d `
             --name $CONTAINER_NAME `
             --restart unless-stopped `
-            -v "${configPath}:/app/config.json:ro" `
+            -v "${envPath}:/app/.env:ro" `
             $IMAGE_NAME
         Write-Host "✓ Контейнер запущен в режиме polling" -ForegroundColor Green
         Write-Host "  (директория certs не найдена)" -ForegroundColor Gray
