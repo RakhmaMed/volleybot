@@ -315,6 +315,9 @@ deploy_container() {
     echo ""
     echo -e "${YELLOW}[5/6] Запуск контейнера...${NC}"
 
+    # Создаем директорию для базы данных на хосте, чтобы Docker не создал ее от root
+    mkdir -p "$(pwd)/data"
+
     # Проверка наличия директории certs
     if [ -d "./certs" ]; then
         # Запуск с webhook (с сертификатами)
@@ -324,6 +327,7 @@ deploy_container() {
             -p $PORT \
             -v "$(pwd)/certs:/app/certs:ro" \
             -v "$(pwd)/.env:/app/.env:ro" \
+            -v "$(pwd)/data:/app/data" \
             $IMAGE_NAME
         echo -e "${GREEN}✓ Контейнер запущен в режиме webhook${NC}"
     else
@@ -332,6 +336,7 @@ deploy_container() {
             --name $CONTAINER_NAME \
             --restart unless-stopped \
             -v "$(pwd)/.env:/app/.env:ro" \
+            -v "$(pwd)/data:/app/data" \
             $IMAGE_NAME
         echo -e "${GREEN}✓ Контейнер запущен в режиме polling${NC}"
         echo -e "${GRAY}  (директория certs не найдена)${NC}"

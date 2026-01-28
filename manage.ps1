@@ -332,6 +332,12 @@ function Deploy-Container {
     Write-Host ""
     Write-Host "[5/6] Запуск контейнера..." -ForegroundColor Yellow
 
+    # Создаем директорию для базы данных на хосте, если она не существует
+    $dataPath = Join-Path $PSScriptRoot "data"
+    if (-not (Test-Path $dataPath)) {
+        New-Item -Path $dataPath -ItemType Directory | Out-Null
+    }
+
     # Проверка наличия директории certs
     $certsPath = Join-Path $PSScriptRoot "certs"
     $envPath = Join-Path $PSScriptRoot ".env"
@@ -344,6 +350,7 @@ function Deploy-Container {
             -p $PORT `
             -v "${certsPath}:/app/certs:ro" `
             -v "${envPath}:/app/.env:ro" `
+            -v "${dataPath}:/app/data" `
             $IMAGE_NAME
         Write-Host "✓ Контейнер запущен в режиме webhook" -ForegroundColor Green
     } else {
@@ -352,6 +359,7 @@ function Deploy-Container {
             --name $CONTAINER_NAME `
             --restart unless-stopped `
             -v "${envPath}:/app/.env:ro" `
+            -v "${dataPath}:/app/data" `
             $IMAGE_NAME
         Write-Host "✓ Контейнер запущен в режиме polling" -ForegroundColor Green
         Write-Host "  (директория certs не найдена)" -ForegroundColor Gray

@@ -39,6 +39,9 @@ Dockerfile
 *.ps1
 *.sh
 
+# База данных
+data/
+
 # Логи
 *.log
 

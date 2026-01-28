@@ -20,7 +20,7 @@ def _get_db_path() -> str:
     override: str | None = os.getenv("VOLLEYBOT_DB_PATH")
     if override:
         return override
-    return str(Path(__file__).parent.parent / "volleybot.db")
+    return str(Path(__file__).parent.parent / "data" / "volleybot.db")
 
 
 def init_db() -> None:
