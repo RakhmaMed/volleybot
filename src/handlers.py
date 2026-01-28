@@ -1,9 +1,14 @@
 """Обработчики команд бота."""
 
+# VERSION MARKER: 2026-01-28-v2 - Добавлено детальное логирование callback_query
+
 from __future__ import annotations
 
 import asyncio
 import logging
+
+# Логируем загрузку модуля для отладки
+logging.info("🔄 Загружен модуль handlers.py - VERSION 2026-01-28-v2")
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramNetworkError
@@ -691,3 +696,6 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
     # Регистрируем роутер в диспетчере
     dp.include_router(router)
+    logging.info(
+        "✅ Все обработчики зарегистрированы (включая callback_query для pay_select)"
+    )
