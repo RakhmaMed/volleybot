@@ -61,6 +61,37 @@ class TestDBPlayers:
         players = get_all_players()
         assert players[0]["ball_donate"] is True
 
+    def test_ensure_player_normalizes_username_with_spaces(self, temp_db):
+        """Проверка нормализации username с пробелами (очищается)."""
+        init_db()
+        ensure_player(user_id=999, name="Invalid Username", fullname="Test User")
+
+        players = get_all_players()
+        assert len(players) == 1
+        assert players[0]["id"] == 999
+        assert players[0]["name"] is None  # должен быть очищен
+        assert players[0]["fullname"] == "Test User"
+
+    def test_ensure_player_keeps_valid_username(self, temp_db):
+        """Проверка что валидный username сохраняется."""
+        init_db()
+        ensure_player(user_id=888, name="valid_username", fullname="Test User")
+
+        players = get_all_players()
+        assert len(players) == 1
+        assert players[0]["id"] == 888
+        assert players[0]["name"] == "valid_username"
+        assert players[0]["fullname"] == "Test User"
+
+    def test_ensure_player_normalizes_username_with_tabs(self, temp_db):
+        """Проверка нормализации username с табуляцией (очищается)."""
+        init_db()
+        ensure_player(user_id=777, name="name\twith\ttabs", fullname="Tab User")
+
+        players = get_all_players()
+        assert len(players) == 1
+        assert players[0]["name"] is None  # должен быть очищен
+
 
 class TestLoadPlayersDB:
     """Тесты для функции load_players, теперь использующей БД."""

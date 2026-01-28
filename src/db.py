@@ -298,6 +298,17 @@ def ensure_player(
     user_id: int, name: str | None = None, fullname: str | None = None
 ) -> None:
     """Гарантирует наличие игрока в базе данных (создаёт или обновляет имена)."""
+    # Нормализуем username: если содержит пробелы или другие недопустимые символы, очищаем
+    if name and name.strip():
+        normalized_name = name.strip()
+        # Username в Telegram не может содержать пробелы
+        if " " in normalized_name or "\t" in normalized_name or "\n" in normalized_name:
+            name = None
+        else:
+            name = normalized_name
+    else:
+        name = None
+
     try:
         with _connect() as conn:
             conn.execute(
