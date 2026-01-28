@@ -13,6 +13,7 @@ from src.utils import (
     _RATE_LIMIT_CACHE,
     RATE_LIMIT_MAX_REQUESTS,
     escape_html,
+    format_player_link,
     generate_webhook_secret_path,
     get_player_name,
     is_rate_limited,
@@ -565,3 +566,93 @@ class TestGetPlayerName:
             result = get_player_name(user, subs=[456, 789])
 
         assert result == "User (@user)"
+
+
+class TestFormatPlayerLink:
+    """Тесты для функции format_player_link."""
+
+    def test_format_player_link_with_username_and_fullname(self):
+        """Игрок с username и fullname: ссылка через t.me, текст - fullname."""
+        player_data = {"id": 123456789, "name": "testuser", "fullname": "Test User"}
+        result = format_player_link(player_data)
+        assert result == '<a href="https://t.me/testuser">Test User</a>'
+
+    def test_format_player_link_with_username_only(self):
+        """Игрок только с username: ссылка через t.me, текст - @username."""
+        player_data = {"id": 123456789, "name": "testuser", "fullname": None}
+        result = format_player_link(player_data)
+        assert result == '<a href="https://t.me/testuser">@testuser</a>'
+
+    def test_format_player_link_with_username_empty_fullname(self):
+        """Игрок с пустым fullname: ссылка через t.me, текст - @username."""
+        player_data = {"id": 123456789, "name": "testuser", "fullname": ""}
+        result = format_player_link(player_data)
+        assert result == '<a href="https://t.me/testuser">@testuser</a>'
+
+    def test_format_player_link_without_username(self):
+        """Игрок без username: ссылка через tg://user, текст - fullname."""
+        player_data = {"id": 123456789, "name": None, "fullname": "Test User"}
+        result = format_player_link(player_data)
+        assert result == '<a href="tg://user?id=123456789">Test User</a>'
+
+    def test_format_player_link_without_username_and_fullname(self):
+        """Игрок без username и fullname: ссылка через tg://user, текст - ID."""
+        player_data = {"id": 123456789, "name": None, "fullname": None}
+        result = format_player_link(player_data)
+        assert result == '<a href="tg://user?id=123456789">ID: 123456789</a>'
+
+    def test_format_player_link_with_empty_username_and_fullname(self):
+        """Игрок с пустыми строками: ссылка через tg://user, текст - ID."""
+        player_data = {"id": 123456789, "name": "", "fullname": ""}
+        result = format_player_link(player_data)
+        assert result == '<a href="tg://user?id=123456789">ID: 123456789</a>'
+
+    def test_format_player_link_none_player_data_with_user_id(self):
+        """None player_data с user_id: ссылка через tg://user, текст - ID."""
+        result = format_player_link(None, user_id=123456789)
+        assert result == '<a href="tg://user?id=123456789">ID: 123456789</a>'
+
+    def test_format_player_link_none_player_data_without_user_id(self):
+        """None player_data без user_id: возвращает 'Неизвестный'."""
+        result = format_player_link(None, user_id=None)
+        assert result == "Неизвестный"
+
+    def test_format_player_link_escapes_html_in_fullname(self):
+        """HTML-символы в fullname экранируются."""
+        player_data = {
+            "id": 123456789,
+            "name": "testuser",
+            "fullname": "Test <User> & Co.",
+        }
+        result = format_player_link(player_data)
+        assert (
+            result == '<a href="https://t.me/testuser">Test &lt;User&gt; &amp; Co.</a>'
+        )
+
+    def test_format_player_link_escapes_html_in_username(self):
+        """HTML-символы в username экранируются (хотя username обычно не содержит таких символов)."""
+        player_data = {
+            "id": 123456789,
+            "name": "test<user>",
+            "fullname": None,
+        }
+        result = format_player_link(player_data)
+        assert result == '<a href="https://t.me/test<user>">@test&lt;user&gt;</a>'
+
+    def test_format_player_link_username_with_at_sign(self):
+        """Username с символом @ в начале обрабатывается корректно."""
+        player_data = {"id": 123456789, "name": "@testuser", "fullname": "Test User"}
+        result = format_player_link(player_data)
+        assert result == '<a href="https://t.me/testuser">Test User</a>'
+
+    def test_format_player_link_username_with_whitespace(self):
+        """Username с пробелами обрабатывается корректно."""
+        player_data = {"id": 123456789, "name": " testuser ", "fullname": "Test User"}
+        result = format_player_link(player_data)
+        assert result == '<a href="https://t.me/testuser">Test User</a>'
+
+    def test_format_player_link_fullname_with_whitespace_only(self):
+        """Fullname только из пробелов считается пустым."""
+        player_data = {"id": 123456789, "name": "testuser", "fullname": "   "}
+        result = format_player_link(player_data)
+        assert result == '<a href="https://t.me/testuser">@testuser</a>'

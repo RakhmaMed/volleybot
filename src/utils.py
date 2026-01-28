@@ -344,3 +344,50 @@ def get_player_name(user: User, subs: list[int] | None = None) -> str:
     else:
         # Если нет username, просто возвращаем имя (без ссылки на профиль)
         return escape_html(display_name)
+
+
+def format_player_link(
+    player_data: dict[str, Any] | None, user_id: int | None = None
+) -> str:
+    """
+    Форматирует имя игрока как HTML-гиперссылку на его профиль в Telegram.
+
+    Приоритет отображения:
+    1. Если есть username (name) - создаёт ссылку t.me/username с fullname или username как текст
+    2. Если нет username - создаёт ссылку tg://user?id=ID с fullname или ID как текст
+
+    Args:
+        player_data: Словарь с данными игрока из БД (id, name, fullname)
+        user_id: ID пользователя (используется если player_data is None)
+
+    Returns:
+        HTML-строка с гиперссылкой на профиль пользователя
+    """
+    if player_data is None:
+        if user_id is None:
+            return "Неизвестный"
+        # Если нет данных о игроке, используем ссылку по ID
+        return f'<a href="tg://user?id={user_id}">ID: {user_id}</a>'
+
+    pid = player_data.get("id")
+    username = player_data.get("name")
+    fullname = player_data.get("fullname")
+
+    # Определяем текст ссылки (что будет видно пользователю)
+    if fullname and fullname.strip():
+        display_text = escape_html(fullname)
+    elif username:
+        display_text = f"@{escape_html(username)}"
+    else:
+        display_text = f"ID: {pid}"
+
+    # Определяем URL ссылки
+    if username and username.strip():
+        # Приоритет: ссылка через username (t.me/username)
+        clean_username = username.strip().lstrip("@")
+        link = f"https://t.me/{clean_username}"
+    else:
+        # Fallback: ссылка через ID (tg://user?id=...)
+        link = f"tg://user?id={pid}"
+
+    return f'<a href="{link}">{display_text}</a>'

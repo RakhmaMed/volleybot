@@ -90,8 +90,9 @@ class TestBalanceCommand:
 
         assert bot.called
         method = bot.call_args.args[0]
-        assert "User One: <b>-500 ₽</b>" in method.text
-        assert "User Two: <b>100 ₽</b>" in method.text
+        # Проверяем, что в ответе есть гиперссылки на пользователей
+        assert '<a href="https://t.me/user1">User One</a>: <b>-500 ₽</b>' in method.text
+        assert '<a href="https://t.me/user2">User Two</a>: <b>100 ₽</b>' in method.text
 
 
 @pytest.mark.asyncio
@@ -151,7 +152,13 @@ class TestPayCommand:
         mock_update.assert_called_with(regular_user.id, 500)
         assert bot.called
         method = bot.call_args.args[0]
-        assert "Баланс игрока <b>Regular</b> изменен на 500 ₽" in method.text
+        # Проверяем, что в ответе есть гиперссылка на игрока
+        assert "Баланс игрока" in method.text
+        assert "изменен на 500 ₽" in method.text
+        assert (
+            '<a href="tg://user?id=' in method.text
+            or '<a href="https://t.me/' in method.text
+        )
 
     @patch("src.handlers.find_player_by_name")
     @patch("src.handlers.update_player_balance")
@@ -167,7 +174,12 @@ class TestPayCommand:
             {"id": 777, "name": "pete", "fullname": "Peter", "balance": 0}
         ]
         mock_update.return_value = True
-        mock_get_balance.return_value = {"balance": 100}
+        mock_get_balance.return_value = {
+            "id": 777,
+            "name": "pete",
+            "fullname": "Peter",
+            "balance": 100,
+        }
 
         dp.workflow_data.update(
             {
@@ -194,7 +206,10 @@ class TestPayCommand:
         mock_update.assert_called_with(777, 100)
         assert bot.called
         method = bot.call_args.args[0]
-        assert "Баланс игрока <b>Peter</b> изменен на 100 ₽" in method.text
+        # Проверяем, что в ответе есть гиперссылка на игрока
+        assert "Баланс игрока" in method.text
+        assert "изменен на 100 ₽" in method.text
+        assert '<a href="https://t.me/pete">Peter</a>' in method.text
 
     @patch("src.handlers.find_player_by_name")
     async def test_pay_by_name_multiple_matches(
@@ -248,10 +263,12 @@ class TestPayCommand:
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
 
+        # Первый вызов для проверки существования игрока, второй для получения нового баланса
         mock_get_balance.return_value = {
             "id": 12345,
+            "name": None,
             "fullname": "ID Player",
-            "balance": 0,
+            "balance": 500,
         }
         mock_update.return_value = True
 
@@ -280,7 +297,10 @@ class TestPayCommand:
         mock_update.assert_called_with(12345, 500)
         assert bot.called
         method = bot.call_args.args[0]
-        assert "Баланс игрока <b>ID Player</b> изменен на 500 ₽" in method.text
+        # Проверяем, что в ответе есть гиперссылка на игрока
+        assert "Баланс игрока" in method.text
+        assert "изменен на 500 ₽" in method.text
+        assert '<a href="tg://user?id=12345">ID Player</a>' in method.text
 
 
 @pytest.mark.asyncio

@@ -34,7 +34,7 @@ from .db import (
     update_player_balance,
 )
 from .services import AdminService, BotStateService, PollService
-from .utils import get_player_name, rate_limit_check, retry_async
+from .utils import format_player_link, get_player_name, rate_limit_check, retry_async
 
 
 @retry_async(
@@ -348,9 +348,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 text = "💰 <b>Список балансов:</b>\n\n"
                 for p in players:
                     balance = p["balance"]
-                    name = p["fullname"] or p["name"] or f"ID: {p['id']}"
+                    player_link = format_player_link(p)
                     icon = "🔴" if balance < 0 else "🟢"
-                    text += f"{icon} {name}: <b>{balance} ₽</b>\n"
+                    text += f"{icon} {player_link}: <b>{balance} ₽</b>\n"
         else:
             # Обычный пользователь видит только свой баланс
             player = get_player_balance(user.id)
@@ -366,7 +366,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 text = "💰 Информация о вашем балансе не найдена. Обратитесь к администратору."
 
         try:
-            await message.reply(text)
+            await message.reply(text, parse_mode="HTML")
             logging.info(
                 f"💰 Запрос баланса от {'админа' if is_admin else 'пользователя'} @{user.username} (ID: {user.id})"
             )
@@ -499,7 +499,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         return
                     if len(players) > 1:
                         keyboard = []
+                        player_links = []
                         for p in players[:10]:  # Ограничим 10 игроками
+                            # Для кнопок используем простое текстовое представление
                             p_name = (
                                 f"{p['fullname'] or p['name']} (ID: {p['id']})"
                                 if (p["fullname"] or p["name"])
@@ -513,11 +515,16 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                                     )
                                 ]
                             )
+                            # Для текста сообщения используем гиперссылки
+                            player_links.append(format_player_link(p))
 
                         reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+                        # Формируем список с гиперссылками
+                        players_list = "\n".join([f"• {link}" for link in player_links])
                         await message.reply(
-                            f"❓ Найдено несколько игроков ({len(players)}). Выберите нужного:",
+                            f"❓ Найдено несколько игроков ({len(players)}). Выберите нужного:\n\n{players_list}",
                             reply_markup=reply_markup,
+                            parse_mode="HTML",
                         )
                         return
 
@@ -551,9 +558,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 new_balance = (
                     new_balance_data["balance"] if new_balance_data else "неизвестно"
                 )
+                # Форматируем имя с гиперссылкой
+                player_link = format_player_link(new_balance_data, target_user_id)
                 try:
                     await message.reply(
-                        f"✅ Баланс игрока <b>{target_name}</b> изменен на {amount} ₽.\n"
+                        f"✅ Баланс игрока {player_link} изменен на {amount} ₽.\n"
                         f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
                         parse_mode="HTML",
                     )
@@ -618,12 +627,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 new_balance_data["balance"] if new_balance_data else "неизвестно"
             )
 
-            p_name = "игрока"
-            if new_balance_data:
-                p_name = f"<b>{new_balance_data['fullname'] or new_balance_data['name'] or f'ID: {target_user_id}'}</b>"
+            # Форматируем имя с гиперссылкой
+            player_link = format_player_link(new_balance_data, target_user_id)
 
             await callback_query.message.edit_text(
-                f"✅ Баланс {p_name} изменен на {amount} ₽.\n"
+                f"✅ Баланс игрока {player_link} изменен на {amount} ₽.\n"
                 f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
                 parse_mode="HTML",
             )
