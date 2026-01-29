@@ -379,12 +379,17 @@ class TestClosePoll:
         service._update_tasks[poll_id] = None
 
         mock_bot.stop_poll = AsyncMock()
-        mock_bot.edit_message_text = AsyncMock()
+        mock_bot.send_message = AsyncMock()
+        mock_bot.delete_message = AsyncMock()
 
         await service.close_poll(mock_bot, "test_poll")
 
         mock_bot.stop_poll.assert_called_once()
-        mock_bot.edit_message_text.assert_called_once()
+        mock_bot.send_message.assert_called_once()
+        mock_bot.delete_message.assert_called_once()
+        # Проверяем, что send_message вызван с reply_to_message_id
+        call_args = mock_bot.send_message.call_args
+        assert call_args.kwargs["reply_to_message_id"] == 123
         assert not service.has_poll(poll_id)
 
     async def test_close_poll_with_full_team(self, mock_bot):
@@ -405,15 +410,18 @@ class TestClosePoll:
         service._update_tasks[poll_id] = None
 
         mock_bot.stop_poll = AsyncMock()
-        mock_bot.edit_message_text = AsyncMock()
+        mock_bot.send_message = AsyncMock()
+        mock_bot.delete_message = AsyncMock()
 
         await service.close_poll(mock_bot, "test_poll")
 
-        call_args = mock_bot.edit_message_text.call_args
+        call_args = mock_bot.send_message.call_args
         assert "✅" in call_args.kwargs["text"]
         assert "Запасные" in call_args.kwargs["text"]
         # Должен использоваться HTML parse_mode
         assert call_args.kwargs.get("parse_mode") == "HTML"
+        # Должен быть reply_to_message_id
+        assert call_args.kwargs["reply_to_message_id"] == 123
 
 
 def test_persist_poll_state_roundtrip():
@@ -524,11 +532,12 @@ class TestHtmlEscapingInPollTexts:
         service._update_tasks[poll_id] = None
 
         mock_bot.stop_poll = AsyncMock()
-        mock_bot.edit_message_text = AsyncMock()
+        mock_bot.send_message = AsyncMock()
+        mock_bot.delete_message = AsyncMock()
 
         await service.close_poll(mock_bot, "test_poll")
 
-        mock_bot.edit_message_text.assert_called_once()
-        text = mock_bot.edit_message_text.call_args.kwargs["text"]
+        mock_bot.send_message.assert_called_once()
+        text = mock_bot.send_message.call_args.kwargs["text"]
         assert "⭐️ — оплативший за месяц" in text
         assert "🏐 — донат на мяч" in text

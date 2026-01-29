@@ -558,47 +558,69 @@ class PollService:
         # Обработка списания средств для платных залов
         await self._process_payment_deduction(bot, poll_name, yes_voters, data.subs)
 
-        # Обновляем информационное сообщение с финальным списком
+        # Отправляем финальный список новым сообщением с ответом на голосовалку
         info_msg_id = data.info_msg_id
-        if info_msg_id:
-            try:
-                logging.debug(
-                    f"Публикация финального списка для опроса '{poll_name}'..."
+        try:
+            logging.debug(
+                f"Отправка финального списка новым сообщением для опроса '{poll_name}'..."
+            )
+
+            @retry_async(
+                (TelegramNetworkError, asyncio.TimeoutError, OSError),
+                tries=3,
+                delay=2,
+            )
+            async def send_final_with_retry():
+                return await bot.send_message(
+                    chat_id=data.chat_id,
+                    reply_to_message_id=data.poll_msg_id,
+                    text=final_text,
+                    parse_mode="HTML",
                 )
 
-                @retry_async(
-                    (TelegramNetworkError, asyncio.TimeoutError, OSError),
-                    tries=3,
-                    delay=2,
-                )
-                async def edit_final_with_retry():
-                    await bot.edit_message_text(
-                        chat_id=data.chat_id,
-                        message_id=info_msg_id,
-                        text=final_text,
-                        parse_mode="HTML",
+            new_message = await send_final_with_retry()
+            logging.info(
+                f"✅ Финальный список отправлен новым сообщением для '{poll_name}': "
+                f"{len(yes_voters)} участников (основных: {min(len(yes_voters), REQUIRED_PLAYERS)}, "
+                f"запасных: {max(0, len(yes_voters) - REQUIRED_PLAYERS)})"
+            )
+
+            # Удаляем старое информационное сообщение
+            if info_msg_id:
+                try:
+                    logging.debug("Удаление старого информационного сообщения...")
+
+                    @retry_async(
+                        (TelegramNetworkError, asyncio.TimeoutError, OSError),
+                        tries=3,
+                        delay=2,
                     )
+                    async def delete_old_with_retry():
+                        await bot.delete_message(
+                            chat_id=data.chat_id, message_id=info_msg_id
+                        )
 
-                await edit_final_with_retry()
-                logging.info(
-                    f"✅ Финальный список опубликован для '{poll_name}': "
-                    f"{len(yes_voters)} участников (основных: {min(len(yes_voters), REQUIRED_PLAYERS)}, "
-                    f"запасных: {max(0, len(yes_voters) - REQUIRED_PLAYERS)})"
-                )
-            except (
-                TelegramAPIError,
-                TelegramNetworkError,
-                asyncio.TimeoutError,
-                OSError,
-            ):
-                logging.exception(
-                    f"❌ Не удалось опубликовать финальный список для '{poll_name}' "
-                    f"(chat_id={data.chat_id}, message_id={info_msg_id})"
-                )
-        else:
-            logging.warning(
-                f"⚠️ info_msg_id отсутствует для '{poll_name}', финальное сообщение не обновлено. "
-                f"Возможно, информационное сообщение не было создано при открытии опроса."
+                    await delete_old_with_retry()
+                    logging.info("✅ Старое сообщение удалено")
+                except (
+                    TelegramAPIError,
+                    TelegramNetworkError,
+                    asyncio.TimeoutError,
+                    OSError,
+                ):
+                    logging.warning(
+                        f"⚠️ Не удалось удалить старое сообщение (message_id={info_msg_id}). "
+                        f"Возможно, оно уже удалено вручную."
+                    )
+        except (
+            TelegramAPIError,
+            TelegramNetworkError,
+            asyncio.TimeoutError,
+            OSError,
+        ):
+            logging.exception(
+                f"❌ Не удалось отправить финальный список для '{poll_name}' "
+                f"(chat_id={data.chat_id}, reply_to={data.poll_msg_id})"
             )
 
         # Очищаем данные опроса

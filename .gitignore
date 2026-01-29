@@ -29,3 +29,5 @@ error_dump.json
 # Coverage reports
 htmlcov/
 .coverage
+
+local_scripts
