@@ -70,6 +70,7 @@ def init_db() -> None:
                 game_day TEXT,
                 game_hour_utc INTEGER,
                 game_minute_utc INTEGER,
+                cost INTEGER DEFAULT 0,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -84,6 +85,21 @@ def init_db() -> None:
                 PRIMARY KEY (poll_name, user_id),
                 FOREIGN KEY (poll_name) REFERENCES poll_templates(name) ON DELETE CASCADE,
                 FOREIGN KEY (user_id) REFERENCES players(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        # Таблица для истории транзакций
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                description TEXT,
+                poll_name TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE
             )
             """
         )
@@ -358,8 +374,8 @@ def save_poll_template(template: dict[str, Any]) -> None:
                 """
                 INSERT INTO poll_templates (
                     name, place, message, open_day, open_hour_utc, open_minute_utc,
-                    game_day, game_hour_utc, game_minute_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    game_day, game_hour_utc, game_minute_utc, cost
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                     place = excluded.place,
                     message = excluded.message,
@@ -369,6 +385,7 @@ def save_poll_template(template: dict[str, Any]) -> None:
                     game_day = excluded.game_day,
                     game_hour_utc = excluded.game_hour_utc,
                     game_minute_utc = excluded.game_minute_utc,
+                    cost = excluded.cost,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -381,6 +398,7 @@ def save_poll_template(template: dict[str, Any]) -> None:
                     template.get("game_day", "*"),
                     template.get("game_hour_utc", 0),
                     template.get("game_minute_utc", 0),
+                    template.get("cost", 0),
                 ),
             )
 
@@ -415,5 +433,115 @@ def get_poll_subs(poll_name: str) -> list[int]:
     except sqlite3.Error:
         logging.exception(
             f"❌ Ошибка при получении подписчиков для опроса '{poll_name}'"
+        )
+        return []
+
+
+def add_transaction(
+    player_id: int, amount: int, description: str, poll_name: str | None = None
+) -> None:
+    """
+    Добавляет транзакцию в историю.
+
+    Args:
+        player_id: ID игрока
+        amount: Сумма транзакции (отрицательная для списания)
+        description: Описание транзакции
+        poll_name: Название опроса (необязательно)
+    """
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO transactions (player_id, amount, description, poll_name)
+                VALUES (?, ?, ?, ?)
+                """,
+                (player_id, amount, description, poll_name),
+            )
+            conn.commit()
+        logging.debug(
+            f"✅ Транзакция добавлена: player_id={player_id}, amount={amount}, poll_name={poll_name}"
+        )
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при добавлении транзакции для игрока {player_id}")
+
+
+def get_player_transactions(player_id: int, limit: int = 10) -> list[dict[str, Any]]:
+    """
+    Возвращает историю транзакций игрока.
+
+    Args:
+        player_id: ID игрока
+        limit: Максимальное количество транзакций
+
+    Returns:
+        Список словарей с данными транзакций
+    """
+    try:
+        init_db()
+        with _connect() as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, amount, description, poll_name, created_at
+                FROM transactions
+                WHERE player_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (player_id, limit),
+            )
+            return [
+                {
+                    "id": row[0],
+                    "amount": row[1],
+                    "description": row[2],
+                    "poll_name": row[3],
+                    "created_at": row[4],
+                }
+                for row in cursor.fetchall()
+            ]
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при получении транзакций для игрока {player_id}")
+        return []
+
+
+def get_transactions_by_poll(poll_name: str) -> list[dict[str, Any]]:
+    """
+    Возвращает все транзакции для конкретного опроса.
+
+    Args:
+        poll_name: Название опроса
+
+    Returns:
+        Список словарей с данными транзакций
+    """
+    try:
+        init_db()
+        with _connect() as conn:
+            cursor = conn.execute(
+                """
+                SELECT t.id, t.player_id, p.name, p.fullname, t.amount, t.description, t.created_at
+                FROM transactions t
+                LEFT JOIN players p ON t.player_id = p.id
+                WHERE t.poll_name = ?
+                ORDER BY t.created_at DESC
+                """,
+                (poll_name,),
+            )
+            return [
+                {
+                    "id": row[0],
+                    "player_id": row[1],
+                    "player_name": row[3] if row[3] else row[2],  # fullname или name
+                    "amount": row[4],
+                    "description": row[5],
+                    "created_at": row[6],
+                }
+                for row in cursor.fetchall()
+            ]
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка при получении транзакций для опроса '{poll_name}'"
         )
         return []

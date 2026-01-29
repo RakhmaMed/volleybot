@@ -13,8 +13,17 @@ from aiogram.exceptions import (
     TelegramNetworkError,
 )
 
-from ..config import POLL_OPTIONS, REQUIRED_PLAYERS
-from ..db import POLL_STATE_KEY, load_state, save_state
+from ..config import ADMIN_USER_ID, POLL_OPTIONS, REQUIRED_PLAYERS
+from ..db import (
+    POLL_STATE_KEY,
+    add_transaction,
+    ensure_player,
+    get_player_balance,
+    get_poll_templates,
+    load_state,
+    save_state,
+    update_player_balance,
+)
 from ..poll import PollData, VoterInfo, sort_voters_by_update_id
 from ..utils import escape_html, retry_async, save_error_dump
 
@@ -545,6 +554,9 @@ class PollService:
         # Добавляем легенду
         final_text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
 
+        # Обработка списания средств для платных залов
+        await self._process_payment_deduction(bot, poll_name, yes_voters, data.subs)
+
         # Обновляем информационное сообщение с финальным списком
         info_msg_id = data.info_msg_id
         if info_msg_id:
@@ -595,3 +607,166 @@ class PollService:
         logging.info(
             f"✅ Опрос '{poll_name}' (poll_id={poll_id}) успешно закрыт, данные очищены"
         )
+
+    async def _process_payment_deduction(
+        self,
+        bot: Bot,
+        poll_name: str,
+        yes_voters: list[VoterInfo],
+        subs: list[int],
+    ) -> None:
+        """
+        Обработка списания средств с игроков без подписки для платных залов.
+
+        Args:
+            bot: Экземпляр бота
+            poll_name: Название опроса
+            yes_voters: Список проголосовавших "Да"
+            subs: Список ID подписчиков
+        """
+        # Получаем информацию о стоимости опроса из БД
+        poll_templates = get_poll_templates()
+        poll_config = next((p for p in poll_templates if p["name"] == poll_name), None)
+
+        if not poll_config:
+            logging.warning(
+                f"⚠️ Конфигурация опроса '{poll_name}' не найдена, списание пропущено"
+            )
+            return
+
+        cost = poll_config.get("cost", 0)
+
+        # Если стоимость 0 или не указана, ничего не делаем
+        if cost <= 0:
+            logging.info(
+                f"ℹ️ Опрос '{poll_name}' бесплатный (cost={cost}), списание не требуется"
+            )
+            return
+
+        logging.info(
+            f"💳 Начало списания для опроса '{poll_name}' (стоимость: {cost}₽)"
+        )
+
+        # Список для статистики
+        charged_players: list[dict[str, any]] = []
+        subscribed_players: list[str] = []
+
+        # Проходим по всем проголосовавшим (основной состав + запасные)
+        for voter in yes_voters:
+            # Проверяем, есть ли у игрока подписка
+            if voter.id in subs:
+                subscribed_players.append(voter.name)
+                logging.debug(
+                    f"  ⏭️  Игрок {voter.name} (ID: {voter.id}) с подпиской, списание пропущено"
+                )
+                continue
+
+            # Убеждаемся, что игрок есть в БД
+            ensure_player(voter.id, voter.name)
+
+            # Получаем текущий баланс
+            old_balance = get_player_balance(voter.id)
+
+            # Списываем средства
+            update_player_balance(voter.id, -cost)
+            new_balance = old_balance - cost
+
+            # Добавляем транзакцию в историю
+            from datetime import datetime
+
+            game_date = datetime.now().strftime("%d.%m.%Y")
+            description = f"Зал: {poll_name} ({game_date})"
+            add_transaction(voter.id, -cost, description, poll_name)
+
+            charged_players.append(
+                {
+                    "name": voter.name,
+                    "id": voter.id,
+                    "old_balance": old_balance,
+                    "new_balance": new_balance,
+                }
+            )
+
+            logging.info(
+                f"  💳 Списано {cost}₽ с {voter.name} (ID: {voter.id}), "
+                f"баланс: {old_balance}₽ → {new_balance}₽"
+            )
+
+        # Отправляем сводку админу
+        if charged_players or subscribed_players:
+            await self._send_admin_report(
+                bot, poll_name, cost, charged_players, subscribed_players
+            )
+
+        total_charged = len(charged_players) * cost
+        logging.info(
+            f"✅ Списание завершено: {len(charged_players)} игроков, "
+            f"итого {total_charged}₽. С подпиской: {len(subscribed_players)}"
+        )
+
+    async def _send_admin_report(
+        self,
+        bot: Bot,
+        poll_name: str,
+        cost: int,
+        charged_players: list[dict[str, any]],
+        subscribed_players: list[str],
+    ) -> None:
+        """
+        Отправить сводку о списании админу.
+
+        Args:
+            bot: Экземпляр бота
+            poll_name: Название опроса
+            cost: Стоимость одной игры
+            charged_players: Список игроков, с которых списано
+            subscribed_players: Список игроков с подпиской
+        """
+        from datetime import datetime
+
+        game_date = datetime.now().strftime("%d.%m.%Y")
+        report = f"💳 <b>Списание за игру</b>\n\n"
+        report += f"📅 {poll_name} ({game_date})\n"
+        report += f"💰 Стоимость: {cost}₽\n\n"
+
+        if charged_players:
+            report += f"<b>Списано по {cost}₽ с {len(charged_players)} игроков:</b>\n"
+            for i, player in enumerate(charged_players, 1):
+                balance_emoji = "🔴" if player["new_balance"] < 0 else "🟢"
+                report += (
+                    f"{i}. {escape_html(player['name'])} "
+                    f"{balance_emoji} (баланс: {player['new_balance']}₽)\n"
+                )
+
+            total_charged = len(charged_players) * cost
+            report += f"\n<b>Итого списано:</b> {total_charged}₽\n"
+
+        if subscribed_players:
+            report += f"\n<b>С подпиской (не списано): {len(subscribed_players)}</b>\n"
+            for i, name in enumerate(subscribed_players, 1):
+                report += f"{i}. {escape_html(name)}\n"
+
+        # Отправляем сообщение админу
+        if not ADMIN_USER_ID:
+            logging.warning(
+                "⚠️ ADMIN_USER_ID не задан в .env, сводка о списании не отправлена"
+            )
+            return
+
+        try:
+            logging.debug(f"Отправка сводки о списании админу (ID: {ADMIN_USER_ID})...")
+
+            @retry_async(
+                (TelegramNetworkError, asyncio.TimeoutError, OSError), tries=3, delay=2
+            )
+            async def send_report_with_retry():
+                await bot.send_message(
+                    chat_id=ADMIN_USER_ID, text=report, parse_mode="HTML"
+                )
+
+            await send_report_with_retry()
+            logging.info(f"✅ Сводка о списании отправлена админу")
+        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
+            logging.exception(
+                f"❌ Не удалось отправить сводку о списании админу (ID: {ADMIN_USER_ID})"
+            )

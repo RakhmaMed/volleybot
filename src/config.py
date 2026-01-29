@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     telegram_token: str = Field(..., validation_alias="TELEGRAM_TOKEN")
     chat_id: int = Field(..., validation_alias="CHAT_ID")
     admin_username: str = Field(..., validation_alias="ADMIN_USERNAME")
+    admin_user_id: int | None = Field(default=None, validation_alias="ADMIN_USER_ID")
 
     # Webhook настройки
     webhook_host: str = Field(default="", validation_alias="WEBHOOK_HOST")
@@ -114,6 +115,7 @@ logging.basicConfig(
 # Экспорт переменных для обратной совместимости
 TOKEN: str = settings.telegram_token
 CHAT_ID: int = settings.chat_id
+ADMIN_USER_ID: int | None = settings.admin_user_id
 WEBHOOK_SECRET: str = settings.webhook_secret
 REQUIRED_PLAYERS: int = settings.required_players
 POLL_OPTIONS: tuple[str, ...] = settings.poll_options
