@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiogram.types import ChatMemberOwner, User
+from aiogram.types import User
 
 from src.services import AdminService
 from src.utils import (

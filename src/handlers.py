@@ -7,9 +7,6 @@ from __future__ import annotations
 import asyncio
 import logging
 
-# Логируем загрузку модуля для отладки
-logging.info("🔄 Загружен модуль handlers.py - VERSION 2026-01-28-v2")
-
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import Command
@@ -18,6 +15,7 @@ from aiogram.types import (
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     CallbackQuery,
+    InaccessibleMessage,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     LinkPreviewOptions,
@@ -36,6 +34,9 @@ from .db import (
 )
 from .services import AdminService, BotStateService, PollService
 from .utils import format_player_link, get_player_name, rate_limit_check, retry_async
+
+# Логируем загрузку модуля для отладки
+logging.info("🔄 Загружен модуль handlers.py - VERSION 2026-01-29-v1")
 
 
 @retry_async(
@@ -414,7 +415,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     f"\nAllowed updates: {', '.join(webhook_info.allowed_updates)}"
                 )
             else:
-                info_text += f"\n✅ All update types allowed"
+                info_text += "\n✅ All update types allowed"
 
             await message.reply(info_text)
             logging.info(
@@ -439,6 +440,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         if not is_admin:
             # Обычным игрокам команда недоступна и не показывается
+            return
+
+        if message.text is None:
             return
 
         args = message.text.split()
@@ -616,6 +620,10 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         # Парсим callback_data: pay_select:player_id:amount
+        if callback_query.data is None:
+            await callback_query.answer("❌ Ошибка данных.", show_alert=True)
+            return
+
         data_parts = callback_query.data.split(":")
         if len(data_parts) != 3:
             await callback_query.answer("❌ Ошибка данных.", show_alert=True)
@@ -637,12 +645,16 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             # Форматируем имя с гиперссылкой
             player_link = format_player_link(new_balance_data, target_user_id)
 
-            await callback_query.message.edit_text(
-                f"✅ Баланс игрока {player_link} изменен на {amount} ₽.\n"
-                f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
-                parse_mode="HTML",
-                link_preview_options=LinkPreviewOptions(is_disabled=True),
-            )
+            if callback_query.message and not isinstance(
+                callback_query.message, InaccessibleMessage
+            ):
+                await callback_query.message.edit_text(
+                    f"✅ Баланс игрока {player_link} изменен на {amount} ₽.\n"
+                    f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
+                    parse_mode="HTML",
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                )
+
             await callback_query.answer()
             logging.info(
                 f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс через меню: "

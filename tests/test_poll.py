@@ -162,6 +162,7 @@ class TestSendPoll:
         mock_bot.pin_chat_message.assert_called_once()
         assert service.has_poll("test_poll_id")
         poll_data = service.get_poll_data("test_poll_id")
+        assert poll_data is not None
         assert poll_data.yes_voters == []
 
     async def test_send_poll_handles_migration(self, mock_bot):
@@ -201,7 +202,7 @@ class TestSendPoll:
         service = PollService()
 
         mock_bot.send_poll = AsyncMock(
-            side_effect=TelegramAPIError(method="send_poll", message="Network error")
+            side_effect=TelegramAPIError(method=MagicMock(), message="Network error")
         )
         mock_bot.send_message = AsyncMock()
 
@@ -442,6 +443,7 @@ def test_persist_poll_state_roundtrip():
 
     assert service2.has_poll("poll123")
     restored = service2.get_poll_data("poll123")
+    assert restored is not None
     assert restored.chat_id == 1
     assert restored.poll_msg_id == 2
     assert restored.info_msg_id == 3

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from asyncio import Task
+from typing import Any
 
 from aiogram import Bot
 from aiogram.exceptions import (
@@ -648,7 +649,7 @@ class PollService:
         )
 
         # Список для статистики
-        charged_players: list[dict[str, any]] = []
+        charged_players: list[dict[str, Any]] = []
         subscribed_players: list[str] = []
 
         # Проходим по всем проголосовавшим (основной состав + запасные)
@@ -709,7 +710,7 @@ class PollService:
         bot: Bot,
         poll_name: str,
         cost: int,
-        charged_players: list[dict[str, any]],
+        charged_players: list[dict[str, Any]],
         subscribed_players: list[str],
     ) -> None:
         """
@@ -725,7 +726,7 @@ class PollService:
         from datetime import datetime
 
         game_date = datetime.now().strftime("%d.%m.%Y")
-        report = f"💳 <b>Списание за игру</b>\n\n"
+        report = "💳 <b>Списание за игру</b>\n\n"
         report += f"📅 {poll_name} ({game_date})\n"
         report += f"💰 Стоимость: {cost}₽\n\n"
 
@@ -760,12 +761,13 @@ class PollService:
                 (TelegramNetworkError, asyncio.TimeoutError, OSError), tries=3, delay=2
             )
             async def send_report_with_retry():
-                await bot.send_message(
-                    chat_id=ADMIN_USER_ID, text=report, parse_mode="HTML"
-                )
+                if ADMIN_USER_ID is not None:
+                    await bot.send_message(
+                        chat_id=ADMIN_USER_ID, text=report, parse_mode="HTML"
+                    )
 
             await send_report_with_retry()
-            logging.info(f"✅ Сводка о списании отправлена админу")
+            logging.info("✅ Сводка о списании отправлена админу")
         except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
             logging.exception(
                 f"❌ Не удалось отправить сводку о списании админу (ID: {ADMIN_USER_ID})"

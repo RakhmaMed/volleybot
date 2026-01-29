@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Annotated
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -95,7 +93,7 @@ class Settings(BaseSettings):
 
 # Инициализация настроек
 try:
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
 except Exception as e:
     logging.error(f"❌ Ошибка загрузки конфигурации из .env: {e}")
     # В случае ошибки в тестах или при отсутствии .env,

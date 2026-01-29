@@ -1,5 +1,3 @@
-import sqlite3
-
 from src.db import (
     _connect,
     get_poll_templates,

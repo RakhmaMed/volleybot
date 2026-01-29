@@ -1,7 +1,6 @@
 import sqlite3
 from unittest.mock import patch
 
-import pytest
 from aiogram.types import User
 
 import src.utils
@@ -10,7 +9,6 @@ from src.db import (
     ensure_player,
     get_all_players,
     init_db,
-    set_player_balance,
 )
 from src.utils import get_player_name, load_players
 

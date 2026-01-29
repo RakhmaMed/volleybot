@@ -1,11 +1,11 @@
 """Конфигурация pytest и общие фикстуры."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from aiogram import Bot
-from aiogram.types import Chat, ChatMemberOwner, Message, Poll, PollAnswer, User
+from aiogram.types import Chat, Message, Poll, PollAnswer, User
 
 from src.services import AdminService
 
