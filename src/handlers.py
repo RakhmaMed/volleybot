@@ -36,7 +36,7 @@ from .services import AdminService, BotStateService, PollService
 from .utils import format_player_link, get_player_name, rate_limit_check, retry_async
 
 # Логируем загрузку модуля для отладки
-logging.info("🔄 Загружен модуль handlers.py - VERSION 2026-01-29-v1")
+logging.info("🔄 Загружен модуль handlers.py - VERSION 2026-01-29-v2")
 
 
 @retry_async(
