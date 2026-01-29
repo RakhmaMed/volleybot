@@ -313,7 +313,15 @@ def find_player_by_name(query: str) -> list[dict[str, Any]]:
 def ensure_player(
     user_id: int, name: str | None = None, fullname: str | None = None
 ) -> None:
-    """Гарантирует наличие игрока в базе данных (создаёт или обновляет имена)."""
+    """
+    Гарантирует наличие игрока в базе данных.
+    
+    При конфликте (игрок уже существует):
+    - Если в БД уже есть name или fullname, они НЕ перезаписываются
+    - Обновляются только пустые (NULL) поля
+    
+    Это предотвращает случайную перезапись вручную установленных имён.
+    """
     # Нормализуем username: если содержит пробелы или другие недопустимые символы, очищаем
     if name and name.strip():
         normalized_name = name.strip()
@@ -332,8 +340,8 @@ def ensure_player(
                 INSERT INTO players (id, name, fullname)
                 VALUES (?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                    name = COALESCE(excluded.name, players.name),
-                    fullname = COALESCE(excluded.fullname, players.fullname)
+                    name = COALESCE(players.name, excluded.name),
+                    fullname = COALESCE(players.fullname, excluded.fullname)
                 """,
                 (user_id, name, fullname),
             )

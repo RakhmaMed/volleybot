@@ -35,16 +35,123 @@ class TestDBPlayers:
         assert players[0]["id"] == 123
         assert players[0]["fullname"] == "Test User"
 
-    def test_ensure_player_updates_existing(self, temp_db):
-        """Проверка обновления существующего игрока."""
+    def test_ensure_player_preserves_existing_data(self, temp_db):
+        """
+        Проверка что существующие данные НЕ перезаписываются.
+        
+        Важно: это защищает от случайной перезаписи вручную установленных имён,
+        даже если пользователь изменит своё имя в Telegram.
+        """
         init_db()
-        ensure_player(user_id=123, name="old_name", fullname="Old Fullname")
+        # Первый вызов: создаём игрока с начальными данными
+        ensure_player(user_id=123, name="original_name", fullname="Original Fullname")
+
+        # Второй вызов: пытаемся изменить (например, из Telegram пришли новые данные)
         ensure_player(user_id=123, name="new_name", fullname="New Fullname")
+
+        # Проверяем: должны остаться ОРИГИНАЛЬНЫЕ данные
+        players = get_all_players()
+        assert len(players) == 1
+        assert players[0]["name"] == "original_name", "Name должен остаться оригинальным"
+        assert players[0]["fullname"] == "Original Fullname", "Fullname должен остаться оригинальным"
+
+    def test_ensure_player_fills_null_name(self, temp_db):
+        """
+        Проверка что NULL поля заполняются новыми данными.
+        
+        Если в БД name=NULL, а приходит новое значение - оно должно записаться.
+        """
+        init_db()
+        # Создаём игрока без name (NULL)
+        ensure_player(user_id=200, name=None, fullname="User With No Name")
+
+        # Пытаемся обновить: добавляем name
+        ensure_player(user_id=200, name="added_name", fullname="New Fullname")
 
         players = get_all_players()
         assert len(players) == 1
-        assert players[0]["name"] == "new_name"
-        assert players[0]["fullname"] == "New Fullname"
+        assert players[0]["name"] == "added_name", "NULL name должен заполниться"
+        assert players[0]["fullname"] == "User With No Name", "Существующий fullname должен сохраниться"
+
+    def test_ensure_player_fills_null_fullname(self, temp_db):
+        """
+        Проверка что NULL fullname заполняется новыми данными.
+        """
+        init_db()
+        # Создаём игрока без fullname (NULL)
+        ensure_player(user_id=201, name="user_name", fullname=None)
+
+        # Пытаемся обновить: добавляем fullname
+        ensure_player(user_id=201, name="new_name", fullname="Added Fullname")
+
+        players = get_all_players()
+        assert len(players) == 1
+        assert players[0]["name"] == "user_name", "Существующий name должен сохраниться"
+        assert players[0]["fullname"] == "Added Fullname", "NULL fullname должен заполниться"
+
+    def test_ensure_player_null_update_preserves_data(self, temp_db):
+        """
+        Проверка что передача NULL не затирает существующие данные.
+        
+        Если в БД есть данные, а мы передаём NULL - данные должны сохраниться.
+        """
+        init_db()
+        # Создаём игрока с полными данными
+        ensure_player(user_id=202, name="existing_name", fullname="Existing Fullname")
+
+        # Пытаемся обновить с NULL значениями
+        ensure_player(user_id=202, name=None, fullname=None)
+
+        players = get_all_players()
+        assert len(players) == 1
+        assert players[0]["name"] == "existing_name", "Name не должен затереться NULL"
+        assert players[0]["fullname"] == "Existing Fullname", "Fullname не должен затереться NULL"
+
+    def test_ensure_player_partial_update(self, temp_db):
+        """
+        Проверка частичного обновления: одно поле NULL, другое нет.
+        """
+        init_db()
+        # Создаём игрока: name есть, fullname=NULL
+        ensure_player(user_id=203, name="user123", fullname=None)
+
+        # Обновляем: пытаемся изменить name и добавить fullname
+        ensure_player(user_id=203, name="new_user123", fullname="New Name")
+
+        players = get_all_players()
+        assert len(players) == 1
+        assert players[0]["name"] == "user123", "Существующий name должен сохраниться"
+        assert players[0]["fullname"] == "New Name", "NULL fullname должен заполниться"
+
+    def test_ensure_player_real_world_scenario(self, temp_db):
+        """
+        Реальный сценарий: вручную установленное имя не должно затираться.
+        
+        1. Пользователь впервые взаимодействует с ботом → данные из Telegram
+        2. Админ вручную меняет fullname на красивое имя
+        3. Пользователь снова голосует → данные из Telegram НЕ должны перезаписать
+        """
+        init_db()
+        
+        # 1. Первое взаимодействие: сохраняем данные из Telegram
+        ensure_player(user_id=5013132836, name="TwinkleDev55", fullname="Что-то хорошее есть")
+        
+        # 2. Админ вручную меняет fullname (через UPDATE)
+        with _connect() as conn:
+            conn.execute(
+                "UPDATE players SET fullname = ? WHERE id = ?",
+                ("Рахма", 5013132836)
+            )
+            conn.commit()
+        
+        # 3. Пользователь снова голосует: Telegram передаёт старое имя
+        ensure_player(user_id=5013132836, name="TwinkleDev55", fullname="Что-то хорошее есть")
+        
+        # Проверяем: должно остаться вручную установленное имя "Рахма"
+        players = get_all_players()
+        player = next((p for p in players if p["id"] == 5013132836), None)
+        assert player is not None
+        assert player["fullname"] == "Рахма", "Вручную установленное имя должно сохраниться!"
 
     def test_get_all_players_converts_ball_donate_to_bool(self, temp_db):
         """Проверка конвертации ball_donate из int (DB) в bool (Logic)."""
