@@ -324,11 +324,8 @@ def run_webhook() -> None:
         else:
             client_ip = request.remote if request.remote else "unknown"
 
-        # Проверяем IP только для webhook пути
-        webhook_path = (
-            WEBHOOK_PATH if WEBHOOK_PATH else generate_webhook_secret_path(TOKEN)
-        )
-        if request.path == webhook_path:
+        # Проверяем IP только для webhook пути (используем effective_webhook_path через замыкание)
+        if request.path == effective_webhook_path:
             # Проверяем что запрос от Telegram
             if client_ip != "unknown" and not is_telegram_ip(client_ip):
                 logging.warning(
@@ -349,11 +346,6 @@ def run_webhook() -> None:
 
     # Создаём aiohttp приложение с middleware безопасности
     app: web.Application = web.Application(middlewares=[security_middleware])
-
-    # Определяем путь webhook (секретный если не указан явно)
-    effective_webhook_path = (
-        WEBHOOK_PATH if WEBHOOK_PATH else generate_webhook_secret_path(TOKEN)
-    )
 
     # Настраиваем webhook handler
     webhook_handler: SimpleRequestHandler = SimpleRequestHandler(dispatcher=dp, bot=bot)

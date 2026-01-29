@@ -15,39 +15,7 @@ from aiogram.types import (
 )
 
 from src.handlers import register_handlers
-from src.services import AdminService, BotStateService, PollService
-
-
-@pytest.fixture
-def admin_user():
-    """Создаёт пользователя-администратора."""
-    return User(
-        id=123456789,
-        is_bot=False,
-        first_name="Test",
-        last_name="Admin",
-        username="test_admin",
-    )
-
-
-@pytest.fixture
-def regular_user():
-    """Создаёт обычного пользователя."""
-    return User(
-        id=987654321,
-        is_bot=False,
-        first_name="Regular",
-        username="regular_user",
-    )
-
-
-@pytest.fixture
-def mock_admin_service(admin_user):
-    """Создаёт мок AdminService с предзаполненным кэшем."""
-    service = AdminService(default_chat_id=-1001234567890)
-    service._admin_cache[-1001234567890] = {admin_user.id}
-    service._cache_updated_at[-1001234567890] = float("inf")
-    return service
+from src.services import BotStateService, PollService
 
 
 @pytest.mark.asyncio
@@ -56,7 +24,7 @@ class TestBalanceCommand:
 
     @patch("src.handlers.get_players_with_balance")
     async def test_balance_as_admin(
-        self, mock_get_players, admin_user, mock_admin_service
+        self, mock_get_players, admin_user, admin_service
     ):
         """Тест команды /balance от администратора."""
         bot = AsyncMock(spec=Bot)
@@ -69,7 +37,7 @@ class TestBalanceCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
             }
@@ -109,7 +77,7 @@ class TestPayCommand:
         mock_update,
         admin_user,
         regular_user,
-        mock_admin_service,
+        admin_service,
     ):
         """Тест команды /pay в ответ на сообщение."""
         bot = AsyncMock(spec=Bot)
@@ -120,7 +88,7 @@ class TestPayCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": MagicMock(),
                 "poll_service": MagicMock(),
             }
@@ -164,7 +132,7 @@ class TestPayCommand:
     @patch("src.handlers.update_player_balance")
     @patch("src.handlers.get_player_balance")
     async def test_pay_by_name_single_match(
-        self, mock_get_balance, mock_update, mock_find, admin_user, mock_admin_service
+        self, mock_get_balance, mock_update, mock_find, admin_user, admin_service
     ):
         """Тест команды /pay по имени (одно совпадение)."""
         bot = AsyncMock(spec=Bot)
@@ -183,7 +151,7 @@ class TestPayCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": MagicMock(),
                 "poll_service": MagicMock(),
             }
@@ -213,7 +181,7 @@ class TestPayCommand:
 
     @patch("src.handlers.find_player_by_name")
     async def test_pay_by_name_multiple_matches(
-        self, mock_find, admin_user, mock_admin_service
+        self, mock_find, admin_user, admin_service
     ):
         """Тест команды /pay по имени (несколько совпадений -> клавиатура)."""
         bot = AsyncMock(spec=Bot)
@@ -226,7 +194,7 @@ class TestPayCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": MagicMock(),
                 "poll_service": MagicMock(),
             }
@@ -257,7 +225,7 @@ class TestPayCommand:
     @patch("src.handlers.get_player_balance")
     @patch("src.handlers.update_player_balance")
     async def test_pay_by_id(
-        self, mock_update, mock_get_balance, admin_user, mock_admin_service
+        self, mock_update, mock_get_balance, admin_user, admin_service
     ):
         """Тест команды /pay по числовому ID."""
         bot = AsyncMock(spec=Bot)
@@ -274,7 +242,7 @@ class TestPayCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": MagicMock(),
                 "poll_service": MagicMock(),
             }
@@ -310,7 +278,7 @@ class TestPayCallback:
     @patch("src.handlers.update_player_balance")
     @patch("src.handlers.get_player_balance")
     async def test_process_pay_select(
-        self, mock_get_balance, mock_update, admin_user, mock_admin_service
+        self, mock_get_balance, mock_update, admin_user, admin_service
     ):
         """Тест выбора игрока через инлайн-кнопку."""
         bot = AsyncMock(spec=Bot)
@@ -321,7 +289,7 @@ class TestPayCallback:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": MagicMock(),
                 "poll_service": MagicMock(),
             }
@@ -363,7 +331,7 @@ class TestPollIntegration:
     @patch("src.handlers.ensure_player")
     @patch("src.handlers.get_player_name")
     async def test_poll_answer_registers_player(
-        self, mock_get_name, mock_ensure, regular_user, mock_admin_service
+        self, mock_get_name, mock_ensure, regular_user, admin_service
     ):
         """Проверка, что при голосовании игрок автоматически попадает в БД."""
         bot = AsyncMock(spec=Bot)
@@ -376,7 +344,7 @@ class TestPollIntegration:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": MagicMock(),
                 "poll_service": poll_service,
             }

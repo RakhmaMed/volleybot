@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
 import functools
 import hashlib
 import ipaddress
@@ -13,7 +12,7 @@ import os
 import time
 import traceback
 from collections import defaultdict
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -102,7 +101,7 @@ def save_error_dump(
     logging.debug(f"Сохранение дампа ошибки для опроса '{poll_name}' в чате {chat_id}")
     try:
         error_data: dict[str, Any] = {
-            "timestamp": datetime.datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "poll_name": poll_name,
             "question": question,
             "error_type": type(error).__name__,

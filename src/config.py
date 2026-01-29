@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     # Telegram настройки
     telegram_token: str = Field(..., validation_alias="TELEGRAM_TOKEN")
     chat_id: int = Field(..., validation_alias="CHAT_ID")
-    admin_username: str = Field(..., validation_alias="ADMIN_USERNAME")
     admin_user_id: int | None = Field(default=None, validation_alias="ADMIN_USER_ID")
 
     # Webhook настройки
@@ -51,7 +50,9 @@ class Settings(BaseSettings):
     )
 
     # Настройки опросов
-    required_players: int = Field(default=18, validation_alias="REQUIRED_PLAYERS")
+    min_players: int = Field(default=12, validation_alias="MIN_PLAYERS")
+    max_players: int = Field(default=18, validation_alias="MAX_PLAYERS")
+    reserve_players: int = Field(default=3, validation_alias="RESERVE_PLAYERS")
     poll_options_raw: str = Field(default="Да,Нет", validation_alias="POLL_OPTIONS")
 
     # Настройки планировщика
@@ -115,7 +116,9 @@ TOKEN: str = settings.telegram_token
 CHAT_ID: int = settings.chat_id
 ADMIN_USER_ID: int | None = settings.admin_user_id
 WEBHOOK_SECRET: str = settings.webhook_secret
-REQUIRED_PLAYERS: int = settings.required_players
+MIN_PLAYERS: int = settings.min_players
+MAX_PLAYERS: int = settings.max_players
+RESERVE_PLAYERS: int = settings.reserve_players
 POLL_OPTIONS: tuple[str, ...] = settings.poll_options
 SCHEDULER_TIMEZONE: str = settings.scheduler_timezone
 LOG_LEVEL: str = settings.log_level

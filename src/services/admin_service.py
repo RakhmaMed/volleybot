@@ -192,18 +192,3 @@ class AdminService:
         """
         target_chat_id = chat_id or self._default_chat_id
         return self._admin_cache.get(target_chat_id, set()).copy()
-
-    def set_default_chat_id(self, chat_id: int) -> None:
-        """
-        Устанавливает ID чата по умолчанию.
-
-        Args:
-            chat_id: Новый ID чата по умолчанию
-        """
-        old_chat_id = self._default_chat_id
-        self._default_chat_id = chat_id
-        if old_chat_id != chat_id:
-            logging.info(
-                f"🔄 Default chat ID для AdminService изменён: "
-                f"{old_chat_id} → {chat_id}"
-            )

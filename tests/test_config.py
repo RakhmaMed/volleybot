@@ -13,7 +13,9 @@ class TestConfigLoading:
         assert hasattr(config, "CHAT_ID")
         assert hasattr(config, "WEBHOOK_PATH")
         assert hasattr(config, "WEBHOOK_PORT")
-        assert hasattr(config, "REQUIRED_PLAYERS")
+        assert hasattr(config, "MIN_PLAYERS")
+        assert hasattr(config, "MAX_PLAYERS")
+        assert hasattr(config, "RESERVE_PLAYERS")
         assert hasattr(config, "POLL_OPTIONS")
         assert hasattr(config, "LOG_LEVEL")
         assert hasattr(config, "SCHEDULER_TIMEZONE")
@@ -31,10 +33,20 @@ class TestConfigLoading:
         """Тест типа webhook_secret."""
         assert isinstance(config.WEBHOOK_SECRET, str)
 
-    def test_config_required_players_is_int(self):
-        """Тест типа required_players."""
-        assert isinstance(config.REQUIRED_PLAYERS, int)
-        assert config.REQUIRED_PLAYERS > 0
+    def test_config_min_players_is_int(self):
+        """Тест типа min_players."""
+        assert isinstance(config.MIN_PLAYERS, int)
+        assert config.MIN_PLAYERS > 0
+
+    def test_config_max_players_is_int(self):
+        """Тест типа max_players."""
+        assert isinstance(config.MAX_PLAYERS, int)
+        assert config.MAX_PLAYERS > 0
+
+    def test_config_reserve_players_is_int(self):
+        """Тест типа reserve_players."""
+        assert isinstance(config.RESERVE_PLAYERS, int)
+        assert config.RESERVE_PLAYERS >= 0
 
     def test_config_poll_options_is_tuple(self):
         """Тест типа poll_options."""

@@ -9,40 +9,7 @@ from aiogram.types import Chat, Message, PollAnswer, Update, User
 
 from src.config import PollSchedule
 from src.handlers import register_handlers
-from src.services import AdminService, BotStateService, PollService
-
-
-@pytest.fixture
-def admin_user():
-    """Создаёт пользователя-администратора."""
-    return User(
-        id=123456789,
-        is_bot=False,
-        first_name="Test",
-        last_name="Admin",
-        username="test_admin",
-    )
-
-
-@pytest.fixture
-def regular_user():
-    """Создаёт обычного пользователя."""
-    return User(
-        id=987654321,
-        is_bot=False,
-        first_name="Regular",
-        username="regular_user",
-    )
-
-
-@pytest.fixture
-def mock_admin_service(admin_user):
-    """Создаёт мок AdminService с предзаполненным кэшем."""
-    service = AdminService(default_chat_id=-1001234567890)
-    # Предзаполняем кэш администраторами
-    service._admin_cache[-1001234567890] = {admin_user.id}
-    service._cache_updated_at[-1001234567890] = float("inf")  # Никогда не истекает
-    return service
+from src.services import BotStateService, PollService
 
 
 @pytest.mark.asyncio
@@ -50,7 +17,7 @@ class TestStartCommand:
     """Тесты для команды /start."""
 
     async def test_start_command_as_admin_when_bot_enabled(
-        self, admin_user, mock_admin_service
+        self, admin_user, admin_service
     ):
         """Тест команды /start от администратора при включённом боте."""
         bot = MagicMock(spec=Bot)
@@ -62,7 +29,7 @@ class TestStartCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": bot_state_service,
                 "poll_service": poll_service,
             }
@@ -80,7 +47,7 @@ class TestStartCommand:
         # В реальном сценарии обработчик должен ответить соответствующим сообщением
 
     async def test_start_command_as_admin_when_bot_disabled(
-        self, admin_user, mock_admin_service
+        self, admin_user, admin_service
     ):
         """Тест команды /start от администратора при выключенном боте."""
         bot = MagicMock(spec=Bot)
@@ -92,7 +59,7 @@ class TestStartCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": bot_state_service,
                 "poll_service": poll_service,
             }
@@ -111,7 +78,7 @@ class TestStartCommand:
         assert bot_state_service.is_enabled() is True
 
     async def test_start_command_as_regular_user(
-        self, regular_user, mock_admin_service
+        self, regular_user, admin_service
     ):
         """Тест команды /start от обычного пользователя."""
         bot = MagicMock(spec=Bot)
@@ -122,7 +89,7 @@ class TestStartCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": bot_state_service,
                 "poll_service": poll_service,
             }
@@ -143,7 +110,7 @@ class TestStartCommand:
 class TestStopCommand:
     """Тесты для команды /stop."""
 
-    async def test_stop_command_as_admin(self, admin_user, mock_admin_service):
+    async def test_stop_command_as_admin(self, admin_user, admin_service):
         """Тест команды /stop от администратора."""
         bot = MagicMock(spec=Bot)
         dp = Dispatcher()
@@ -154,7 +121,7 @@ class TestStopCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": bot_state_service,
                 "poll_service": poll_service,
             }
@@ -177,7 +144,7 @@ class TestStopCommand:
 class TestScheduleCommand:
     """Тесты для команды /schedule."""
 
-    async def test_schedule_command(self, regular_user, mock_admin_service):
+    async def test_schedule_command(self, regular_user, admin_service):
         """Тест вывода команды /schedule."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -187,7 +154,7 @@ class TestScheduleCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": bot_state_service,
                 "poll_service": poll_service,
             }
@@ -238,7 +205,7 @@ class TestScheduleCommand:
 class TestChatIdCommand:
     """Тесты для команды /chatid."""
 
-    async def test_chatid_command(self, admin_user, mock_admin_service):
+    async def test_chatid_command(self, admin_user, admin_service):
         """Тест команды /chatid."""
         bot = MagicMock(spec=Bot)
         dp = Dispatcher()
@@ -248,7 +215,7 @@ class TestChatIdCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": bot_state_service,
                 "poll_service": poll_service,
             }
@@ -271,7 +238,7 @@ class TestChatIdCommand:
 class TestPollAnswerHandler:
     """Тесты для обработчика ответов на опросы."""
 
-    async def test_poll_answer_handler_adds_voter(self, admin_user, mock_admin_service):
+    async def test_poll_answer_handler_adds_voter(self, admin_user, admin_service):
         """Тест добавления голосующего при ответе 'Да'."""
         bot = MagicMock(spec=Bot)
         dp = Dispatcher()
@@ -281,7 +248,7 @@ class TestPollAnswerHandler:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": bot_state_service,
                 "poll_service": poll_service,
             }
@@ -309,7 +276,7 @@ class TestPollAnswerHandler:
         assert poll_service.has_poll("test_poll_id")
 
     async def test_poll_answer_handler_removes_voter(
-        self, admin_user, mock_admin_service
+        self, admin_user, admin_service
     ):
         """Тест удаления голосующего при ответе 'Нет'."""
         bot = MagicMock(spec=Bot)
@@ -320,7 +287,7 @@ class TestPollAnswerHandler:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": bot_state_service,
                 "poll_service": poll_service,
             }
@@ -352,7 +319,7 @@ class TestPollAnswerHandler:
 class TestRefreshAdminsCommand:
     """Тесты для команды /refresh_admins."""
 
-    async def test_refresh_admins_as_admin(self, admin_user, mock_admin_service):
+    async def test_refresh_admins_as_admin(self, admin_user, admin_service):
         """Тест команды /refresh_admins от администратора."""
         bot = MagicMock(spec=Bot)
         bot.get_chat_administrators = AsyncMock(return_value=[])
@@ -363,7 +330,7 @@ class TestRefreshAdminsCommand:
 
         dp.workflow_data.update(
             {
-                "admin_service": mock_admin_service,
+                "admin_service": admin_service,
                 "bot_state_service": bot_state_service,
                 "poll_service": poll_service,
             }
@@ -377,4 +344,4 @@ class TestRefreshAdminsCommand:
         message.reply = AsyncMock()
 
         # Проверяем, что у администратора есть доступ
-        assert admin_user.id in mock_admin_service._admin_cache[-1001234567890]
+        assert admin_user.id in admin_service._admin_cache[-1001234567890]

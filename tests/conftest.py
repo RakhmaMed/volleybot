@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from aiogram import Bot
-from aiogram.types import Chat, Message, Poll, PollAnswer, User
+from aiogram.types import User
 
 from src.services import AdminService
 
@@ -59,35 +59,3 @@ def regular_user() -> User:
         username="regular_user",
         language_code="ru",
     )
-
-
-@pytest.fixture
-def mock_message(admin_user: User) -> Message:
-    """Создаёт мок-объект сообщения."""
-    message = MagicMock(spec=Message)
-    message.from_user = admin_user
-    message.chat = Chat(id=-1001234567890, type="supergroup", title="Test Chat")
-    message.message_id = 1
-    message.reply = MagicMock()
-    return message
-
-
-@pytest.fixture
-def mock_poll() -> Poll:
-    """Создаёт мок-объект опроса."""
-    poll = MagicMock(spec=Poll)
-    poll.id = "test_poll_id"
-    poll.question = "Test poll question"
-    poll.options = [MagicMock(text="Да"), MagicMock(text="Нет")]
-    poll.is_anonymous = False
-    return poll
-
-
-@pytest.fixture
-def mock_poll_answer(admin_user: User) -> PollAnswer:
-    """Создаёт мок-объект ответа на опрос."""
-    answer = MagicMock(spec=PollAnswer)
-    answer.poll_id = "test_poll_id"
-    answer.user = admin_user
-    answer.option_ids = [0]  # Выбран "Да"
-    return answer

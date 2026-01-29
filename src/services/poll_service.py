@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from asyncio import Task
+from datetime import datetime
 from typing import Any
 
 from aiogram import Bot
@@ -14,7 +15,7 @@ from aiogram.exceptions import (
     TelegramNetworkError,
 )
 
-from ..config import ADMIN_USER_ID, POLL_OPTIONS, REQUIRED_PLAYERS
+from ..config import ADMIN_USER_ID, MAX_PLAYERS, MIN_PLAYERS, POLL_OPTIONS, RESERVE_PLAYERS
 from ..db import (
     POLL_STATE_KEY,
     add_transaction,
@@ -395,29 +396,49 @@ class PollService:
         text: str
         if len(yes_voters) == 0:
             text = "⏳ Идёт сбор голосов..."
-        elif len(yes_voters) < REQUIRED_PLAYERS:
+        elif len(yes_voters) < MIN_PLAYERS:
             text = (
                 f"⏳ <b>Идёт сбор голосов:</b> "
-                f"{len(yes_voters)}/{REQUIRED_PLAYERS}\n\n"
+                f"{len(yes_voters)}/{MIN_PLAYERS}\n\n"
                 "<b>Проголосовали:</b>\n"
             )
             text += "\n".join(
                 f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(yes_voters)
             )
-        else:
-            main_players: list[VoterInfo] = yes_voters[:REQUIRED_PLAYERS]
-            reserves: list[VoterInfo] = yes_voters[REQUIRED_PLAYERS:]
+        elif len(yes_voters) <= MAX_PLAYERS:
+            text = "✅ <b>Список игроков:</b>\n"
+            text += "\n".join(
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(yes_voters)
+            )
+        elif len(yes_voters) <= MAX_PLAYERS + RESERVE_PLAYERS:
+            main_players: list[VoterInfo] = yes_voters[:MAX_PLAYERS]
+            reserves: list[VoterInfo] = yes_voters[MAX_PLAYERS:]
 
             text = "✅ <b>Список игроков:</b>\n"
             text += "\n".join(
                 f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(main_players)
             )
+            text += "\n\n🕗 <b>Запасные игроки:</b>\n"
+            text += "\n".join(
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
+            )
+        else:
+            main_players = yes_voters[:MAX_PLAYERS]
+            reserves = yes_voters[MAX_PLAYERS:MAX_PLAYERS + RESERVE_PLAYERS]
+            booked: list[VoterInfo] = yes_voters[MAX_PLAYERS + RESERVE_PLAYERS:]
 
-            if reserves:
-                text += "\n\n🕗 <b>Запасные игроки:</b>\n"
-                text += "\n".join(
-                    f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
-                )
+            text = "✅ <b>Список игроков:</b>\n"
+            text += "\n".join(
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(main_players)
+            )
+            text += "\n\n🕗 <b>Запасные игроки:</b>\n"
+            text += "\n".join(
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
+            )
+            text += "\n\n🎫 <b>Забронированные места:</b>\n"
+            text += "\n".join(
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(booked)
+            )
 
         # Добавляем легенду
         text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
@@ -457,10 +478,12 @@ class PollService:
 
                 await edit_with_retry()
                 data.last_message_text = text
+                main_count = min(len(yes_voters), MAX_PLAYERS)
+                reserve_count = max(0, min(len(yes_voters) - MAX_PLAYERS, RESERVE_PLAYERS))
+                booked_count = max(0, len(yes_voters) - MAX_PLAYERS - RESERVE_PLAYERS)
                 logging.info(
                     f"✅ Список игроков обновлен для опроса {poll_id}: {len(yes_voters)} человек "
-                    f"(основных: {min(len(yes_voters), REQUIRED_PLAYERS)}, "
-                    f"запасных: {max(0, len(yes_voters) - REQUIRED_PLAYERS)})"
+                    f"(основных: {main_count}, запасных: {reserve_count}, забронированных: {booked_count})"
                 )
             except (
                 TelegramAPIError,
@@ -524,19 +547,27 @@ class PollService:
         final_text: str
         if len(yes_voters) == 0:
             final_text = "📊 <b>Голосование завершено</b>\n\nНикто не записался."
-        elif len(yes_voters) < REQUIRED_PLAYERS:
+        elif len(yes_voters) < MIN_PLAYERS:
             final_text = (
                 f"📊 <b>Голосование завершено:</b> "
-                f"{len(yes_voters)}/{REQUIRED_PLAYERS}\n\n"
+                f"{len(yes_voters)}/{MIN_PLAYERS}\n\n"
                 "<b>Записались:</b>\n"
             )
             final_text += "\n".join(
                 f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(yes_voters)
             )
             final_text += "\n\n⚠️ <b>Не хватает игроков!</b>"
-        else:
-            main_players: list[VoterInfo] = yes_voters[:REQUIRED_PLAYERS]
-            reserves: list[VoterInfo] = yes_voters[REQUIRED_PLAYERS:]
+        elif len(yes_voters) <= MAX_PLAYERS:
+            final_text = (
+                "📊 <b>Голосование завершено</b> ✅\n\n"
+                f"<b>Основной состав ({len(yes_voters)}):</b>\n"
+            )
+            final_text += "\n".join(
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(yes_voters)
+            )
+        elif len(yes_voters) <= MAX_PLAYERS + RESERVE_PLAYERS:
+            main_players: list[VoterInfo] = yes_voters[:MAX_PLAYERS]
+            reserves: list[VoterInfo] = yes_voters[MAX_PLAYERS:]
 
             final_text = (
                 "📊 <b>Голосование завершено</b> ✅\n\n"
@@ -545,12 +576,31 @@ class PollService:
             final_text += "\n".join(
                 f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(main_players)
             )
+            final_text += f"\n\n🕗 <b>Запасные ({len(reserves)}):</b>\n"
+            final_text += "\n".join(
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
+            )
+        else:
+            main_players = yes_voters[:MAX_PLAYERS]
+            reserves = yes_voters[MAX_PLAYERS:MAX_PLAYERS + RESERVE_PLAYERS]
+            booked: list[VoterInfo] = yes_voters[MAX_PLAYERS + RESERVE_PLAYERS:]
 
-            if reserves:
-                final_text += f"\n\n🕗 <b>Запасные ({len(reserves)}):</b>\n"
-                final_text += "\n".join(
-                    f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
-                )
+            final_text = (
+                "📊 <b>Голосование завершено</b> ✅\n\n"
+                f"<b>Основной состав ({len(main_players)}):</b>\n"
+            )
+            final_text += "\n".join(
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(main_players)
+            )
+            final_text += f"\n\n🕗 <b>Запасные ({len(reserves)}):</b>\n"
+            final_text += "\n".join(
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
+            )
+            final_text += f"\n\n🎫 <b>Забронированные места ({len(booked)}):</b>\n"
+            final_text += "\n".join(
+                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(booked)
+            )
+            final_text += "\n\n⚠️ <b>Превышен лимит игроков!</b>"
 
         # Добавляем легенду
         final_text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
@@ -579,10 +629,13 @@ class PollService:
                 )
 
             new_message = await send_final_with_retry()
+            main_count = min(len(yes_voters), MAX_PLAYERS)
+            reserve_count = max(0, min(len(yes_voters) - MAX_PLAYERS, RESERVE_PLAYERS))
+            booked_count = max(0, len(yes_voters) - MAX_PLAYERS - RESERVE_PLAYERS)
             logging.info(
                 f"✅ Финальный список отправлен новым сообщением для '{poll_name}': "
-                f"{len(yes_voters)} участников (основных: {min(len(yes_voters), REQUIRED_PLAYERS)}, "
-                f"запасных: {max(0, len(yes_voters) - REQUIRED_PLAYERS)})"
+                f"{len(yes_voters)} участников (основных: {main_count}, "
+                f"запасных: {reserve_count}, забронированных: {booked_count})"
             )
 
             # Удаляем старое информационное сообщение
@@ -695,8 +748,6 @@ class PollService:
             new_balance = old_balance - cost
 
             # Добавляем транзакцию в историю
-            from datetime import datetime
-
             game_date = datetime.now().strftime("%d.%m.%Y")
             description = f"Зал: {poll_name} ({game_date})"
             add_transaction(voter.id, -cost, description, poll_name)
@@ -745,8 +796,6 @@ class PollService:
             charged_players: Список игроков, с которых списано
             subscribed_players: Список игроков с подпиской
         """
-        from datetime import datetime
-
         game_date = datetime.now().strftime("%d.%m.%Y")
         report = "💳 <b>Списание за игру</b>\n\n"
         report += f"📅 {poll_name} ({game_date})\n"

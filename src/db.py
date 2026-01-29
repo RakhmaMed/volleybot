@@ -193,28 +193,6 @@ def load_state(key: str, default: Any = None) -> Any:
         return default
 
 
-def delete_state(key: str) -> None:
-    """Удаляет значение по ключу (без ошибок, если ключа нет)."""
-    try:
-        init_db()
-        logging.debug(f"Удаление состояния для ключа: '{key}'")
-        with _connect() as conn:
-            cursor = conn.execute("DELETE FROM kv_store WHERE key = ?", (key,))
-            conn.commit()
-            if cursor.rowcount > 0:
-                logging.debug(f"✅ Состояние '{key}' успешно удалено")
-            else:
-                logging.debug(f"Состояние '{key}' не найдено в БД (ничего не удалено)")
-    except sqlite3.Error:
-        logging.exception(
-            f"❌ Ошибка SQLite при удалении состояния '{key}'. БД: {_get_db_path()}"
-        )
-    except OSError:
-        logging.exception(
-            f"❌ Ошибка ввода-вывода при удалении состояния '{key}'. БД: {_get_db_path()}"
-        )
-
-
 def get_all_players() -> list[dict[str, Any]]:
     """Возвращает список всех игроков из базы данных."""
     try:
@@ -276,21 +254,6 @@ def update_player_balance(user_id: int, amount: int) -> bool:
             return cursor.rowcount > 0
     except sqlite3.Error:
         logging.exception(f"❌ Ошибка при обновлении баланса игрока {user_id}")
-        return False
-
-
-def set_player_balance(user_id: int, balance: int) -> bool:
-    """Устанавливает точное значение баланса игрока."""
-    try:
-        with _connect() as conn:
-            cursor = conn.execute(
-                "UPDATE players SET balance = ? WHERE id = ?",
-                (balance, user_id),
-            )
-            conn.commit()
-            return cursor.rowcount > 0
-    except sqlite3.Error:
-        logging.exception(f"❌ Ошибка при установке баланса игрока {user_id}")
         return False
 
 
@@ -428,23 +391,6 @@ def save_poll_template(template: dict[str, Any]) -> None:
         )
 
 
-def get_poll_subs(poll_name: str) -> list[int]:
-    """Возвращает список ID подписчиков для конкретного опроса."""
-    try:
-        init_db()
-        with _connect() as conn:
-            cursor = conn.execute(
-                "SELECT user_id FROM poll_subscriptions WHERE poll_name = ?",
-                (poll_name,),
-            )
-            return [row[0] for row in cursor.fetchall()]
-    except sqlite3.Error:
-        logging.exception(
-            f"❌ Ошибка при получении подписчиков для опроса '{poll_name}'"
-        )
-        return []
-
-
 def add_transaction(
     player_id: int, amount: int, description: str, poll_name: str | None = None
 ) -> None:
@@ -475,81 +421,3 @@ def add_transaction(
         logging.exception(f"❌ Ошибка при добавлении транзакции для игрока {player_id}")
 
 
-def get_player_transactions(player_id: int, limit: int = 10) -> list[dict[str, Any]]:
-    """
-    Возвращает историю транзакций игрока.
-
-    Args:
-        player_id: ID игрока
-        limit: Максимальное количество транзакций
-
-    Returns:
-        Список словарей с данными транзакций
-    """
-    try:
-        init_db()
-        with _connect() as conn:
-            cursor = conn.execute(
-                """
-                SELECT id, amount, description, poll_name, created_at
-                FROM transactions
-                WHERE player_id = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (player_id, limit),
-            )
-            return [
-                {
-                    "id": row[0],
-                    "amount": row[1],
-                    "description": row[2],
-                    "poll_name": row[3],
-                    "created_at": row[4],
-                }
-                for row in cursor.fetchall()
-            ]
-    except sqlite3.Error:
-        logging.exception(f"❌ Ошибка при получении транзакций для игрока {player_id}")
-        return []
-
-
-def get_transactions_by_poll(poll_name: str) -> list[dict[str, Any]]:
-    """
-    Возвращает все транзакции для конкретного опроса.
-
-    Args:
-        poll_name: Название опроса
-
-    Returns:
-        Список словарей с данными транзакций
-    """
-    try:
-        init_db()
-        with _connect() as conn:
-            cursor = conn.execute(
-                """
-                SELECT t.id, t.player_id, p.name, p.fullname, t.amount, t.description, t.created_at
-                FROM transactions t
-                LEFT JOIN players p ON t.player_id = p.id
-                WHERE t.poll_name = ?
-                ORDER BY t.created_at DESC
-                """,
-                (poll_name,),
-            )
-            return [
-                {
-                    "id": row[0],
-                    "player_id": row[1],
-                    "player_name": row[3] if row[3] else row[2],  # fullname или name
-                    "amount": row[4],
-                    "description": row[5],
-                    "created_at": row[6],
-                }
-                for row in cursor.fetchall()
-            ]
-    except sqlite3.Error:
-        logging.exception(
-            f"❌ Ошибка при получении транзакций для опроса '{poll_name}'"
-        )
-        return []

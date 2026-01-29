@@ -6,7 +6,7 @@ import pytest
 from aiogram.exceptions import TelegramMigrateToChat
 from aiogram.methods import SendPoll
 
-from src.config import REQUIRED_PLAYERS
+from src.config import MAX_PLAYERS, MIN_PLAYERS
 from src.db import POLL_STATE_KEY, init_db, load_state
 from src.poll import PollData, VoterInfo, sort_voters_by_update_id
 from src.services import PollService
@@ -272,7 +272,7 @@ class TestUpdatePlayersList:
 
         mock_bot.edit_message_text.assert_called_once()
         call_args = mock_bot.edit_message_text.call_args
-        assert f"{len(voters)}/{REQUIRED_PLAYERS}" in call_args.kwargs["text"]
+        assert f"{len(voters)}/{MIN_PLAYERS}" in call_args.kwargs["text"]
         assert "@user1" in call_args.kwargs["text"]
         assert "@user2" in call_args.kwargs["text"]
 
@@ -281,7 +281,7 @@ class TestUpdatePlayersList:
         service = PollService()
         poll_id = "test_poll_id"
         voters: list[VoterInfo] = [
-            VoterInfo(id=i, name=f"@user{i}") for i in range(REQUIRED_PLAYERS + 5)
+            VoterInfo(id=i, name=f"@user{i}") for i in range(MAX_PLAYERS + 5)
         ]
         service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
@@ -397,7 +397,7 @@ class TestClosePoll:
         service = PollService()
         poll_id = "test_poll_id"
         voters: list[VoterInfo] = [
-            VoterInfo(id=i, name=f"@user{i}") for i in range(REQUIRED_PLAYERS + 5)
+            VoterInfo(id=i, name=f"@user{i}") for i in range(MAX_PLAYERS + 5)
         ]
         service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
