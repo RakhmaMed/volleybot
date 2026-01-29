@@ -40,6 +40,7 @@ class BotStateService:
     def _restore_state(self) -> None:
         """Восстановить состояние бота из базы данных."""
         logging.debug("Восстановление состояния бота из БД...")
+        chat_id_from_config: int = self._state.chat_id  # CHAT_ID из .env
         stored_state = load_state(BOT_STATE_KEY, default={})
         if isinstance(stored_state, dict):
             old_enabled = self._state.bot_enabled
@@ -56,6 +57,14 @@ class BotStateService:
                 logging.warning(
                     f"⚠️ Сохранённый chat_id повреждён, используем значение из настроек: {self._state.chat_id}"
                 )
+
+            # Приоритет .env: если CHAT_ID в конфиге изменился — используем его и сохраняем в БД
+            if self._state.chat_id != chat_id_from_config:
+                logging.info(
+                    f"🔄 CHAT_ID в .env изменился: {self._state.chat_id} → {chat_id_from_config}, используем значение из .env"
+                )
+                self._state.chat_id = chat_id_from_config
+                self.persist_state()
 
             if (
                 old_enabled != self._state.bot_enabled
