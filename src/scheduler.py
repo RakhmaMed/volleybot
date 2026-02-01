@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
-from .db import get_poll_templates
+from .db import clear_paid_poll_subscriptions, get_poll_templates
 from .services import BotStateService, PollService
 
 
@@ -21,6 +24,10 @@ def create_poll_job(
     bot_state_service: BotStateService,
     poll_service: PollService,
     subs: list[int] | None = None,
+    options: list[str] | None = None,
+    allows_multiple_answers: bool = False,
+    poll_kind: str = "regular",
+    option_poll_names: list[str | None] | None = None,
 ) -> Callable[[], Awaitable[None]]:
     """
     Создаёт асинхронную задачу для отправки опроса.
@@ -40,7 +47,16 @@ def create_poll_job(
     async def job() -> None:
         chat_id: int = bot_state_service.get_chat_id()
         new_chat_id: int = await poll_service.send_poll(
-            bot, chat_id, message, poll_name, bot_state_service.is_enabled(), subs
+            bot,
+            chat_id,
+            message,
+            poll_name,
+            bot_state_service.is_enabled(),
+            subs,
+            options,
+            allows_multiple_answers,
+            poll_kind,
+            option_poll_names,
         )
         if new_chat_id != chat_id:
             bot_state_service.set_chat_id(new_chat_id)
@@ -65,6 +81,40 @@ def create_close_poll_job(
 
     async def job() -> None:
         await poll_service.close_poll(bot, poll_name)
+
+    return job
+
+
+def create_reminder_job(
+    bot: Bot,
+    message: str,
+    bot_state_service: BotStateService,
+    poll_service: PollService,
+) -> Callable[[], Awaitable[None]]:
+    """
+    Создаёт асинхронную задачу для напоминания об окончании голосования.
+
+    Args:
+        bot: Экземпляр бота
+        message: Текст напоминания
+        bot_state_service: Сервис состояния бота
+        poll_service: Сервис опросов
+
+    Returns:
+        Асинхронная функция-задача для планировщика
+    """
+
+    async def job() -> None:
+        if not poll_service.has_active_polls():
+            return
+        first_poll = poll_service.get_first_poll()
+        if first_poll is None:
+            return
+        _, data = first_poll
+        if data.poll_kind != "monthly_subscription":
+            return
+        chat_id: int = bot_state_service.get_chat_id()
+        await bot.send_message(chat_id=chat_id, text=message)
 
     return job
 
@@ -193,3 +243,193 @@ def setup_scheduler(
             )
 
     logging.info(f"✅ Планировщик настроен: {len(poll_templates) * 2} задач добавлено")
+
+    _schedule_monthly_subscription_poll(
+        scheduler, bot, bot_state_service, poll_service, poll_templates
+    )
+
+
+def _schedule_monthly_subscription_poll(
+    scheduler: AsyncIOScheduler,
+    bot: Bot,
+    bot_state_service: BotStateService,
+    poll_service: PollService,
+    poll_templates: list[dict[str, object]],
+) -> None:
+    """
+    Планирует ежемесячный опрос на абонемент для платных игр.
+    """
+    paid_polls: list[dict[str, object]] = [
+        p for p in poll_templates if int(p.get("cost", 0) or 0) > 0
+    ]
+    if not paid_polls:
+        logging.info("ℹ️ Платные опросы не найдены, месячный опрос не запланирован")
+        return
+
+    moscow_tz = ZoneInfo("Europe/Moscow")
+    utc_tz = ZoneInfo("UTC")
+    now_moscow = datetime.now(tz=moscow_tz)
+
+    def month_bounds(base: datetime) -> tuple[datetime, datetime]:
+        month_start = base.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if base.month == 12:
+            next_month = base.replace(year=base.year + 1, month=1, day=1)
+        else:
+            next_month = base.replace(month=base.month + 1, day=1)
+        next_month = next_month.replace(hour=0, minute=0, second=0, microsecond=0)
+        return month_start, next_month
+
+    def last_game_in_month(
+        month_start_moscow: datetime, next_month_start_moscow: datetime
+    ) -> datetime | None:
+        utc_start = month_start_moscow.astimezone(utc_tz)
+        utc_end = next_month_start_moscow.astimezone(utc_tz)
+        end_date = (utc_end - timedelta(seconds=1)).date()
+        day_map = {
+            "mon": 0,
+            "tue": 1,
+            "wed": 2,
+            "thu": 3,
+            "fri": 4,
+            "sat": 5,
+            "sun": 6,
+        }
+        last_game: datetime | None = None
+        for poll in paid_polls:
+            game_day = str(poll.get("game_day", "*"))
+            game_hour_utc = int(poll.get("game_hour_utc", 0) or 0)
+            game_minute_utc = int(poll.get("game_minute_utc", 0) or 0)
+            current_date = utc_start.date()
+            while current_date <= end_date:
+                if game_day == "*" or day_map.get(game_day) == current_date.weekday():
+                    dt_utc = datetime(
+                        current_date.year,
+                        current_date.month,
+                        current_date.day,
+                        game_hour_utc,
+                        game_minute_utc,
+                        tzinfo=utc_tz,
+                    )
+                    dt_moscow = dt_utc.astimezone(moscow_tz)
+                    if month_start_moscow <= dt_moscow < next_month_start_moscow:
+                        if last_game is None or dt_moscow > last_game:
+                            last_game = dt_moscow
+                current_date += timedelta(days=1)
+        return last_game
+
+    month_start, next_month_start = month_bounds(now_moscow)
+    last_game = last_game_in_month(month_start, next_month_start)
+    if last_game is None:
+        logging.warning(
+            "⚠️ Не удалось найти последнюю игру месяца для платных опросов"
+        )
+        return
+
+    open_moscow = last_game.replace(hour=22, minute=0, second=0, microsecond=0)
+    if open_moscow <= now_moscow:
+        month_start, next_month_start = month_bounds(next_month_start)
+        last_game = last_game_in_month(month_start, next_month_start)
+        if last_game is None:
+            logging.warning(
+                "⚠️ Не удалось найти последнюю игру следующего месяца для платных опросов"
+            )
+            return
+        open_moscow = last_game.replace(hour=22, minute=0, second=0, microsecond=0)
+
+    clear_moscow = open_moscow - timedelta(minutes=1)
+    reminder_moscow = (open_moscow + timedelta(days=1)).replace(
+        hour=18, minute=0, second=0, microsecond=0
+    )
+    close_moscow = open_moscow + timedelta(hours=24)
+
+    def to_utc(dt_moscow: datetime) -> datetime:
+        return dt_moscow.astimezone(utc_tz)
+
+    paid_poll_options: list[str] = []
+    option_poll_names: list[str | None] = []
+    for poll in paid_polls:
+        name = str(poll.get("name", ""))
+        place = str(poll.get("place", ""))
+        game_hour_utc = int(poll.get("game_hour_utc", 0) or 0)
+        game_minute_utc = int(poll.get("game_minute_utc", 0) or 0)
+        dt_utc = datetime(
+            2000, 1, 1, game_hour_utc, game_minute_utc, tzinfo=utc_tz
+        )
+        dt_moscow = dt_utc.astimezone(moscow_tz)
+        time_moscow = dt_moscow.strftime("%H:%M")
+        if place:
+            option_text = f"{name} — {place} — {time_moscow} МСК"
+        else:
+            option_text = f"{name} — {time_moscow} МСК"
+        paid_poll_options.append(option_text)
+        option_poll_names.append(name)
+
+    paid_poll_options.append("смотреть результат")
+    option_poll_names.append(None)
+
+    poll_question = (
+        "Абонемент на следующий месяц.\n"
+        "Выберите игры, по которым хотите подписку. Можно выбрать несколько вариантов."
+    )
+
+    open_job_id = "monthly_subs_open"
+    clear_job_id = "monthly_subs_clear"
+    reminder_job_id = "monthly_subs_reminder"
+    close_job_id = "monthly_subs_close"
+    poll_name = "monthly_subscription"
+
+    clear_job = lambda: clear_paid_poll_subscriptions()
+    scheduler.add_job(
+        clear_job,
+        trigger=DateTrigger(run_date=to_utc(clear_moscow)),
+        id=clear_job_id,
+        name="Абонемент (очистка подписок)",
+        replace_existing=True,
+    )
+
+    poll_job = create_poll_job(
+        bot,
+        poll_question,
+        poll_name,
+        bot_state_service,
+        poll_service,
+        subs=[],
+        options=paid_poll_options,
+        allows_multiple_answers=True,
+        poll_kind="monthly_subscription",
+        option_poll_names=option_poll_names,
+    )
+    scheduler.add_job(
+        poll_job,
+        trigger=DateTrigger(run_date=to_utc(open_moscow)),
+        id=open_job_id,
+        name="Абонемент (открытие)",
+        replace_existing=True,
+    )
+
+    reminder_text = "⏰ Напоминание: голосование за абонемент заканчивается сегодня в 22:00 МСК."
+    reminder_job = create_reminder_job(
+        bot, reminder_text, bot_state_service, poll_service
+    )
+    scheduler.add_job(
+        reminder_job,
+        trigger=DateTrigger(run_date=to_utc(reminder_moscow)),
+        id=reminder_job_id,
+        name="Абонемент (напоминание)",
+        replace_existing=True,
+    )
+
+    close_job = create_close_poll_job(bot, poll_name, poll_service)
+    scheduler.add_job(
+        close_job,
+        trigger=DateTrigger(run_date=to_utc(close_moscow)),
+        id=close_job_id,
+        name="Абонемент (закрытие)",
+        replace_existing=True,
+    )
+
+    logging.info(
+        "📆 Месячный опрос на абонемент запланирован: "
+        f"очистка={clear_moscow}, открытие={open_moscow}, "
+        f"напоминание={reminder_moscow}, закрытие={close_moscow}"
+    )

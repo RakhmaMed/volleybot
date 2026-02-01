@@ -391,6 +391,25 @@ def save_poll_template(template: dict[str, Any]) -> None:
         )
 
 
+def clear_paid_poll_subscriptions() -> None:
+    """Очищает подписки для всех платных опросов (cost > 0)."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM poll_subscriptions
+                WHERE poll_name IN (
+                    SELECT name FROM poll_templates WHERE cost > 0
+                )
+                """
+            )
+            conn.commit()
+        logging.info("✅ Подписки для платных опросов очищены")
+    except sqlite3.Error:
+        logging.exception("❌ Ошибка при очистке подписок для платных опросов")
+
+
 def add_transaction(
     player_id: int, amount: int, description: str, poll_name: str | None = None
 ) -> None:

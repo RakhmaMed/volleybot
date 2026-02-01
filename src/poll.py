@@ -30,6 +30,14 @@ class PollData(BaseModel):
         default="⏳ Идёт сбор голосов...", description="Последний отправленный текст"
     )
     subs: list[int] = Field(default_factory=list, description="Список ID подписчиков")
+    poll_kind: str = Field(default="regular", description="Тип опроса")
+    options: list[str] = Field(default_factory=list, description="Список опций опроса")
+    option_poll_names: list[str | None] = Field(
+        default_factory=list, description="Соответствие опция → poll_name"
+    )
+    monthly_votes: dict[int, list[int]] = Field(
+        default_factory=dict, description="Выборы пользователей в месячном опросе"
+    )
 
     model_config = {"arbitrary_types_allowed": True, "frozen": False}
 

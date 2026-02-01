@@ -28,12 +28,20 @@ from .config import POLLS_SCHEDULE
 from .db import (
     ensure_player,
     find_player_by_name,
+    get_all_players,
     get_player_balance,
     get_players_with_balance,
+    get_poll_templates,
     update_player_balance,
 )
 from .services import AdminService, BotStateService, PollService
-from .utils import format_player_link, get_player_name, rate_limit_check, retry_async
+from .utils import (
+    escape_html,
+    format_player_link,
+    get_player_name,
+    rate_limit_check,
+    retry_async,
+)
 
 # Логируем загрузку модуля для отладки
 logging.info("🔄 Загружен модуль handlers.py - VERSION 2026-01-29-v2")
@@ -65,6 +73,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="help", description="Показать справку по командам"),
         BotCommand(command="schedule", description="Показать расписание опросов"),
         BotCommand(command="balance", description="Показать долги/балансы"),
+        BotCommand(command="subs", description="Абонементы по дням"),
         BotCommand(command="pay", description="Изменить баланс игрока"),
         BotCommand(command="start", description="Включить бота"),
         BotCommand(command="stop", description="Выключить бота"),
@@ -237,6 +246,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "/balance — показать мой баланс\n\n"
             "<b>Команды для администраторов:</b>\n"
             "/balance — список всех долгов\n"
+            "/subs — абонементы по дням\n"
             "/pay [сумма] — изменить баланс (в ответ на сообщение)\n"
             "/pay [имя] [сумма] — найти игрока и изменить баланс\n"
             "/start — включить бота\n"
@@ -379,6 +389,123 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         except TelegramNetworkError:
             logging.warning(
                 f"⚠️ Сетевая ошибка при ответе на /balance от @{user.username if user else 'unknown'}"
+            )
+
+    @router.message(Command("subs"))
+    async def subscriptions_handler(message: Message) -> None:
+        """Команда для отображения абонементов по дням (только для администратора)."""
+        user = message.from_user
+        if user is None:
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+
+        if not is_admin:
+            return
+
+        rate_limit_error = rate_limit_check(user, is_admin=True)
+        if rate_limit_error:
+            try:
+                await message.reply(rate_limit_error)
+            except TelegramNetworkError:
+                logging.warning("⚠️ Сетевая ошибка при отправке rate limit сообщения")
+            return
+
+        poll_templates = get_poll_templates()
+        if not poll_templates:
+            await message.reply("📅 Шаблоны опросов не найдены.")
+            return
+
+        players = get_all_players()
+        players_by_id = {p["id"]: p for p in players if "id" in p}
+
+        days_ru = {
+            "mon": "Понедельник",
+            "tue": "Вторник",
+            "wed": "Среда",
+            "thu": "Четверг",
+            "fri": "Пятница",
+            "sat": "Суббота",
+            "sun": "Воскресенье",
+            "*": "Ежедневно",
+        }
+
+        def pick_day(template: dict[str, object]) -> str:
+            game_day = str(template.get("game_day") or "*").lower()
+            if game_day and game_day != "*":
+                return game_day
+            open_day = str(template.get("open_day") or "*").lower()
+            return open_day or "*"
+
+        day_to_polls: dict[str, list[dict[str, object]]] = {}
+        for template in poll_templates:
+            day_key = pick_day(template)
+            day_to_polls.setdefault(day_key, []).append(template)
+
+        days_order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun", "*"]
+        ordered_days = [d for d in days_order if d in day_to_polls]
+        ordered_days += sorted(d for d in day_to_polls.keys() if d not in days_order)
+
+        lines = ["📅 <b>Абонементы по дням</b>"]
+
+        for day_key in ordered_days:
+            day_name = days_ru.get(day_key, day_key)
+            lines.append(f"\n<b>{escape_html(day_name)}</b>")
+
+            for template in day_to_polls.get(day_key, []):
+                poll_name = str(template.get("name") or "Без названия")
+                place = str(template.get("place") or "")
+                hour = template.get("game_hour_utc")
+                minute = template.get("game_minute_utc")
+
+                time_text = ""
+                if isinstance(hour, int) and isinstance(minute, int):
+                    msk_hour = (hour + 3) % 24
+                    time_text = f"{msk_hour:02d}:{minute:02d} МСК"
+
+                label = escape_html(poll_name)
+                if time_text:
+                    label = f"{label} ({time_text})"
+                if place:
+                    label = f"{label} — {escape_html(place)}"
+
+                subs = template.get("subs") or []
+                subs_links: list[str] = []
+                subs_entries = []
+                for user_id in subs:
+                    if not isinstance(user_id, int):
+                        continue
+                    player = players_by_id.get(user_id)
+                    sort_key = (
+                        (player or {}).get("fullname")
+                        or (player or {}).get("name")
+                        or str(user_id)
+                    )
+                    subs_entries.append((str(sort_key).lower(), user_id, player))
+
+                for _, user_id, player in sorted(subs_entries, key=lambda x: x[0]):
+                    subs_links.append(format_player_link(player, user_id))
+
+                if subs_links:
+                    subs_text = ", ".join(subs_links)
+                else:
+                    subs_text = "— нет подписчиков"
+
+                lines.append(f"{label}: {subs_text}")
+
+        try:
+            await message.reply(
+                "\n".join(lines),
+                parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+            )
+            logging.info(
+                f"📋 Запрос абонементов по дням от админа @{user.username} (ID: {user.id})"
+            )
+        except TelegramNetworkError:
+            logging.warning(
+                f"⚠️ Сетевая ошибка при ответе на /subs от @{user.username if user else 'unknown'}"
             )
 
     @router.message(Command("webhookinfo"))
@@ -697,6 +824,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         data = poll_service.get_poll_data(poll_id)
         if data is None:
+            return
+
+        if data.poll_kind == "monthly_subscription":
+            data.monthly_votes[user.id] = selected
+            poll_service.persist_state()
             return
 
         voted_yes = 0 in selected  # Да

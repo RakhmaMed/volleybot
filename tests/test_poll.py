@@ -7,7 +7,15 @@ from aiogram.exceptions import TelegramMigrateToChat
 from aiogram.methods import SendPoll
 
 from src.config import MAX_PLAYERS, MIN_PLAYERS
-from src.db import POLL_STATE_KEY, init_db, load_state
+from src.db import (
+    POLL_STATE_KEY,
+    ensure_player,
+    get_player_balance,
+    init_db,
+    load_state,
+    save_poll_template,
+    update_player_balance,
+)
 from src.poll import PollData, VoterInfo, sort_voters_by_update_id
 from src.services import PollService
 
@@ -422,6 +430,126 @@ class TestClosePoll:
         assert call_args.kwargs.get("parse_mode") == "HTML"
         # Должен быть reply_to_message_id
         assert call_args.kwargs["reply_to_message_id"] == 123
+
+
+@pytest.mark.asyncio
+class TestProcessPaymentDeduction:
+    """Тесты для _process_payment_deduction (списание за платный зал)."""
+
+    async def test_poll_not_in_config_skips_deduction(self, mock_bot, temp_db):
+        """Если опрос не в конфиге шаблонов — списание не выполняется."""
+        init_db()
+        service = PollService()
+        yes_voters = [VoterInfo(id=1, name="@user1")]
+        with patch.object(
+            service, "_send_admin_report", new_callable=AsyncMock
+        ) as mock_report:
+            await service._process_payment_deduction(
+                mock_bot, "Несуществующий опрос", yes_voters, []
+            )
+        mock_report.assert_not_called()
+        # Баланс не должен меняться (игрок мог не быть в БД)
+        data = get_player_balance(1)
+        if data:
+            assert data.get("balance", 0) == 0
+
+    async def test_free_poll_skips_deduction(self, mock_bot, temp_db):
+        """Если cost=0 — списание не выполняется."""
+        init_db()
+        save_poll_template({
+            "name": "Бесплатный зал",
+            "message": "Текст",
+            "cost": 0,
+        })
+        service = PollService()
+        yes_voters = [VoterInfo(id=2, name="@user2")]
+        with patch.object(
+            service, "_send_admin_report", new_callable=AsyncMock
+        ) as mock_report:
+            await service._process_payment_deduction(
+                mock_bot, "Бесплатный зал", yes_voters, []
+            )
+        mock_report.assert_not_called()
+        data = get_player_balance(2)
+        if data:
+            assert data.get("balance", 0) == 0
+
+    async def test_deducts_balance_using_dict(self, mock_bot, temp_db):
+        """Списывает сумму с игрока; get_player_balance возвращает dict — используется balance."""
+        init_db()
+        save_poll_template({
+            "name": "Платный зал",
+            "message": "Текст",
+            "cost": 150,
+        })
+        ensure_player(2, "user2")
+        update_player_balance(2, 500)
+        service = PollService()
+        yes_voters = [VoterInfo(id=2, name="@user2")]
+        with patch.object(
+            service, "_send_admin_report", new_callable=AsyncMock
+        ) as mock_report:
+            await service._process_payment_deduction(
+                mock_bot, "Платный зал", yes_voters, []
+            )
+        data = get_player_balance(2)
+        assert data is not None
+        assert data["balance"] == 350
+        mock_report.assert_called_once()
+        # _send_admin_report(bot, poll_name, cost, charged_players, subscribed_players)
+        _, _, _, charged, _ = mock_report.call_args[0]
+        assert len(charged) == 1
+        assert charged[0]["old_balance"] == 500
+        assert charged[0]["new_balance"] == 350
+
+    async def test_skips_subscribers(self, mock_bot, temp_db):
+        """Игроки из списка подписчиков не списываются."""
+        init_db()
+        save_poll_template({
+            "name": "Зал с подпиской",
+            "message": "Текст",
+            "cost": 100,
+        })
+        ensure_player(10, "sub_user")
+        update_player_balance(10, 200)
+        service = PollService()
+        yes_voters = [VoterInfo(id=10, name="@sub_user")]
+        subs = [10]
+        with patch.object(
+            service, "_send_admin_report", new_callable=AsyncMock
+        ) as mock_report:
+            await service._process_payment_deduction(
+                mock_bot, "Зал с подпиской", yes_voters, subs
+            )
+        data = get_player_balance(10)
+        assert data is not None
+        assert data["balance"] == 200
+        _, _, _, charged, subscribed_names = mock_report.call_args[0]
+        assert charged == []
+        assert "@sub_user" in subscribed_names
+
+    async def test_handles_none_from_get_player_balance(self, mock_bot, temp_db):
+        """Если get_player_balance возвращает None — используется 0, исключения нет."""
+        init_db()
+        save_poll_template({
+            "name": "Зал для теста None",
+            "message": "Текст",
+            "cost": 50,
+        })
+        service = PollService()
+        yes_voters = [VoterInfo(id=99, name="@new_user")]
+        with patch("src.services.poll_service.get_player_balance", return_value=None):
+            with patch.object(
+                service, "_send_admin_report", new_callable=AsyncMock
+            ) as mock_report:
+                await service._process_payment_deduction(
+                    mock_bot, "Зал для теста None", yes_voters, []
+                )
+        mock_report.assert_called_once()
+        _, _, _, charged, _ = mock_report.call_args[0]
+        assert len(charged) == 1
+        assert charged[0]["old_balance"] == 0
+        assert charged[0]["new_balance"] == -50
 
 
 def test_persist_poll_state_roundtrip():

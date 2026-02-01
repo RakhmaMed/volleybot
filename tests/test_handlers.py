@@ -202,6 +202,138 @@ class TestScheduleCommand:
 
 
 @pytest.mark.asyncio
+class TestSubsCommand:
+    """Тесты для команды /subs."""
+
+    @patch("src.handlers.get_poll_templates")
+    @patch("src.handlers.get_all_players")
+    async def test_subs_command_as_admin(
+        self, mock_get_players, mock_get_templates, admin_user, admin_service
+    ):
+        """Тест команды /subs от администратора."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_templates.return_value = [
+            {
+                "name": "Test Poll",
+                "place": "Main Hall",
+                "game_day": "mon",
+                "game_hour_utc": 18,
+                "game_minute_utc": 15,
+                "subs": [2, 1],
+            }
+        ]
+        mock_get_players.return_value = [
+            {"id": 1, "name": "alice", "fullname": "Alice A"},
+            {"id": 2, "name": "bob", "fullname": "Bob B"},
+        ]
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=1,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="/subs",
+        )
+
+        await dp.feed_update(bot, Update(update_id=1, message=message))
+
+        assert bot.called
+        method = bot.call_args.args[0]
+        text = method.text or ""
+        assert "📅 <b>Абонементы по дням</b>" in text
+        assert "<b>Понедельник</b>" in text
+        assert "Test Poll (21:15 МСК) — Main Hall" in text
+        assert '<a href="https://t.me/alice">Alice A</a>' in text
+        assert '<a href="https://t.me/bob">Bob B</a>' in text
+        assert text.index("Alice A") < text.index("Bob B")
+
+    @patch("src.handlers.get_poll_templates")
+    @patch("src.handlers.get_all_players")
+    async def test_subs_command_as_regular_user(
+        self, mock_get_players, mock_get_templates, regular_user, admin_service
+    ):
+        """Тест команды /subs от обычного пользователя (без ответа)."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_templates.return_value = []
+        mock_get_players.return_value = []
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=2,
+            date=MagicMock(),
+            chat=chat,
+            from_user=regular_user,
+            text="/subs",
+        )
+
+        await dp.feed_update(bot, Update(update_id=2, message=message))
+
+        assert not bot.called
+
+    @patch("src.handlers.get_poll_templates")
+    @patch("src.handlers.get_all_players")
+    async def test_subs_command_no_templates(
+        self, mock_get_players, mock_get_templates, admin_user, admin_service
+    ):
+        """Тест команды /subs когда шаблонов нет."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_templates.return_value = []
+        mock_get_players.return_value = []
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=3,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="/subs",
+        )
+
+        await dp.feed_update(bot, Update(update_id=3, message=message))
+
+        assert bot.called
+        method = bot.call_args.args[0]
+        text = method.text or ""
+        assert "📅 Шаблоны опросов не найдены." in text
+
+@pytest.mark.asyncio
 class TestChatIdCommand:
     """Тесты для команды /chatid."""
 

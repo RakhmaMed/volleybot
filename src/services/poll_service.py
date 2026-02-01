@@ -24,6 +24,7 @@ from ..db import (
     get_poll_templates,
     load_state,
     save_state,
+    save_poll_template,
     update_player_balance,
 )
 from ..poll import PollData, VoterInfo, sort_voters_by_update_id
@@ -175,6 +176,10 @@ class PollService:
         poll_name: str,
         bot_enabled: bool,
         subs: list[int] | None = None,
+        options: list[str] | None = None,
+        allows_multiple_answers: bool = False,
+        poll_kind: str = "regular",
+        option_poll_names: list[str | None] | None = None,
     ) -> int:
         """
         Отправка опроса в чат.
@@ -196,7 +201,8 @@ class PollService:
 
         logging.info(f"📋 Создание опроса '{poll_name}' в чате {chat_id}")
         logging.debug(f"  Вопрос: {question}")
-        logging.debug(f"  Опции: {POLL_OPTIONS}")
+        poll_options = options if options is not None else list(POLL_OPTIONS)
+        logging.debug(f"  Опции: {poll_options}")
         logging.debug(f"  Подписчиков: {len(subs) if subs else 0}")
 
         self.clear_all_polls()
@@ -209,8 +215,9 @@ class PollService:
                 return await bot.send_poll(
                     chat_id=chat_id,
                     question=question,
-                    options=list(POLL_OPTIONS),
+                    options=poll_options,
                     is_anonymous=False,
+                    allows_multiple_answers=allows_multiple_answers,
                 )
 
             poll_message = await send_poll_with_retry()
@@ -363,6 +370,9 @@ class PollService:
             yes_voters=[],
             last_message_text="⏳ Идёт сбор голосов...",
             subs=subs or [],
+            poll_kind=poll_kind,
+            options=poll_options,
+            option_poll_names=option_poll_names or [],
         )
         self._update_tasks[poll_message.poll.id] = None
         self.persist_state()
@@ -541,6 +551,16 @@ class PollService:
                 f"Продолжаем обработку финального списка..."
             )
 
+        if data.poll_kind == "monthly_subscription":
+            await self._close_monthly_subscription_poll(bot, poll_name, data)
+            logging.debug(f"Очистка данных опроса {poll_id}...")
+            self.delete_poll(poll_id)
+            self.persist_state()
+            logging.info(
+                f"✅ Опрос '{poll_name}' (poll_id={poll_id}) успешно закрыт, данные очищены"
+            )
+            return
+
         # Формируем финальный список
         yes_voters: list[VoterInfo] = data.yes_voters
 
@@ -684,6 +704,79 @@ class PollService:
             f"✅ Опрос '{poll_name}' (poll_id={poll_id}) успешно закрыт, данные очищены"
         )
 
+    async def _close_monthly_subscription_poll(
+        self, bot: Bot, poll_name: str, data: PollData
+    ) -> None:
+        """Закрыть месячный опрос и записать подписчиков."""
+        option_poll_names = data.option_poll_names
+        votes_by_poll: dict[str, set[int]] = {}
+        for user_id, option_ids in data.monthly_votes.items():
+            for option_id in option_ids:
+                if option_id < 0 or option_id >= len(option_poll_names):
+                    continue
+                poll_target = option_poll_names[option_id]
+                if poll_target is None:
+                    continue
+                if poll_target not in votes_by_poll:
+                    votes_by_poll[poll_target] = set()
+                votes_by_poll[poll_target].add(user_id)
+
+        poll_templates = get_poll_templates()
+        paid_polls = [
+            p for p in poll_templates if int(p.get("cost", 0) or 0) > 0
+        ]
+        for template in paid_polls:
+            name = str(template.get("name", ""))
+            subs = sorted(votes_by_poll.get(name, set()))
+            template["subs"] = subs
+            save_poll_template(template)
+
+        total_voters = len(data.monthly_votes)
+        summary_lines = []
+        for template in paid_polls:
+            name = str(template.get("name", ""))
+            count = len(votes_by_poll.get(name, set()))
+            summary_lines.append(f"• {name}: {count}")
+
+        if summary_lines:
+            summary_text = "\n".join(summary_lines)
+        else:
+            summary_text = "Платные игры не найдены."
+
+        final_text = (
+            "📊 <b>Голосование за абонемент завершено</b>\n\n"
+            f"Проголосовали: {total_voters}\n"
+            f"{summary_text}"
+        )
+
+        try:
+            @retry_async(
+                (TelegramNetworkError, asyncio.TimeoutError, OSError),
+                tries=3,
+                delay=2,
+            )
+            async def send_final_with_retry():
+                return await bot.send_message(
+                    chat_id=data.chat_id,
+                    reply_to_message_id=data.poll_msg_id,
+                    text=final_text,
+                    parse_mode="HTML",
+                )
+
+            await send_final_with_retry()
+            logging.info(
+                f"✅ Итоги голосования за абонемент отправлены для '{poll_name}'"
+            )
+        except (
+            TelegramAPIError,
+            TelegramNetworkError,
+            asyncio.TimeoutError,
+            OSError,
+        ):
+            logging.exception(
+                f"❌ Не удалось отправить итоги голосования для '{poll_name}'"
+            )
+
     async def _process_payment_deduction(
         self,
         bot: Bot,
@@ -740,8 +833,9 @@ class PollService:
             # Убеждаемся, что игрок есть в БД
             ensure_player(voter.id, voter.name)
 
-            # Получаем текущий баланс
-            old_balance = get_player_balance(voter.id)
+            # Получаем текущий баланс (get_player_balance возвращает dict с ключом "balance" или None)
+            player_data = get_player_balance(voter.id)
+            old_balance = (player_data.get("balance", 0) if player_data else 0)
 
             # Списываем средства
             update_player_balance(voter.id, -cost)
