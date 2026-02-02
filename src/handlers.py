@@ -103,13 +103,13 @@ def _format_player_detail(p: dict) -> str:
     link = format_player_link(p)
     lines = [
         f"👤 {link}",
-        f"🆔 ID: {p['id']}",
+        f"ID: {p['id']}",
     ]
     if p.get("name") and str(p["name"]).strip():
-        lines.append(f"📛 @{escape_html(str(p['name']).strip())}")
+        lines.append(f"🪪 @{escape_html(str(p['name']).strip())}")
     lines.append(f"💰 Баланс: {p.get('balance', 0)} ₽")
     ball = "да" if p.get("ball_donate") else "нет"
-    lines.append(f"🏐 Мяч на донат: {ball}")
+    lines.append(f"🏐 Донат: {ball}")
     return "\n".join(lines)
 
 

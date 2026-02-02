@@ -381,7 +381,7 @@ class TestPlayerCommand:
         assert "Regular User" in method.text or "regular_user" in method.text
         assert "ID:" in method.text
         assert "100 ₽" in method.text
-        assert "мяч" in method.text.lower()
+        assert "донат" in method.text.lower()
 
     @patch("src.handlers.get_player_info")
     async def test_player_by_id(
@@ -424,7 +424,7 @@ class TestPlayerCommand:
         assert bot.called
         method = bot.call_args.args[0]
         assert "ID Player" in method.text
-        assert "Мяч на донат: да" in method.text or "мяч на донат" in method.text.lower()
+        assert "Донат: да" in method.text
 
     @patch("src.handlers.get_player_info")
     @patch("src.handlers.find_player_by_name")
@@ -684,7 +684,7 @@ class TestPlayerCallback:
         text = mock_edit_text.call_args.args[0] if mock_edit_text.call_args.args else mock_edit_text.call_args.kwargs.get("text", "")
         assert "Alim B." in text
         assert "500 ₽" in text
-        assert "донат" in text and "да" in text
+        assert "Донат" in text and "да" in text
 
 
 @pytest.mark.asyncio
