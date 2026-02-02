@@ -30,6 +30,7 @@ from .db import (
     find_player_by_name,
     get_all_players,
     get_player_balance,
+    get_player_info,
     get_players_with_balance,
     get_poll_templates,
     update_player_balance,
@@ -75,6 +76,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="balance", description="Показать долги/балансы"),
         BotCommand(command="subs", description="Абонементы по дням"),
         BotCommand(command="pay", description="Изменить баланс игрока"),
+        BotCommand(command="player", description="Подробная информация об игроках"),
         BotCommand(command="start", description="Включить бота"),
         BotCommand(command="stop", description="Выключить бота"),
         BotCommand(command="webhookinfo", description="Статус webhook"),
@@ -94,6 +96,21 @@ async def setup_bot_commands(bot: Bot) -> None:
     )
 
     logging.info("✅ Команды бота зарегистрированы в меню Telegram")
+
+
+def _format_player_detail(p: dict) -> str:
+    """Форматирует подробную информацию об одном игроке (HTML)."""
+    link = format_player_link(p)
+    lines = [
+        f"👤 {link}",
+        f"🆔 ID: {p['id']}",
+    ]
+    if p.get("name") and str(p["name"]).strip():
+        lines.append(f"📛 @{escape_html(str(p['name']).strip())}")
+    lines.append(f"💰 Баланс: {p.get('balance', 0)} ₽")
+    ball = "да" if p.get("ball_donate") else "нет"
+    lines.append(f"🏐 Мяч на донат: {ball}")
+    return "\n".join(lines)
 
 
 def register_handlers(dp: Dispatcher, bot: Bot) -> None:
@@ -249,6 +266,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "/subs — абонементы по дням\n"
             "/pay [сумма] — изменить баланс (в ответ на сообщение)\n"
             "/pay [имя] [сумма] — найти игрока и изменить баланс\n"
+            "/player — список всех игроков с подробной информацией\n"
+            "/player [имя] — информация об одном игроке (по имени, @username или ID)\n"
             "/start — включить бота\n"
             "/stop — выключить бота\n\n"
             "<b>Как пользоваться:</b>\n"
@@ -713,6 +732,173 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 await message.reply(
                     "❌ Не удалось обновить баланс. Убедитесь, что игрок взаимодействовал с ботом ранее."
                 )
+
+    @router.message(Command("player"))
+    async def player_handler(message: Message) -> None:
+        """Команда для подробного вывода информации об игроках (только для администратора)."""
+        user = message.from_user
+        if user is None:
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+
+        if not is_admin:
+            return
+
+        if message.text is None:
+            return
+
+        args = message.text.split()
+
+        # 1. Ответ на сообщение — показать одного игрока
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target_user = message.reply_to_message.from_user
+            ensure_player(
+                user_id=target_user.id,
+                name=target_user.username,
+                fullname=target_user.full_name,
+            )
+            p = get_player_info(target_user.id)
+            if p:
+                text = _format_player_detail(p)
+                await message.reply(
+                    text,
+                    parse_mode="HTML",
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                )
+            else:
+                await message.reply("❌ Не удалось получить данные игрока.")
+            return
+
+        # 2. Есть аргумент — поиск одного игрока по имени, @username или ID
+        if len(args) >= 2:
+            search_query = " ".join(args[1:]).strip()
+            if not search_query:
+                pass
+            elif search_query.isdigit():
+                pid = int(search_query)
+                p = get_player_info(pid)
+                if p:
+                    text = _format_player_detail(p)
+                    await message.reply(
+                        text,
+                        parse_mode="HTML",
+                        link_preview_options=LinkPreviewOptions(is_disabled=True),
+                    )
+                else:
+                    await message.reply(f"❌ Игрок с ID {pid} не найден.")
+                return
+            else:
+                clean_query = search_query.lstrip("@")
+                players = find_player_by_name(clean_query)
+                if not players:
+                    await message.reply(f"❌ Игрок '{search_query}' не найден.")
+                    return
+                if len(players) == 1:
+                    p = get_player_info(players[0]["id"])
+                    if p:
+                        text = _format_player_detail(p)
+                        await message.reply(
+                            text,
+                            parse_mode="HTML",
+                            link_preview_options=LinkPreviewOptions(is_disabled=True),
+                        )
+                    else:
+                        await message.reply("❌ Не удалось получить данные игрока.")
+                    return
+                # Несколько совпадений — клавиатура выбора
+                keyboard = []
+                player_links = []
+                for p in players[:10]:
+                    p_name = (
+                        f"{p['fullname'] or p['name']} (ID: {p['id']})"
+                        if (p.get("fullname") or p.get("name"))
+                        else f"ID: {p['id']}"
+                    )
+                    keyboard.append(
+                        [
+                            InlineKeyboardButton(
+                                text=p_name,
+                                callback_data=f"player_select:{p['id']}",
+                            )
+                        ]
+                    )
+                    player_links.append(format_player_link(p))
+                reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+                players_list = "\n".join([f"• {link}" for link in player_links])
+                await message.reply(
+                    f"❓ Найдено несколько игроков ({len(players)}). Выберите:\n\n{players_list}",
+                    reply_markup=reply_markup,
+                    parse_mode="HTML",
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                )
+                return
+
+        # 3. Без аргументов — список всех игроков (кратко)
+        all_players = get_all_players()
+        if not all_players:
+            await message.reply("📋 В базе пока нет игроков.")
+            return
+
+        lines = ["👥 <b>Игроки</b> ({}) — кратко:\n".format(len(all_players))]
+        for p in all_players:
+            link = format_player_link(p)
+            balance = p.get("balance", 0)
+            ball = "да" if p.get("ball_donate") else "нет"
+            lines.append(f"• {link} — {balance} ₽, мяч: {ball}")
+        text = "\n".join(lines)
+        if len(text) > 4000:
+            text = "\n".join(lines[:1] + lines[1:81]) + "\n\n… и ещё (показаны первые 80)."
+        await message.reply(
+            text,
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+        )
+
+    @router.callback_query(lambda c: c.data and c.data.startswith("player_select:"))
+    async def process_player_select(callback_query: CallbackQuery):
+        """Обработка выбора игрока из списка для просмотра информации."""
+        user = callback_query.from_user
+        if user is None:
+            await callback_query.answer("❌ Ошибка: нет информации о пользователе", show_alert=True)
+            return
+
+        if callback_query.message is None:
+            await callback_query.answer("❌ Ошибка: сообщение не найдено", show_alert=True)
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(
+            bot, user, callback_query.message.chat.id
+        )
+        if not is_admin:
+            await callback_query.answer("❌ Нет прав для этого действия.", show_alert=True)
+            return
+
+        if callback_query.data is None:
+            await callback_query.answer("❌ Ошибка данных.", show_alert=True)
+            return
+
+        parts = callback_query.data.split(":", 1)
+        if len(parts) != 2 or not parts[1].isdigit():
+            await callback_query.answer("❌ Ошибка формата.", show_alert=True)
+            return
+
+        player_id = int(parts[1])
+        p = get_player_info(player_id)
+        if not p:
+            await callback_query.answer("❌ Игрок не найден.", show_alert=True)
+            return
+
+        text = _format_player_detail(p)
+        if not isinstance(callback_query.message, InaccessibleMessage):
+            await callback_query.message.edit_text(
+                text,
+                parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+            )
+        await callback_query.answer()
 
     @router.callback_query(lambda c: c.data and c.data.startswith("pay_select:"))
     async def process_pay_select(callback_query: CallbackQuery):

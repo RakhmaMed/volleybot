@@ -8,6 +8,7 @@ from src.db import (
     _connect,
     ensure_player,
     get_all_players,
+    get_player_info,
     init_db,
 )
 from src.utils import get_player_name, load_players
@@ -196,6 +197,47 @@ class TestDBPlayers:
         players = get_all_players()
         assert len(players) == 1
         assert players[0]["name"] is None  # должен быть очищен
+
+
+class TestGetPlayerInfo:
+    """Тесты для get_player_info."""
+
+    def test_get_player_info_returns_full_data(self, temp_db):
+        """get_player_info возвращает id, name, fullname, ball_donate (bool), balance."""
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname, ball_donate, balance) VALUES (?, ?, ?, ?, ?)",
+                (42, "player42", "Full Name", 1, 300),
+            )
+            conn.commit()
+
+        info = get_player_info(42)
+        assert info is not None
+        assert info["id"] == 42
+        assert info["name"] == "player42"
+        assert info["fullname"] == "Full Name"
+        assert info["ball_donate"] is True
+        assert info["balance"] == 300
+
+    def test_get_player_info_ball_donate_false(self, temp_db):
+        """ball_donate=0 в БД преобразуется в False."""
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname, ball_donate, balance) VALUES (?, ?, ?, ?, ?)",
+                (43, "u", "U", 0, 0),
+            )
+            conn.commit()
+
+        info = get_player_info(43)
+        assert info is not None
+        assert info["ball_donate"] is False
+
+    def test_get_player_info_returns_none_for_missing(self, temp_db):
+        """get_player_info возвращает None для несуществующего игрока."""
+        init_db()
+        assert get_player_info(99999) is None
 
 
 class TestLoadPlayersDB:

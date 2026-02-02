@@ -242,6 +242,25 @@ def get_player_balance(user_id: int) -> dict[str, Any] | None:
         return None
 
 
+def get_player_info(user_id: int) -> dict[str, Any] | None:
+    """Возвращает полную информацию об игроке (id, name, fullname, ball_donate, balance)."""
+    try:
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT id, name, fullname, ball_donate, balance FROM players WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            player = dict(row)
+            player["ball_donate"] = bool(player["ball_donate"])
+            return player
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при получении информации об игроке {user_id}")
+        return None
+
+
 def update_player_balance(user_id: int, amount: int) -> bool:
     """Изменяет баланс игрока на указанную сумму (может быть отрицательной)."""
     try:
