@@ -41,6 +41,7 @@ class TestDBPolls:
         assert templates[0]["name"] == "Test Poll"
         assert templates[0]["message"] == "Test Message"
         assert templates[0]["open_day"] == "mon"
+        assert "subs" in templates[0]
         assert set(templates[0]["subs"]) == {123, 456}
 
     def test_update_poll_template(self, temp_db):
@@ -55,4 +56,5 @@ class TestDBPolls:
         templates = get_poll_templates()
         assert len(templates) == 1
         assert templates[0]["message"] == "Msg 2"
+        assert "subs" in templates[0]
         assert set(templates[0]["subs"]) == {2, 3}

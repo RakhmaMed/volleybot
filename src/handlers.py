@@ -36,6 +36,7 @@ from .db import (
     update_player_balance,
 )
 from .services import AdminService, BotStateService, PollService
+from .types import PollTemplate
 from .utils import (
     escape_html,
     format_player_link,
@@ -450,14 +451,14 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "*": "Ежедневно",
         }
 
-        def pick_day(template: dict[str, object]) -> str:
+        def pick_day(template: PollTemplate) -> str:
             game_day = str(template.get("game_day") or "*").lower()
             if game_day and game_day != "*":
                 return game_day
             open_day = str(template.get("open_day") or "*").lower()
             return open_day or "*"
 
-        day_to_polls: dict[str, list[dict[str, object]]] = {}
+        day_to_polls: dict[str, list[PollTemplate]] = {}
         for template in poll_templates:
             day_key = pick_day(template)
             day_to_polls.setdefault(day_key, []).append(template)

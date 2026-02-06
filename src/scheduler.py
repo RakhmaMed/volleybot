@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+
+from src.types import PollTemplate
 
 from .db import clear_paid_poll_subscriptions, get_poll_templates
 from .services import BotStateService, PollService
@@ -254,14 +256,14 @@ def _schedule_monthly_subscription_poll(
     bot: Bot,
     bot_state_service: BotStateService,
     poll_service: PollService,
-    poll_templates: list[dict[str, object]],
+    poll_templates: list[PollTemplate],
 ) -> None:
     """
     Планирует ежемесячный опрос на абонемент для платных игр.
     """
-    paid_polls: list[dict[str, object]] = [
-        p for p in poll_templates if int(p.get("cost", 0) or 0) > 0
-    ]
+    from typing import cast
+
+    paid_polls = [p for p in poll_templates if int(cast(int, p.get("cost") or 0)) > 0]
     if not paid_polls:
         logging.info("ℹ️ Платные опросы не найдены, месячный опрос не запланирован")
         return
@@ -297,8 +299,8 @@ def _schedule_monthly_subscription_poll(
         last_game: datetime | None = None
         for poll in paid_polls:
             game_day = str(poll.get("game_day", "*"))
-            game_hour_utc = int(poll.get("game_hour_utc", 0) or 0)
-            game_minute_utc = int(poll.get("game_minute_utc", 0) or 0)
+            game_hour_utc: int = cast(int, poll.get("game_hour_utc") or 0)
+            game_minute_utc: int = cast(int, poll.get("game_minute_utc") or 0)
             current_date = utc_start.date()
             while current_date <= end_date:
                 if game_day == "*" or day_map.get(game_day) == current_date.weekday():
@@ -320,9 +322,7 @@ def _schedule_monthly_subscription_poll(
     month_start, next_month_start = month_bounds(now_moscow)
     last_game = last_game_in_month(month_start, next_month_start)
     if last_game is None:
-        logging.warning(
-            "⚠️ Не удалось найти последнюю игру месяца для платных опросов"
-        )
+        logging.warning("⚠️ Не удалось найти последнюю игру месяца для платных опросов")
         return
 
     open_moscow = last_game.replace(hour=22, minute=0, second=0, microsecond=0)
@@ -350,11 +350,9 @@ def _schedule_monthly_subscription_poll(
     for poll in paid_polls:
         name = str(poll.get("name", ""))
         place = str(poll.get("place", ""))
-        game_hour_utc = int(poll.get("game_hour_utc", 0) or 0)
-        game_minute_utc = int(poll.get("game_minute_utc", 0) or 0)
-        dt_utc = datetime(
-            2000, 1, 1, game_hour_utc, game_minute_utc, tzinfo=utc_tz
-        )
+        game_hour_utc: int = cast(int, poll.get("game_hour_utc") or 0)
+        game_minute_utc: int = cast(int, poll.get("game_minute_utc") or 0)
+        dt_utc = datetime(2000, 1, 1, game_hour_utc, game_minute_utc, tzinfo=utc_tz)
         dt_moscow = dt_utc.astimezone(moscow_tz)
         time_moscow = dt_moscow.strftime("%H:%M")
         if place:
@@ -378,7 +376,9 @@ def _schedule_monthly_subscription_poll(
     close_job_id = "monthly_subs_close"
     poll_name = "monthly_subscription"
 
-    clear_job = lambda: clear_paid_poll_subscriptions()
+    def clear_job():
+        return clear_paid_poll_subscriptions()
+
     scheduler.add_job(
         clear_job,
         trigger=DateTrigger(run_date=to_utc(clear_moscow)),
@@ -407,7 +407,9 @@ def _schedule_monthly_subscription_poll(
         replace_existing=True,
     )
 
-    reminder_text = "⏰ Напоминание: голосование за абонемент заканчивается сегодня в 22:00 МСК."
+    reminder_text = (
+        "⏰ Напоминание: голосование за абонемент заканчивается сегодня в 22:00 МСК."
+    )
     reminder_job = create_reminder_job(
         bot, reminder_text, bot_state_service, poll_service
     )

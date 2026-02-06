@@ -1,6 +1,4 @@
-from unittest.mock import patch
-
-from aiogram.types import User, user
+from aiogram.types import User
 
 from src.db import (
     _connect,

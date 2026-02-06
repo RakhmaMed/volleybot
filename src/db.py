@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from .types import PollTemplate
+
 # Ключи хранения в kv_store
 BOT_STATE_KEY = "bot_state"
 POLL_STATE_KEY = "poll_state"
@@ -297,11 +299,11 @@ def ensure_player(
 ) -> None:
     """
     Гарантирует наличие игрока в базе данных.
-    
+
     При конфликте (игрок уже существует):
     - Если в БД уже есть name или fullname, они НЕ перезаписываются
     - Обновляются только пустые (NULL) поля
-    
+
     Это предотвращает случайную перезапись вручную установленных имён.
     """
     # Нормализуем username: если содержит пробелы или другие недопустимые символы, очищаем
@@ -332,7 +334,7 @@ def ensure_player(
         logging.exception(f"❌ Ошибка при регистрации/обновлении игрока {user_id}")
 
 
-def get_poll_templates() -> list[dict[str, Any]]:
+def get_poll_templates() -> list[PollTemplate]:
     """Возвращает все шаблоны опросов из БД."""
     try:
         init_db()
@@ -457,5 +459,3 @@ def add_transaction(
         )
     except sqlite3.Error:
         logging.exception(f"❌ Ошибка при добавлении транзакции для игрока {player_id}")
-
-

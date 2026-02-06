@@ -2,7 +2,6 @@
 
 import json
 import time
-from asyncio.tasks import ensure_future
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
