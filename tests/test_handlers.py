@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram import Bot, Dispatcher
-from aiogram.types import Chat, Message, PollAnswer, Update, User
+from aiogram.types import Chat, Message, PollAnswer, Update
 
 from src.config import PollSchedule
 from src.handlers import register_handlers
@@ -77,9 +77,7 @@ class TestStartCommand:
         bot_state_service.set_enabled(True)
         assert bot_state_service.is_enabled() is True
 
-    async def test_start_command_as_regular_user(
-        self, regular_user, admin_service
-    ):
+    async def test_start_command_as_regular_user(self, regular_user, admin_service):
         """Тест команды /start от обычного пользователя."""
         bot = MagicMock(spec=Bot)
         dp = Dispatcher()
@@ -333,6 +331,7 @@ class TestSubsCommand:
         text = method.text or ""
         assert "📅 Шаблоны опросов не найдены." in text
 
+
 @pytest.mark.asyncio
 class TestChatIdCommand:
     """Тесты для команды /chatid."""
@@ -407,9 +406,7 @@ class TestPollAnswerHandler:
         # Проверяем, что опрос существует
         assert poll_service.has_poll("test_poll_id")
 
-    async def test_poll_answer_handler_removes_voter(
-        self, admin_user, admin_service
-    ):
+    async def test_poll_answer_handler_removes_voter(self, admin_user, admin_service):
         """Тест удаления голосующего при ответе 'Нет'."""
         bot = MagicMock(spec=Bot)
         dp = Dispatcher()

@@ -47,7 +47,7 @@ async def main():
     temp_db_path = temp_db.name
     temp_db.close()
 
-    logger.info(f"🧪 Тестовый режим")
+    logger.info("🧪 Тестовый режим")
     logger.info(f"📁 Временная БД: {temp_db_path}")
     logger.info(
         "⚠️  Все изменения будут утеряны после завершения (БД удалится автоматически)"
@@ -66,7 +66,6 @@ async def main():
         from src.handlers import register_handlers, setup_bot_commands
         from src.scheduler import setup_scheduler
         from src.services import AdminService, BotStateService, PollService
-        from src.utils import load_players
 
         logger.info(f"🔑 Используется токен бота: {TOKEN[:10]}...")
         logger.info(f"💬 Основной чат ID: {CHAT_ID}")
@@ -118,9 +117,6 @@ async def main():
         admin_service = AdminService(default_chat_id=CHAT_ID)
         bot_state_service = BotStateService(default_chat_id=CHAT_ID)
         poll_service = PollService()
-
-        # Загружаем игроков
-        load_players()
 
         # Инициализация бота и диспетчера
         bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))

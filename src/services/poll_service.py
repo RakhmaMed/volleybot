@@ -15,7 +15,13 @@ from aiogram.exceptions import (
     TelegramNetworkError,
 )
 
-from ..config import ADMIN_USER_ID, MAX_PLAYERS, MIN_PLAYERS, POLL_OPTIONS, RESERVE_PLAYERS
+from ..config import (
+    ADMIN_USER_ID,
+    MAX_PLAYERS,
+    MIN_PLAYERS,
+    POLL_OPTIONS,
+    RESERVE_PLAYERS,
+)
 from ..db import (
     POLL_STATE_KEY,
     add_transaction,
@@ -23,8 +29,8 @@ from ..db import (
     get_player_balance,
     get_poll_templates,
     load_state,
-    save_state,
     save_poll_template,
+    save_state,
     update_player_balance,
 )
 from ..poll import PollData, VoterInfo, sort_voters_by_update_id
@@ -434,8 +440,8 @@ class PollService:
             )
         else:
             main_players = yes_voters[:MAX_PLAYERS]
-            reserves = yes_voters[MAX_PLAYERS:MAX_PLAYERS + RESERVE_PLAYERS]
-            booked: list[VoterInfo] = yes_voters[MAX_PLAYERS + RESERVE_PLAYERS:]
+            reserves = yes_voters[MAX_PLAYERS : MAX_PLAYERS + RESERVE_PLAYERS]
+            booked: list[VoterInfo] = yes_voters[MAX_PLAYERS + RESERVE_PLAYERS :]
 
             text = "✅ <b>Список игроков:</b>\n"
             text += "\n".join(
@@ -489,7 +495,9 @@ class PollService:
                 await edit_with_retry()
                 data.last_message_text = text
                 main_count = min(len(yes_voters), MAX_PLAYERS)
-                reserve_count = max(0, min(len(yes_voters) - MAX_PLAYERS, RESERVE_PLAYERS))
+                reserve_count = max(
+                    0, min(len(yes_voters) - MAX_PLAYERS, RESERVE_PLAYERS)
+                )
                 booked_count = max(0, len(yes_voters) - MAX_PLAYERS - RESERVE_PLAYERS)
                 logging.info(
                     f"✅ Список игроков обновлен для опроса {poll_id}: {len(yes_voters)} человек "
@@ -602,8 +610,8 @@ class PollService:
             )
         else:
             main_players = yes_voters[:MAX_PLAYERS]
-            reserves = yes_voters[MAX_PLAYERS:MAX_PLAYERS + RESERVE_PLAYERS]
-            booked: list[VoterInfo] = yes_voters[MAX_PLAYERS + RESERVE_PLAYERS:]
+            reserves = yes_voters[MAX_PLAYERS : MAX_PLAYERS + RESERVE_PLAYERS]
+            booked: list[VoterInfo] = yes_voters[MAX_PLAYERS + RESERVE_PLAYERS :]
 
             final_text = (
                 "📊 <b>Голосование завершено</b> ✅\n\n"
@@ -648,7 +656,7 @@ class PollService:
                     parse_mode="HTML",
                 )
 
-            new_message = await send_final_with_retry()
+            _ = await send_final_with_retry()
             main_count = min(len(yes_voters), MAX_PLAYERS)
             reserve_count = max(0, min(len(yes_voters) - MAX_PLAYERS, RESERVE_PLAYERS))
             booked_count = max(0, len(yes_voters) - MAX_PLAYERS - RESERVE_PLAYERS)
@@ -722,9 +730,7 @@ class PollService:
                 votes_by_poll[poll_target].add(user_id)
 
         poll_templates = get_poll_templates()
-        paid_polls = [
-            p for p in poll_templates if int(p.get("cost", 0) or 0) > 0
-        ]
+        paid_polls = [p for p in poll_templates if int(p.get("cost", 0) or 0) > 0]
         for template in paid_polls:
             name = str(template.get("name", ""))
             subs = sorted(votes_by_poll.get(name, set()))
@@ -750,6 +756,7 @@ class PollService:
         )
 
         try:
+
             @retry_async(
                 (TelegramNetworkError, asyncio.TimeoutError, OSError),
                 tries=3,
@@ -835,7 +842,7 @@ class PollService:
 
             # Получаем текущий баланс (get_player_balance возвращает dict с ключом "balance" или None)
             player_data = get_player_balance(voter.id)
-            old_balance = (player_data.get("balance", 0) if player_data else 0)
+            old_balance = player_data.get("balance", 0) if player_data else 0
 
             # Списываем средства
             update_player_balance(voter.id, -cost)

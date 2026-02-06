@@ -18,9 +18,6 @@ from typing import Any
 
 from aiogram.types import User
 
-# Глобальный кэш списка игроков
-PLAYERS: list[dict[str, Any]] = []
-
 # Rate limiting: хранение времени последних запросов
 # Структура: {user_id: [timestamp1, timestamp2, ...]}
 _RATE_LIMIT_CACHE: dict[int, list[float]] = defaultdict(list)
@@ -254,34 +251,9 @@ def is_telegram_ip(ip_str: str) -> bool:
         return False
 
 
-def load_players() -> None:
-    """
-    Загружает список игроков из базы данных при старте приложения.
-    Результат кэшируется в глобальной переменной PLAYERS.
-    """
-    global PLAYERS
-
-    logging.debug("Загрузка списка игроков из базы данных...")
-    try:
-        from .db import get_all_players
-
-        PLAYERS = get_all_players()
-        logging.info(f"✅ Загружено {len(PLAYERS)} игроков из БД")
-
-        # Логируем детали на уровне DEBUG
-        ball_donors = sum(1 for p in PLAYERS if p.get("ball_donate") is True)
-        if ball_donors > 0:
-            logging.debug(f"  Донатов мячей: {ball_donors}")
-    except Exception:
-        logging.exception(
-            "❌ Ошибка при загрузке списка игроков из БД. Список игроков будет пустым."
-        )
-        PLAYERS = []
-
-
 def get_player_name(user: User, subs: list[int] | None = None) -> str:
     """
-    Получает имя игрока по ID из базы данных (через кэш PLAYERS), используя fullname если он есть.
+    Получает имя игрока по ID из базы данных, используя fullname если он есть.
     Если fullname пустой или не найден, возвращает имя из Telegram.
     Возвращает текст с упоминанием @username для открытия профиля (не чата).
 
@@ -290,33 +262,25 @@ def get_player_name(user: User, subs: list[int] | None = None) -> str:
         subs: Список ID пользователей с подпиской
 
     Returns:
-        Текст с именем игрока и упоминанием @username (кликабельно, открывает профиль)
+        Текст с именем игрока и упоминанием @username (кликабельно)
     """
-    # Получаем имя из Telegram как fallback
+    from .db import get_player_info
+
     telegram_name: str = (
         f"@{user.username}" if user.username else (user.full_name or "Неизвестный")
     )
     display_name: str = telegram_name
     emojis: str = ""
 
-    # Если список игроков не загружен, используем имя из Telegram
-    if not PLAYERS:
-        logging.debug(
-            f"Список игроков пуст, используем имя из Telegram для пользователя {user.id}"
-        )
-    else:
-        # Ищем игрока по ID в заранее загруженном списке
-        for player in PLAYERS:
-            if player.get("id") == user.id:
-                fullname: str | None = player.get("fullname")
-                # Если fullname есть и не пустой, используем его
-                if fullname and fullname.strip():
-                    display_name = fullname
+    player = get_player_info(user.id)
+    if player:
+        fullname: str | None = player.get("fullname")
+        if fullname and fullname.strip():
+            display_name = fullname
 
-                # Проверяем на донат мячей
-                if player.get("ball_donate") is True:
-                    emojis += "🏐"
-                break
+        # Проверяем на донат мячей
+        if player.get("ball_donate"):
+            emojis += "🏐"
 
     # Проверяем подписку (если передан список подписчиков)
     if subs and user.id in subs:
@@ -326,8 +290,7 @@ def get_player_name(user: User, subs: list[int] | None = None) -> str:
     if emojis:
         display_name = f"{emojis} {display_name}"
 
-    # Для открытия профиля (а не чата) используем упоминание @username в тексте
-    # Telegram автоматически делает такие упоминания кликабельными и они открывают профиль
+    # Формируем упоминание с username
     if user.username:
         # Убираем @ если есть в username
         username_clean: str = user.username.replace("@", "")

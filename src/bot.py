@@ -43,7 +43,6 @@ from .services import AdminService, BotStateService, PollService
 from .utils import (
     generate_webhook_secret_path,
     is_telegram_ip,
-    load_players,
     retry_async,
 )
 
@@ -64,7 +63,6 @@ async def on_startup(
     logging.info("Инициализация бота...")
 
     # Загружаем список игроков один раз при старте
-    load_players()
     poll_service.load_persisted_state()
     logging.debug(
         f"Активных опросов после восстановления: {len(poll_service.get_all_polls())}"

@@ -11,7 +11,6 @@ from aiogram.types import (
     Message,
     PollAnswer,
     Update,
-    User,
 )
 
 from src.handlers import register_handlers
@@ -23,9 +22,7 @@ class TestBalanceCommand:
     """Тесты для команды /balance."""
 
     @patch("src.handlers.get_players_with_balance")
-    async def test_balance_as_admin(
-        self, mock_get_players, admin_user, admin_service
-    ):
+    async def test_balance_as_admin(self, mock_get_players, admin_user, admin_service):
         """Тест команды /balance от администратора."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -384,9 +381,7 @@ class TestPlayerCommand:
         assert "донат" in method.text.lower()
 
     @patch("src.handlers.get_player_info")
-    async def test_player_by_id(
-        self, mock_get_info, admin_user, admin_service
-    ):
+    async def test_player_by_id(self, mock_get_info, admin_user, admin_service):
         """Тест /player по числовому ID."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -525,8 +520,20 @@ class TestPlayerCommand:
         dp = Dispatcher()
 
         mock_get_all.return_value = [
-            {"id": 1, "name": "u1", "fullname": "User One", "ball_donate": False, "balance": -100},
-            {"id": 2, "name": "u2", "fullname": "User Two", "ball_donate": True, "balance": 0},
+            {
+                "id": 1,
+                "name": "u1",
+                "fullname": "User One",
+                "ball_donate": False,
+                "balance": -100,
+            },
+            {
+                "id": 2,
+                "name": "u2",
+                "fullname": "User Two",
+                "ball_donate": True,
+                "balance": 0,
+            },
         ]
 
         dp.workflow_data.update(
@@ -592,9 +599,7 @@ class TestPlayerCommand:
         assert not bot.called
 
     @patch("src.handlers.get_player_info")
-    async def test_player_id_not_found(
-        self, mock_get_info, admin_user, admin_service
-    ):
+    async def test_player_id_not_found(self, mock_get_info, admin_user, admin_service):
         """Тест /player по ID — игрок не найден."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -676,12 +681,18 @@ class TestPlayerCallback:
 
         mock_edit_text = AsyncMock()
         with patch.object(Message, "edit_text", mock_edit_text):
-            await dp.feed_update(bot, Update(update_id=9, callback_query=callback_query))
+            await dp.feed_update(
+                bot, Update(update_id=9, callback_query=callback_query)
+            )
 
         mock_get_info.assert_called_once_with(1)
         mock_edit_text.assert_called_once()
         # Текст передаётся первым позиционным аргументом
-        text = mock_edit_text.call_args.args[0] if mock_edit_text.call_args.args else mock_edit_text.call_args.kwargs.get("text", "")
+        text = (
+            mock_edit_text.call_args.args[0]
+            if mock_edit_text.call_args.args
+            else mock_edit_text.call_args.kwargs.get("text", "")
+        )
         assert "Alim B." in text
         assert "500 ₽" in text
         assert "Донат" in text and "да" in text

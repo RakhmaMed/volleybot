@@ -849,7 +849,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             lines.append(f"• {link} — {balance} ₽, мяч: {ball}")
         text = "\n".join(lines)
         if len(text) > 4000:
-            text = "\n".join(lines[:1] + lines[1:81]) + "\n\n… и ещё (показаны первые 80)."
+            text = (
+                "\n".join(lines[:1] + lines[1:81]) + "\n\n… и ещё (показаны первые 80)."
+            )
         await message.reply(
             text,
             parse_mode="HTML",
@@ -861,11 +863,15 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         """Обработка выбора игрока из списка для просмотра информации."""
         user = callback_query.from_user
         if user is None:
-            await callback_query.answer("❌ Ошибка: нет информации о пользователе", show_alert=True)
+            await callback_query.answer(
+                "❌ Ошибка: нет информации о пользователе", show_alert=True
+            )
             return
 
         if callback_query.message is None:
-            await callback_query.answer("❌ Ошибка: сообщение не найдено", show_alert=True)
+            await callback_query.answer(
+                "❌ Ошибка: сообщение не найдено", show_alert=True
+            )
             return
 
         admin_service: AdminService = dp.workflow_data["admin_service"]
@@ -873,7 +879,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             bot, user, callback_query.message.chat.id
         )
         if not is_admin:
-            await callback_query.answer("❌ Нет прав для этого действия.", show_alert=True)
+            await callback_query.answer(
+                "❌ Нет прав для этого действия.", show_alert=True
+            )
             return
 
         if callback_query.data is None:

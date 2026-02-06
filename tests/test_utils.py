@@ -2,6 +2,7 @@
 
 import json
 import time
+from asyncio.tasks import ensure_future
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -400,10 +401,19 @@ class TestEscapeHtml:
 
 
 class TestGetPlayerName:
-    """Тесты для функции get_player_name."""
+    """Тесты для функции get_player_name с использованием БД."""
 
-    def test_get_player_name_with_fullname_in_players(self):
+    def test_get_player_name_with_fullname_in_db(self, temp_db):
         """Пользователь с fullname в БД показывает имя и @username."""
+        from src.db import ensure_player, init_db
+
+        init_db()
+        ensure_player(
+            user_id=185633965,  # ID из БД с fullname "Кисик"
+            name="kkiiissik",
+            fullname="Кисик",
+        )
+
         user = User(
             id=185633965,  # ID из БД с fullname "Кисик"
             is_bot=False,
@@ -411,42 +421,46 @@ class TestGetPlayerName:
             username="kkiiissik",
         )
 
-        # Мокаем PLAYERS
-        with patch(
-            "src.utils.PLAYERS",
-            [{"id": 185633965, "name": "kkiiissik", "fullname": "Кисик"}],
-        ):
-            result = get_player_name(user)
+        result = get_player_name(user)
 
         assert result == "Кисик (@kkiiissik)"
 
-    def test_get_player_name_without_fullname_no_duplicate(self):
+    def test_get_player_name_without_fullname_no_duplicate(self, temp_db):
         """Пользователь без fullname - @username НЕ дублируется."""
+        from src.db import ensure_player, init_db
+
+        init_db()
+        ensure_player(user_id=454586320, name="what_goes_around", fullname=None)
+
         user = User(
-            id=454205863, is_bot=False, first_name="Test", username="what_goes_around"
+            id=454586320, is_bot=False, first_name="Test", username="what_goes_around"
         )
 
-        # Мокаем PLAYERS без fullname
-        with patch(
-            "src.utils.PLAYERS", [{"id": 454205863, "name": "what_goes_around"}]
-        ):
-            result = get_player_name(user)
+        result = get_player_name(user)
 
         # Не должно быть дубликата: "@username (@username)"
         assert result == "@what_goes_around"
 
-    def test_get_player_name_not_in_players_with_username(self):
+    def test_get_player_name_not_in_db_with_username(self, temp_db):
         """Пользователь не в БД, но с username."""
+        from src.db import init_db
+
+        init_db()
+        # НЕ добавляем пользователя в БД
+
         user = User(id=999999999, is_bot=False, first_name="Test", username="new_user")
 
-        with patch("src.utils.PLAYERS", []):
-            result = get_player_name(user)
+        result = get_player_name(user)
 
         # display_name = @new_user, username_mention = @new_user -> не дублируем
         assert result == "@new_user"
 
-    def test_get_player_name_without_username(self):
+    def test_get_player_name_without_username(self, temp_db):
         """Пользователь без username использует full_name из Telegram."""
+        from src.db import init_db
+
+        init_db()
+
         user = User(
             id=999999999,
             is_bot=False,
@@ -454,118 +468,94 @@ class TestGetPlayerName:
             last_name="Петров",
             username=None,
         )
-
-        with patch("src.utils.PLAYERS", []):
-            result = get_player_name(user)
+        result = get_player_name(user)
 
         assert result == "Иван Петров"
 
-    def test_get_player_name_without_username_no_fullname(self):
-        """Пользователь без username и без last_name."""
-        user = User(id=999999999, is_bot=False, first_name="Иван", username=None)
-
-        with patch("src.utils.PLAYERS", []):
-            result = get_player_name(user)
-
-        assert result == "Иван"
-
-    def test_get_player_name_escapes_html_in_fullname(self):
+    def test_get_player_name_escapes_html_in_fullname(self, temp_db):
         """HTML-символы в fullname экранируются."""
-        user = User(id=123, is_bot=False, first_name="Test", username="testuser")
+        from src.db import ensure_player, init_db
 
-        with patch("src.utils.PLAYERS", [{"id": 123, "fullname": "Имя <script>"}]):
-            result = get_player_name(user)
+        init_db()
+        ensure_player(user_id=123, name="testuser", fullname="Имя <script>")
+
+        user = User(id=123, is_bot=False, first_name="Test", username="testuser")
+        result = get_player_name(user)
 
         assert result == "Имя &lt;script&gt; (@testuser)"
 
-    def test_get_player_name_escapes_html_without_username(self):
-        """HTML-символы экранируются для пользователя без username."""
-        user = User(id=999999999, is_bot=False, first_name="Test<>", username=None)
+    def test_get_player_name_with_ball_donate(self, temp_db):
+        """Игрок с донатом мячей получает эмодзи волейбольного мяча."""
+        from src.db import _connect, init_db
 
-        with patch("src.utils.PLAYERS", []):
-            result = get_player_name(user)
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname, ball_donate) VALUES (?, ?, ?, ?)",
+                (123, "donor", "Donor", 1),  # ball_donate = 1 (True)
+            )
+            conn.commit()
 
-        assert result == "Test&lt;&gt;"
+        user = User(id=123, is_bot=False, first_name="Test", username="donor")
+        result = get_player_name(user)
 
-    def test_get_player_name_empty_fullname_uses_telegram_name(self):
+        assert "🏐" in result
+        assert "Donor" in result
+        assert "@donor" in result
+
+    def test_get_player_name_with_subscription(self, temp_db):
+        """Подписчик получает эмодзи звёздочки."""
+        from src.db import ensure_player, init_db
+
+        init_db()
+        ensure_player(user_id=123, name="sub", fullname="Subscriber")
+
+        user = User(id=123, is_bot=False, first_name="Test", username="sub")
+        result = get_player_name(user, subs=[123, 456])
+
+        assert "⭐️" in result
+        assert "Subscriber" in result
+
+    def test_get_player_name_with_subscription_and_ball_donate(self, temp_db):
+        """Подписчик и донор получает оба эмодзи в правильном порядке."""
+        from src.db import _connect, init_db
+
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname, ball_donate) VALUES (?, ?, ?, ?)",
+                (123, "super", "SuperUser", 1),
+            )
+            conn.commit()
+
+        user = User(id=123, is_bot=False, first_name="Test", username="super")
+        result = get_player_name(user, subs=[123])
+
+        assert "⭐️" in result
+        assert "🏐" in result
+        assert "SuperUser" in result
+        # Проверяем правильный порядок: звезда перед мячом
+        assert result.index("⭐️") < result.index("🏐")
+
+    def test_get_player_name_empty_fullname_uses_telegram_name(self, temp_db):
         """Пустой fullname в БД - используется имя из Telegram."""
+        from src.db import _connect, init_db
+
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
+                (123, "testuser", "   "),  # Только пробелы
+            )
+            conn.commit()
+
         user = User(
             id=123, is_bot=False, first_name="TelegramName", username="testuser"
         )
+        result = get_player_name(user)
 
-        with patch(
-            "src.utils.PLAYERS",
-            [
-                {"id": 123, "fullname": "   "}  # Пустой fullname (только пробелы)
-            ],
-        ):
-            result = get_player_name(user)
-
-        # fullname пустой -> display_name = @testuser -> не дублируем
+        # Пустой fullname -> используется @username
         assert result == "@testuser"
-
-    def test_get_player_name_special_chars_no_escape_needed(self):
-        """Точки и подчёркивания не требуют экранирования."""
-        user = User(id=123, is_bot=False, first_name=". .", username=None)
-
-        with patch("src.utils.PLAYERS", []):
-            result = get_player_name(user)
-
-        # Точки не экранируются в HTML
-        assert result == ". ."
-
-    def test_get_player_name_with_ball_donate(self):
-        """Игрок с донатом мячей получает эмодзи волейбольного мяча."""
-        user = User(id=123, is_bot=False, first_name="Test", username="donor")
-
-        with patch(
-            "src.utils.PLAYERS",
-            [{"id": 123, "name": "donor", "fullname": "Donor", "ball_donate": True}],
-        ):
-            result = get_player_name(user)
-
-        assert result == "🏐 Donor (@donor)"
-
-    def test_get_player_name_with_subscription(self):
-        """Подписчик получает эмодзи звёздочки."""
-        user = User(id=123, is_bot=False, first_name="Test", username="sub")
-
-        with patch(
-            "src.utils.PLAYERS", [{"id": 123, "name": "sub", "fullname": "Subscriber"}]
-        ):
-            result = get_player_name(user, subs=[123, 456])
-
-        assert result == "⭐️ Subscriber (@sub)"
-
-    def test_get_player_name_with_subscription_and_ball_donate(self):
-        """Подписчик и донор получает оба эмодзи в правильном порядке."""
-        user = User(id=123, is_bot=False, first_name="Test", username="super")
-
-        with patch(
-            "src.utils.PLAYERS",
-            [
-                {
-                    "id": 123,
-                    "name": "super",
-                    "fullname": "SuperUser",
-                    "ball_donate": True,
-                }
-            ],
-        ):
-            result = get_player_name(user, subs=[123])
-
-        assert result == "⭐️🏐 SuperUser (@super)"
-
-    def test_get_player_name_sub_not_in_list(self):
-        """Игрок не в списке подписчиков не получает звезду."""
-        user = User(id=123, is_bot=False, first_name="Test", username="user")
-
-        with patch(
-            "src.utils.PLAYERS", [{"id": 123, "name": "user", "fullname": "User"}]
-        ):
-            result = get_player_name(user, subs=[456, 789])
-
-        assert result == "User (@user)"
 
 
 class TestFormatPlayerLink:

@@ -1,9 +1,7 @@
-import sqlite3
 from unittest.mock import patch
 
-from aiogram.types import User
+from aiogram.types import User, user
 
-import src.utils
 from src.db import (
     _connect,
     ensure_player,
@@ -11,7 +9,7 @@ from src.db import (
     get_player_info,
     init_db,
 )
-from src.utils import get_player_name, load_players
+from src.utils import get_player_name
 
 
 class TestDBPlayers:
@@ -39,7 +37,7 @@ class TestDBPlayers:
     def test_ensure_player_preserves_existing_data(self, temp_db):
         """
         Проверка что существующие данные НЕ перезаписываются.
-        
+
         Важно: это защищает от случайной перезаписи вручную установленных имён,
         даже если пользователь изменит своё имя в Telegram.
         """
@@ -53,13 +51,17 @@ class TestDBPlayers:
         # Проверяем: должны остаться ОРИГИНАЛЬНЫЕ данные
         players = get_all_players()
         assert len(players) == 1
-        assert players[0]["name"] == "original_name", "Name должен остаться оригинальным"
-        assert players[0]["fullname"] == "Original Fullname", "Fullname должен остаться оригинальным"
+        assert players[0]["name"] == "original_name", (
+            "Name должен остаться оригинальным"
+        )
+        assert players[0]["fullname"] == "Original Fullname", (
+            "Fullname должен остаться оригинальным"
+        )
 
     def test_ensure_player_fills_null_name(self, temp_db):
         """
         Проверка что NULL поля заполняются новыми данными.
-        
+
         Если в БД name=NULL, а приходит новое значение - оно должно записаться.
         """
         init_db()
@@ -72,7 +74,9 @@ class TestDBPlayers:
         players = get_all_players()
         assert len(players) == 1
         assert players[0]["name"] == "added_name", "NULL name должен заполниться"
-        assert players[0]["fullname"] == "User With No Name", "Существующий fullname должен сохраниться"
+        assert players[0]["fullname"] == "User With No Name", (
+            "Существующий fullname должен сохраниться"
+        )
 
     def test_ensure_player_fills_null_fullname(self, temp_db):
         """
@@ -88,12 +92,14 @@ class TestDBPlayers:
         players = get_all_players()
         assert len(players) == 1
         assert players[0]["name"] == "user_name", "Существующий name должен сохраниться"
-        assert players[0]["fullname"] == "Added Fullname", "NULL fullname должен заполниться"
+        assert players[0]["fullname"] == "Added Fullname", (
+            "NULL fullname должен заполниться"
+        )
 
     def test_ensure_player_null_update_preserves_data(self, temp_db):
         """
         Проверка что передача NULL не затирает существующие данные.
-        
+
         Если в БД есть данные, а мы передаём NULL - данные должны сохраниться.
         """
         init_db()
@@ -106,7 +112,9 @@ class TestDBPlayers:
         players = get_all_players()
         assert len(players) == 1
         assert players[0]["name"] == "existing_name", "Name не должен затереться NULL"
-        assert players[0]["fullname"] == "Existing Fullname", "Fullname не должен затереться NULL"
+        assert players[0]["fullname"] == "Existing Fullname", (
+            "Fullname не должен затереться NULL"
+        )
 
     def test_ensure_player_partial_update(self, temp_db):
         """
@@ -127,32 +135,37 @@ class TestDBPlayers:
     def test_ensure_player_real_world_scenario(self, temp_db):
         """
         Реальный сценарий: вручную установленное имя не должно затираться.
-        
+
         1. Пользователь впервые взаимодействует с ботом → данные из Telegram
         2. Админ вручную меняет fullname на красивое имя
         3. Пользователь снова голосует → данные из Telegram НЕ должны перезаписать
         """
         init_db()
-        
+
         # 1. Первое взаимодействие: сохраняем данные из Telegram
-        ensure_player(user_id=5013132836, name="TwinkleDev55", fullname="Что-то хорошее есть")
-        
+        ensure_player(
+            user_id=5013132836, name="TwinkleDev55", fullname="Что-то хорошее есть"
+        )
+
         # 2. Админ вручную меняет fullname (через UPDATE)
         with _connect() as conn:
             conn.execute(
-                "UPDATE players SET fullname = ? WHERE id = ?",
-                ("Рахма", 5013132836)
+                "UPDATE players SET fullname = ? WHERE id = ?", ("Рахма", 5013132836)
             )
             conn.commit()
-        
+
         # 3. Пользователь снова голосует: Telegram передаёт старое имя
-        ensure_player(user_id=5013132836, name="TwinkleDev55", fullname="Что-то хорошее есть")
-        
+        ensure_player(
+            user_id=5013132836, name="TwinkleDev55", fullname="Что-то хорошее есть"
+        )
+
         # Проверяем: должно остаться вручную установленное имя "Рахма"
         players = get_all_players()
         player = next((p for p in players if p["id"] == 5013132836), None)
         assert player is not None
-        assert player["fullname"] == "Рахма", "Вручную установленное имя должно сохраниться!"
+        assert player["fullname"] == "Рахма", (
+            "Вручную установленное имя должно сохраниться!"
+        )
 
     def test_get_all_players_converts_ball_donate_to_bool(self, temp_db):
         """Проверка конвертации ball_donate из int (DB) в bool (Logic)."""
@@ -240,28 +253,14 @@ class TestGetPlayerInfo:
         assert get_player_info(99999) is None
 
 
-class TestLoadPlayersDB:
-    """Тесты для функции load_players, теперь использующей БД."""
-
-    def test_load_players_updates_global_cache(self, temp_db):
-        """Проверка, что load_players загружает данные из БД в PLAYERS."""
-        init_db()
-        ensure_player(user_id=456, name="db_user", fullname="Database User")
-
-        # Сбрасываем глобальную переменную перед тестом
-        with patch("src.utils.PLAYERS", []):
-            load_players()
-            # Так как мы патчим в src.utils, проверяем там же
-            assert any(p["id"] == 456 for p in src.utils.PLAYERS)
+class TestGetPlayerNameFromDB:
+    """Интеграционные тесты: get_player_name получает актуальные данные из БД."""
 
     def test_get_player_name_uses_db_data(self, temp_db):
-        """Интеграционный тест: get_player_name использует данные, загруженные из БД."""
+        """Интеграционный тест: get_player_name использует данные из БД."""
         init_db()
         user_id = 789
         ensure_player(user_id=user_id, name="bot_name", fullname="Real Name")
-
-        # Загружаем из БД в кэш
-        load_players()
 
         user = User(id=user_id, is_bot=False, first_name="TG_Name", username="tg_user")
         result = get_player_name(user)
@@ -269,14 +268,6 @@ class TestLoadPlayersDB:
         # Должно использовать fullname из БД ("Real Name") и username из объекта User
         assert "Real Name" in result
         assert "@tg_user" in result
-
-    def test_load_players_handles_db_error(self, temp_db):
-        """Проверка обработки ошибок БД при загрузке."""
-        with patch("src.db.get_all_players", side_effect=sqlite3.Error("DB Error")):
-            with patch("src.utils.PLAYERS", [{"id": 1}]):  # Старое значение
-                load_players()
-                # При ошибке список должен стать пустым
-                assert src.utils.PLAYERS == []
 
     def test_ball_donate_emoji_from_db(self, temp_db):
         """Проверка появления эмодзи мяча на основе данных из БД."""
@@ -289,9 +280,20 @@ class TestLoadPlayersDB:
             )
             conn.commit()
 
-        load_players()
         user = User(id=user_id, is_bot=False, first_name="Donor", username="donor_user")
         result = get_player_name(user)
 
         assert "🏐" in result
         assert "Donor User" in result
+
+    def test_subscription_emoji_from_subs_list(self, temp_db):
+        """Проверка появления эмодзи звезды для подписчиков."""
+        init_db()
+        user_id = 222
+        ensure_player(user_id=user_id, name="subscribed", fullname="Sub User")
+
+        user = User(id=user_id, is_bot=False, first_name="Sub", username="sub_user")
+        result = get_player_name(user, subs=[user_id])
+
+        assert "⭐" in result
+        assert "Sub User" in result
