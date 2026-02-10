@@ -22,19 +22,28 @@ from aiogram.types import (
     Message,
     PollAnswer,
     Update,
+    User,
 )
+
+from datetime import datetime
 
 from .config import POLLS_SCHEDULE
 from .db import (
+    add_transaction,
     ensure_player,
     find_player_by_name,
     get_all_players,
+    get_fund_balance,
     get_player_balance,
     get_player_info,
     get_players_with_balance,
     get_poll_templates,
+    get_unpaid_halls,
+    record_hall_payment,
+    update_fund_balance,
     update_player_balance,
 )
+from .scheduler import get_monthly_subscription_poll_params
 from .services import AdminService, BotStateService, PollService
 from .types import PollTemplate
 from .utils import (
@@ -74,9 +83,12 @@ async def setup_bot_commands(bot: Bot) -> None:
     admin_commands = [
         BotCommand(command="help", description="Показать справку по командам"),
         BotCommand(command="schedule", description="Показать расписание опросов"),
-        BotCommand(command="balance", description="Показать долги/балансы"),
+        BotCommand(command="balance", description="Показать долги/балансы и кассу"),
         BotCommand(command="subs", description="Абонементы по дням"),
-        BotCommand(command="pay", description="Изменить баланс игрока"),
+        BotCommand(command="pay", description="Изменить баланс / оплата зала"),
+        BotCommand(command="restore", description="Восстановить баланс (без кассы)"),
+        BotCommand(command="open_monthly", description="Тест: открыть опрос абонемента"),
+        BotCommand(command="close_monthly", description="Тест: закрыть опрос абонемента"),
         BotCommand(command="player", description="Подробная информация об игроках"),
         BotCommand(command="start", description="Включить бота"),
         BotCommand(command="stop", description="Выключить бота"),
@@ -263,10 +275,13 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "/schedule — показать расписание опросов\n"
             "/balance — показать мой баланс\n\n"
             "<b>Команды для администраторов:</b>\n"
-            "/balance — список всех долгов\n"
+            "/balance — список всех долгов + касса\n"
             "/subs — абонементы по дням\n"
             "/pay [сумма] — изменить баланс (в ответ на сообщение)\n"
             "/pay [имя] [сумма] — найти игрока и изменить баланс\n"
+            "/pay Оплата зала — оплатить аренду зала из кассы\n"
+            "/restore [сумма] — восстановить баланс без изменения кассы\n"
+            "/restore [имя] [сумма] — найти игрока и восстановить баланс\n"
             "/player — список всех игроков с подробной информацией\n"
             "/player [имя] — информация об одном игроке (по имени, @username или ID)\n"
             "/start — включить бота\n"
@@ -372,12 +387,14 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         if is_admin:
-            # Администратор видит всех с ненулевым балансом
+            # Администратор видит кассу и всех с ненулевым балансом
+            fund = get_fund_balance()
             players = get_players_with_balance()
+            text = f"🏦 <b>Касса:</b> {fund} ₽\n\n"
             if not players:
-                text = "💰 Все балансы на нуле. Долгов нет!"
+                text += "💰 Все балансы на нуле. Долгов нет!"
             else:
-                text = "💰 <b>Список балансов:</b>\n\n"
+                text += "💰 <b>Список балансов:</b>\n\n"
                 for p in players:
                     balance = p["balance"]
                     player_link = format_player_link(p)
@@ -528,6 +545,80 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 f"⚠️ Сетевая ошибка при ответе на /subs от @{user.username if user else 'unknown'}"
             )
 
+    @router.message(Command("open_monthly"))
+    async def open_monthly_handler(message: Message) -> None:
+        """Тест: вручную открыть месячный опрос на абонемент (только для администратора)."""
+        user = message.from_user
+        if user is None:
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+        if not is_admin:
+            return
+
+        params = get_monthly_subscription_poll_params()
+        if params is None:
+            await message.reply(
+                "❌ Нет платных залов. Добавьте опросы с cost > 0 в БД."
+            )
+            return
+
+        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
+        poll_service: PollService = dp.workflow_data["poll_service"]
+        chat_id = bot_state_service.get_chat_id()
+        question, options, option_poll_names = params
+
+        new_chat_id = await poll_service.send_poll(
+            bot,
+            chat_id,
+            question,
+            "monthly_subscription",
+            bot_state_service.is_enabled(),
+            subs=[],
+            options=options,
+            allows_multiple_answers=True,
+            poll_kind="monthly_subscription",
+            option_poll_names=option_poll_names,
+        )
+        if new_chat_id != chat_id:
+            bot_state_service.set_chat_id(new_chat_id)
+
+        await message.reply(
+            "✅ Месячный опрос открыт. Проголосуйте, затем используйте /close_monthly для закрытия."
+        )
+
+    @router.message(Command("close_monthly"))
+    async def close_monthly_handler(message: Message) -> None:
+        """Тест: вручную закрыть активный месячный опрос (только для администратора)."""
+        user = message.from_user
+        if user is None:
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+        if not is_admin:
+            return
+
+        poll_service: PollService = dp.workflow_data["poll_service"]
+        first = poll_service.get_first_poll()
+        if first is None:
+            await message.reply(
+                "❌ Нет активного опроса. Сначала откройте месячный опрос: /open_monthly"
+            )
+            return
+
+        _poll_id, data = first
+        if data.poll_kind != "monthly_subscription":
+            await message.reply(
+                "❌ Сейчас открыт не месячный опрос, а обычный. "
+                "Закройте его или дождитесь авто-закрытия, затем откройте /open_monthly."
+            )
+            return
+
+        await poll_service.close_poll(bot, "monthly_subscription")
+        await message.reply("✅ Месячный опрос закрыт. Расчёт абонемента выполнен.")
+
     @router.message(Command("webhookinfo"))
     async def webhookinfo_handler(message: Message) -> None:
         """Команда для проверки статуса webhook (только для администратора)."""
@@ -572,28 +663,16 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             await message.reply(f"❌ Ошибка получения webhook info: {e}")
             logging.error(f"❌ Ошибка при получении webhook info: {e}")
 
-    @router.message(Command("pay"))
-    async def pay_handler(message: Message) -> None:
-        """Команда для изменения баланса игрока (только для администратора)."""
-        user = message.from_user
-        if user is None:
-            return
+    async def _resolve_target(
+        message: Message, args: list[str], callback_prefix: str
+    ) -> tuple[int | None, int, str] | None:
+        """
+        Определяет целевого игрока и сумму из аргументов команды.
 
-        # Получаем сервисы из workflow_data
-        admin_service: AdminService = dp.workflow_data["admin_service"]
-
-        # Проверяем, является ли пользователь администратором
-        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
-
-        if not is_admin:
-            # Обычным игрокам команда недоступна и не показывается
-            return
-
-        if message.text is None:
-            return
-
-        args = message.text.split()
-        target_user_id = None
+        Возвращает (target_user_id, amount, target_name) если определено,
+        или None если показана клавиатура / сообщение об ошибке.
+        """
+        target_user_id: int | None = None
         amount = 0
         target_name = ""
 
@@ -618,13 +697,13 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         "❌ Ошибка: сумма должна быть числом.\nПример: <code>/pay 500</code>",
                         parse_mode="HTML",
                     )
-                    return
+                    return None
             else:
                 await message.reply(
                     "❌ Укажите сумму.\nПример: <code>/pay 500</code> (в ответ на сообщение)",
                     parse_mode="HTML",
                 )
-                return
+                return None
         # 2. Если указаны аргументы (Имя/ID/@username Сумма)
         elif len(args) >= 3:
             try:
@@ -645,14 +724,14 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         await message.reply(
                             f"❌ Игрок с ID {target_user_id} не найден."
                         )
-                        return
+                        return None
                 else:
                     # Поиск по имени или @username (убираем @ если есть)
                     clean_query = search_query.lstrip("@")
                     players = find_player_by_name(clean_query)
                     if not players:
                         await message.reply(f"❌ Игрок '{search_query}' не найден.")
-                        return
+                        return None
                     if len(players) > 1:
                         keyboard = []
                         player_links = []
@@ -663,7 +742,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                                 if (p["fullname"] or p["name"])
                                 else f"ID: {p['id']}"
                             )
-                            callback_data = f"pay_select:{p['id']}:{amount}"
+                            callback_data = f"{callback_prefix}:{p['id']}:{amount}"
                             keyboard.append(
                                 [
                                     InlineKeyboardButton(
@@ -683,7 +762,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                             parse_mode="HTML",
                             link_preview_options=LinkPreviewOptions(is_disabled=True),
                         )
-                        return
+                        return None
 
                     target_user_id = players[0]["id"]
                     target_name = (
@@ -696,43 +775,187 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     "❌ Ошибка: сумма должна быть числом в конце команды.\nПример: <code>/pay Иван 500</code>",
                     parse_mode="HTML",
                 )
-                return
+                return None
         else:
+            return (None, 0, "")
+
+        return (target_user_id, amount, target_name)
+
+    @router.message(Command("pay"))
+    async def pay_handler(message: Message) -> None:
+        """Команда для изменения баланса игрока или оплаты зала (только для администратора)."""
+        user = message.from_user
+        if user is None:
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+
+        if not is_admin:
+            return
+
+        if message.text is None:
+            return
+
+        args = message.text.split()
+
+        # Специальный случай: /pay Оплата зала
+        rest_text = " ".join(args[1:]).strip().lower() if len(args) > 1 else ""
+        if rest_text == "оплата зала":
+            await _handle_hall_payment(message, user)
+            return
+
+        result = await _resolve_target(message, args, "pay_select")
+        if result is None:
+            return
+
+        target_user_id, amount, target_name = result
+
+        if target_user_id is None or amount == 0:
             await message.reply(
                 "ℹ️ <b>Управление балансом:</b>\n\n"
                 "1. Ответьте на сообщение игрока: <code>/pay 500</code>\n"
                 "2. Поиск по имени: <code>/pay Иван 500</code>\n"
                 "3. По @username: <code>/pay @username 500</code>\n"
-                "4. По ID игрока: <code>/pay 12345678 500</code>\n\n"
+                "4. По ID игрока: <code>/pay 12345678 500</code>\n"
+                "5. Оплата зала: <code>/pay Оплата зала</code>\n\n"
                 "<i>Сумма может быть отрицательной для списания.</i>",
                 parse_mode="HTML",
             )
             return
 
-        if target_user_id and amount != 0:
-            if update_player_balance(target_user_id, amount):
-                new_balance_data = get_player_balance(target_user_id)
-                new_balance = (
-                    new_balance_data["balance"] if new_balance_data else "неизвестно"
-                )
-                # Форматируем имя с гиперссылкой
-                player_link = format_player_link(new_balance_data, target_user_id)
-                try:
-                    await message.reply(
-                        f"✅ Баланс игрока {player_link} изменен на {amount} ₽.\n"
-                        f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
-                        parse_mode="HTML",
-                        link_preview_options=LinkPreviewOptions(is_disabled=True),
-                    )
-                    logging.info(
-                        f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс {target_name} (ID: {target_user_id}) на {amount}"
-                    )
-                except TelegramNetworkError:
-                    pass
-            else:
+        if update_player_balance(target_user_id, amount):
+            update_fund_balance(amount)
+            admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
+            add_transaction(
+                target_user_id, amount, f"Оплата (admin: {admin_name})"
+            )
+            new_balance_data = get_player_balance(target_user_id)
+            new_balance = (
+                new_balance_data["balance"] if new_balance_data else "неизвестно"
+            )
+            fund = get_fund_balance()
+            player_link = format_player_link(new_balance_data, target_user_id)
+            try:
                 await message.reply(
-                    "❌ Не удалось обновить баланс. Убедитесь, что игрок взаимодействовал с ботом ранее."
+                    f"✅ Баланс игрока {player_link} изменен на {amount} ₽.\n"
+                    f"💰 Текущий баланс: <b>{new_balance} ₽</b>\n"
+                    f"🏦 Касса: <b>{fund} ₽</b>",
+                    parse_mode="HTML",
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
                 )
+                logging.info(
+                    f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс {target_name} (ID: {target_user_id}) на {amount}"
+                )
+            except TelegramNetworkError:
+                pass
+        else:
+            await message.reply(
+                "❌ Не удалось обновить баланс. Убедитесь, что игрок взаимодействовал с ботом ранее."
+            )
+
+    async def _handle_hall_payment(message: Message, user: User) -> None:
+        """Обработка команды /pay Оплата зала."""
+        current_month = datetime.now().strftime("%Y-%m")
+        unpaid = get_unpaid_halls(current_month)
+
+        if not unpaid:
+            await message.reply(
+                "✅ Все залы за этот месяц оплачены.",
+                parse_mode="HTML",
+            )
+            return
+
+        keyboard = []
+        lines = [f"🏦 <b>Неоплаченные залы за {current_month}:</b>\n"]
+        for hall in unpaid:
+            hall_name = str(hall.get("name", ""))
+            monthly_cost = int(hall.get("monthly_cost", 0) or 0)
+            place = str(hall.get("place", ""))
+            label = f"{hall_name}"
+            if place:
+                label += f" ({place})"
+            label += f" — {monthly_cost} ₽"
+            lines.append(f"• {escape_html(label)}")
+            callback_data = f"hall_pay:{hall_name}:{current_month}"
+            keyboard.append(
+                [InlineKeyboardButton(text=label, callback_data=callback_data)]
+            )
+
+        fund = get_fund_balance()
+        lines.append(f"\n🏦 Касса: <b>{fund} ₽</b>")
+        lines.append("\nВыберите зал для оплаты:")
+
+        reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+        await message.reply(
+            "\n".join(lines),
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+        )
+
+    @router.message(Command("restore"))
+    async def restore_handler(message: Message) -> None:
+        """Команда для восстановления баланса игрока без изменения кассы (только для администратора)."""
+        user = message.from_user
+        if user is None:
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+
+        if not is_admin:
+            return
+
+        if message.text is None:
+            return
+
+        args = message.text.split()
+        result = await _resolve_target(message, args, "restore_select")
+        if result is None:
+            return
+
+        target_user_id, amount, target_name = result
+
+        if target_user_id is None or amount == 0:
+            await message.reply(
+                "ℹ️ <b>Восстановление баланса</b> (касса не меняется):\n\n"
+                "1. Ответьте на сообщение игрока: <code>/restore 150</code>\n"
+                "2. Поиск по имени: <code>/restore Иван 150</code>\n"
+                "3. По @username: <code>/restore @username 150</code>\n"
+                "4. По ID игрока: <code>/restore 12345678 150</code>\n\n"
+                "<i>Используйте для игроков, которые проголосовали, но не пришли.</i>",
+                parse_mode="HTML",
+            )
+            return
+
+        if update_player_balance(target_user_id, amount):
+            admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
+            add_transaction(
+                target_user_id, amount, f"Восстановление (admin: {admin_name})"
+            )
+            new_balance_data = get_player_balance(target_user_id)
+            new_balance = (
+                new_balance_data["balance"] if new_balance_data else "неизвестно"
+            )
+            player_link = format_player_link(new_balance_data, target_user_id)
+            try:
+                await message.reply(
+                    f"✅ Баланс игрока {player_link} восстановлен на {amount} ₽.\n"
+                    f"💰 Текущий баланс: <b>{new_balance} ₽</b>\n"
+                    f"<i>Касса не изменена.</i>",
+                    parse_mode="HTML",
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                )
+                logging.info(
+                    f"🔄 Админ @{user.username} (ID: {user.id}) восстановил баланс {target_name} (ID: {target_user_id}) на {amount}"
+                )
+            except TelegramNetworkError:
+                pass
+        else:
+            await message.reply(
+                "❌ Не удалось обновить баланс. Убедитесь, что игрок взаимодействовал с ботом ранее."
+            )
 
     @router.message(Command("player"))
     async def player_handler(message: Message) -> None:
@@ -909,9 +1132,10 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
         await callback_query.answer()
 
-    @router.callback_query(lambda c: c.data and c.data.startswith("pay_select:"))
-    async def process_pay_select(callback_query: CallbackQuery):
-        """Обработка выбора игрока из списка для изменения баланса."""
+    async def _process_balance_select(
+        callback_query: CallbackQuery, update_fund: bool
+    ) -> None:
+        """Общая обработка выбора игрока из списка для изменения баланса."""
         user = callback_query.from_user
         if user is None:
             logging.error("❌ callback_query.from_user is None")
@@ -927,10 +1151,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
             return
 
-        # Получаем сервисы из workflow_data
         admin_service: AdminService = dp.workflow_data["admin_service"]
-
-        # Проверяем, является ли пользователь администратором
         is_admin = await admin_service.is_admin(
             bot, user, callback_query.message.chat.id
         )
@@ -959,33 +1180,167 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         if update_player_balance(target_user_id, amount):
+            admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
+            if update_fund:
+                update_fund_balance(amount)
+                add_transaction(
+                    target_user_id, amount, f"Оплата (admin: {admin_name})"
+                )
+            else:
+                add_transaction(
+                    target_user_id, amount, f"Восстановление (admin: {admin_name})"
+                )
+
             new_balance_data = get_player_balance(target_user_id)
             new_balance = (
                 new_balance_data["balance"] if new_balance_data else "неизвестно"
             )
-
-            # Форматируем имя с гиперссылкой
             player_link = format_player_link(new_balance_data, target_user_id)
+
+            if update_fund:
+                fund = get_fund_balance()
+                result_text = (
+                    f"✅ Баланс игрока {player_link} изменен на {amount} ₽.\n"
+                    f"💰 Текущий баланс: <b>{new_balance} ₽</b>\n"
+                    f"🏦 Касса: <b>{fund} ₽</b>"
+                )
+            else:
+                result_text = (
+                    f"✅ Баланс игрока {player_link} восстановлен на {amount} ₽.\n"
+                    f"💰 Текущий баланс: <b>{new_balance} ₽</b>\n"
+                    f"<i>Касса не изменена.</i>"
+                )
 
             if callback_query.message and not isinstance(
                 callback_query.message, InaccessibleMessage
             ):
                 await callback_query.message.edit_text(
-                    f"✅ Баланс игрока {player_link} изменен на {amount} ₽.\n"
-                    f"💰 Текущий баланс: <b>{new_balance} ₽</b>",
+                    result_text,
                     parse_mode="HTML",
                     link_preview_options=LinkPreviewOptions(is_disabled=True),
                 )
 
             await callback_query.answer()
+            action = "изменил" if update_fund else "восстановил"
             logging.info(
-                f"💰 Админ @{user.username} (ID: {user.id}) изменил баланс через меню: "
+                f"💰 Админ @{user.username} (ID: {user.id}) {action} баланс через меню: "
                 f"ID={target_user_id}, сумма={amount}"
             )
         else:
             await callback_query.answer(
                 "❌ Не удалось обновить баланс.", show_alert=True
             )
+
+    @router.callback_query(lambda c: c.data and c.data.startswith("pay_select:"))
+    async def process_pay_select(callback_query: CallbackQuery):
+        """Обработка выбора игрока из списка для изменения баланса."""
+        await _process_balance_select(callback_query, update_fund=True)
+
+    @router.callback_query(lambda c: c.data and c.data.startswith("restore_select:"))
+    async def process_restore_select(callback_query: CallbackQuery):
+        """Обработка выбора игрока из списка для восстановления баланса."""
+        await _process_balance_select(callback_query, update_fund=False)
+
+    @router.callback_query(lambda c: c.data and c.data.startswith("hall_pay:"))
+    async def process_hall_pay(callback_query: CallbackQuery):
+        """Обработка выбора зала для оплаты."""
+        user = callback_query.from_user
+        if user is None:
+            await callback_query.answer(
+                "❌ Ошибка: нет информации о пользователе", show_alert=True
+            )
+            return
+
+        if callback_query.message is None:
+            await callback_query.answer(
+                "❌ Ошибка: сообщение не найдено", show_alert=True
+            )
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(
+            bot, user, callback_query.message.chat.id
+        )
+
+        if not is_admin:
+            await callback_query.answer(
+                "❌ У вас нет прав для этого действия.", show_alert=True
+            )
+            return
+
+        if callback_query.data is None:
+            await callback_query.answer("❌ Ошибка данных.", show_alert=True)
+            return
+
+        # Парсим callback_data: hall_pay:{poll_name}:{month}
+        parts = callback_query.data.split(":", 2)
+        if len(parts) != 3:
+            await callback_query.answer("❌ Ошибка формата данных.", show_alert=True)
+            return
+
+        poll_name = parts[1]
+        month = parts[2]
+
+        # Получаем стоимость зала
+        poll_templates = get_poll_templates()
+        hall = next(
+            (p for p in poll_templates if p["name"] == poll_name), None
+        )
+        if not hall:
+            await callback_query.answer(
+                f"❌ Зал '{poll_name}' не найден.", show_alert=True
+            )
+            return
+
+        monthly_cost = int(hall.get("monthly_cost", 0) or 0)
+        if monthly_cost <= 0:
+            await callback_query.answer(
+                "❌ У этого зала нулевая стоимость.", show_alert=True
+            )
+            return
+
+        # Записываем оплату
+        if not record_hall_payment(poll_name, month, monthly_cost):
+            await callback_query.answer(
+                f"⚠️ Зал '{poll_name}' за {month} уже оплачен.", show_alert=True
+            )
+            return
+
+        update_fund_balance(-monthly_cost)
+        admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
+        add_transaction(
+            user.id, -monthly_cost,
+            f"Оплата зала: {poll_name} ({month})",
+            poll_name,
+        )
+
+        fund = get_fund_balance()
+        place = str(hall.get("place", ""))
+        hall_label = poll_name
+        if place:
+            hall_label += f" ({place})"
+
+        result_text = (
+            f"✅ <b>Зал оплачен</b>\n\n"
+            f"🏟 {escape_html(hall_label)}\n"
+            f"📅 Месяц: {month}\n"
+            f"💸 Сумма: {monthly_cost} ₽\n"
+            f"🏦 Касса: <b>{fund} ₽</b>"
+        )
+
+        if callback_query.message and not isinstance(
+            callback_query.message, InaccessibleMessage
+        ):
+            await callback_query.message.edit_text(
+                result_text,
+                parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+            )
+
+        await callback_query.answer()
+        logging.info(
+            f"🏟 Админ @{user.username} (ID: {user.id}) оплатил зал {poll_name} за {month}: {monthly_cost}₽"
+        )
 
     @router.poll_answer()
     async def handle_poll_answer(

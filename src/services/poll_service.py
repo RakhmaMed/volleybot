@@ -26,6 +26,7 @@ from ..db import (
     POLL_STATE_KEY,
     add_transaction,
     ensure_player,
+    get_fund_balance,
     get_player_balance,
     get_poll_templates,
     load_state,
@@ -34,7 +35,140 @@ from ..db import (
     update_player_balance,
 )
 from ..poll import PollData, VoterInfo, sort_voters_by_update_id
+from ..types import HallBreakdown, PollTemplate, SubscriberCharge, SubscriptionResult
 from ..utils import escape_html, retry_async, save_error_dump
+
+# ── Константы бюджетного расчёта абонемента ──────────────────────────────────
+AVG_SINGLES_PER_GAME = 7       # Среднее кол-во разовых игроков за игру
+SINGLE_GAME_PRICE = 150        # Цена разового входа (руб.)
+GAMES_PER_MONTH = 4            # Игр в месяц на один зал
+SAFETY_K = 0.7                 # Коэффициент надёжности (риск неявки)
+TARGET_GROWTH = 1000           # Желаемый прирост казны в месяц (руб.)
+SAVINGS_BUFFER = 6000          # Целевая «подушка» казны (руб.)
+COMBO_DISCOUNT_COEFF = 1.7     # Комбо = 1.7× одного зала (скидка ~15%)
+MIN_SUB_PRICE = 400            # Минимальная цена абонемента за 1 зал
+MAX_SUB_PRICE = 500            # Максимальная цена абонемента за 1 зал
+DEFAULT_SUB_PRICE = 450        # Цена по умолчанию, если нет подписчиков
+
+
+def calculate_subscription(
+    paid_polls: list[PollTemplate],
+    votes_by_poll: dict[str, set[int]],
+    fund_balance: int = 0,
+) -> SubscriptionResult:
+    """
+    Бюджетный расчёт стоимости абонемента без побочных эффектов.
+
+    Держит единую цену абонемента за каждый зал в диапазоне 400-500 руб.
+    Недостающая часть аренды покрывается ожидаемым доходом с разовых игроков.
+    Подписчики на 2+ зала получают комбо-скидку (~15%).
+
+    Args:
+        paid_polls: шаблоны платных опросов (``cost > 0``).
+        votes_by_poll: маппинг ``poll_name → {user_id, …}`` из голосования.
+        fund_balance: текущий баланс казны (влияет на целевую сумму сбора).
+
+    Returns:
+        :class:`SubscriptionResult` с разбивкой по залам и списаниями по
+        подписчикам.
+    """
+    # --- 1. Собираем данные по залам ---
+    hall_breakdown: list[HallBreakdown] = []
+    paid_hall_names: list[str] = []
+
+    for template in paid_polls:
+        name = str(template.get("name", ""))
+        monthly_cost = int(template.get("monthly_cost", 0) or 0)
+        subs_set = votes_by_poll.get(name, set())
+        num_subs = len(subs_set)
+
+        if monthly_cost > 0:
+            paid_hall_names.append(name)
+
+        hall_breakdown.append(
+            HallBreakdown(
+                name=name,
+                monthly_cost=monthly_cost,
+                num_subs=num_subs,
+                per_person=0,  # заполним ниже
+            )
+        )
+
+    num_halls = len(paid_hall_names)
+    total_rent = sum(
+        h.monthly_cost for h in hall_breakdown if h.monthly_cost > 0
+    )
+
+    # --- 2. Классифицируем подписчиков: single-hall vs combo ---
+    user_halls: dict[int, list[str]] = {}
+    for hall_name in paid_hall_names:
+        for uid in votes_by_poll.get(hall_name, set()):
+            user_halls.setdefault(uid, []).append(hall_name)
+
+    n_combo = sum(1 for halls in user_halls.values() if len(halls) >= 2)
+    n_single = sum(1 for halls in user_halls.values() if len(halls) == 1)
+
+    # --- 3. Прогноз дохода с разовых игроков ---
+    expected_singles_income = round(
+        AVG_SINGLES_PER_GAME * SINGLE_GAME_PRICE * GAMES_PER_MONTH * num_halls * SAFETY_K
+    )
+
+    # --- 4. Корректировка целевой суммы по состоянию казны ---
+    if fund_balance >= SAVINGS_BUFFER * 1.5:
+        adjustment = -1000
+    elif fund_balance >= SAVINGS_BUFFER:
+        adjustment = 0
+    else:
+        adjustment = TARGET_GROWTH
+
+    # --- 5. Сколько нужно собрать с подписчиков ---
+    needed_from_subs = total_rent + adjustment - expected_singles_income
+
+    # --- 6. Расчёт единой цены за 1 зал ---
+    divisor = n_single + (COMBO_DISCOUNT_COEFF * n_combo)
+
+    if divisor > 0:
+        raw_price = needed_from_subs / divisor
+    else:
+        raw_price = DEFAULT_SUB_PRICE
+
+    # Ограничиваем диапазоном и округляем до 10 руб.
+    price_per_hall = max(MIN_SUB_PRICE, min(MAX_SUB_PRICE, raw_price))
+    price_per_hall = round(price_per_hall / 10) * 10
+
+    # --- 7. Комбо-цена ---
+    combo_price = round((price_per_hall * COMBO_DISCOUNT_COEFF) / 10) * 10
+
+    # --- 8. Заполняем per_person в hall_breakdown ---
+    for h in hall_breakdown:
+        if h.monthly_cost > 0 and h.num_subs > 0:
+            h.per_person = price_per_hall
+
+    # --- 9. Формируем списания ---
+    subscriber_charges: list[SubscriberCharge] = []
+    for uid, halls in sorted(user_halls.items()):
+        is_combo = len(halls) >= 2
+        total = combo_price if is_combo else price_per_hall
+        subscriber_charges.append(
+            SubscriberCharge(
+                user_id=uid,
+                total=total,
+                halls=sorted(halls),
+            )
+        )
+
+    # --- 10. Финансовый прогноз ---
+    total_sub_income = sum(c.total for c in subscriber_charges)
+    projected_savings = fund_balance + total_sub_income + expected_singles_income - total_rent
+
+    return SubscriptionResult(
+        hall_breakdown=hall_breakdown,
+        subscriber_charges=subscriber_charges,
+        price_per_hall=price_per_hall,
+        combo_price=combo_price,
+        expected_singles_income=expected_singles_income,
+        projected_savings=projected_savings,
+    )
 
 
 class PollService:
@@ -715,7 +849,7 @@ class PollService:
     async def _close_monthly_subscription_poll(
         self, bot: Bot, poll_name: str, data: PollData
     ) -> None:
-        """Закрыть месячный опрос и записать подписчиков."""
+        """Закрыть месячный опрос, записать подписчиков и рассчитать стоимость абонемента."""
         option_poll_names = data.option_poll_names
         votes_by_poll: dict[str, set[int]] = {}
         for user_id, option_ids in data.monthly_votes.items():
@@ -737,22 +871,27 @@ class PollService:
             template["subs"] = subs
             save_poll_template(template)
 
+        # --- Расчёт стоимости абонемента ---
         total_voters = len(data.monthly_votes)
-        summary_lines = []
-        for template in paid_polls:
-            name = str(template.get("name", ""))
-            count = len(votes_by_poll.get(name, set()))
-            summary_lines.append(f"• {name}: {count}")
+        current_month = datetime.now().strftime("%Y-%m")
+        fund_balance = get_fund_balance()
 
-        if summary_lines:
-            summary_text = "\n".join(summary_lines)
-        else:
-            summary_text = "Платные игры не найдены."
+        result = calculate_subscription(paid_polls, votes_by_poll, fund_balance)
+        # Касса не меняется при закрытии опроса — уменьшается только при оплате залов
 
-        final_text = (
-            "📊 <b>Голосование за абонемент завершено</b>\n\n"
-            f"Проголосовали: {total_voters}\n"
-            f"{summary_text}"
+        # Применяем списания к БД
+        charged_subscribers = self._apply_subscription_charges(
+            result, current_month
+        )
+
+        # --- Формируем и отправляем итоговое сообщение ---
+        summary_text = self._format_hall_summary(result)
+        final_text = self._format_subscription_report(
+            total_voters,
+            summary_text,
+            charged_subscribers,
+            fund_balance,
+            result,
         )
 
         try:
@@ -783,6 +922,167 @@ class PollService:
             logging.exception(
                 f"❌ Не удалось отправить итоги голосования для '{poll_name}'"
             )
+
+        # Отправляем подробный отчёт админу
+        if ADMIN_USER_ID and charged_subscribers:
+            admin_report = self._format_admin_subscription_report(
+                current_month,
+                summary_text,
+                charged_subscribers,
+                fund_balance,
+                result,
+            )
+
+            try:
+
+                @retry_async(
+                    (TelegramNetworkError, asyncio.TimeoutError, OSError),
+                    tries=3,
+                    delay=2,
+                )
+                async def send_admin_report():
+                    if ADMIN_USER_ID is not None:
+                        await bot.send_message(
+                            chat_id=ADMIN_USER_ID,
+                            text=admin_report,
+                            parse_mode="HTML",
+                        )
+
+                await send_admin_report()
+                logging.info("✅ Отчёт по абонементам отправлен админу")
+            except (
+                TelegramAPIError,
+                TelegramNetworkError,
+                asyncio.TimeoutError,
+                OSError,
+            ):
+                logging.exception("❌ Не удалось отправить отчёт по абонементам админу")
+
+    # ── Вспомогательные методы для абонемента ────────────────────────────────
+
+    @staticmethod
+    def _apply_subscription_charges(
+        result: SubscriptionResult, month: str
+    ) -> list[dict[str, Any]]:
+        """Применяет списания к БД и возвращает список данных для отчёта."""
+        charged: list[dict[str, Any]] = []
+        for charge in result.subscriber_charges:
+            ensure_player(charge.user_id)
+            player_data = get_player_balance(charge.user_id)
+            old_balance = player_data.get("balance", 0) if player_data else 0
+
+            update_player_balance(charge.user_id, -charge.total)
+            new_balance = old_balance - charge.total
+
+            halls_str = ", ".join(charge.halls)
+            add_transaction(
+                charge.user_id,
+                -charge.total,
+                f"Абонемент: {halls_str} ({month})",
+            )
+
+            player_name = ""
+            if player_data:
+                player_name = (
+                    player_data.get("fullname")
+                    or player_data.get("name")
+                    or f"ID: {charge.user_id}"
+                )
+            else:
+                player_name = f"ID: {charge.user_id}"
+
+            charged.append({
+                "user_id": charge.user_id,
+                "name": player_name,
+                "halls": charge.halls,
+                "amount": charge.total,
+                "old_balance": old_balance,
+                "new_balance": new_balance,
+            })
+        return charged
+
+    @staticmethod
+    def _format_hall_summary(result: SubscriptionResult) -> str:
+        """Форматирует разбивку по залам в HTML."""
+        lines: list[str] = []
+        for h in result.hall_breakdown:
+            if h.monthly_cost > 0 and h.num_subs > 0:
+                lines.append(
+                    f"• {escape_html(h.name)}: аренда {h.monthly_cost} ₽, "
+                    f"подписчиков: {h.num_subs}"
+                )
+            elif h.monthly_cost > 0:
+                lines.append(
+                    f"• {escape_html(h.name)}: аренда {h.monthly_cost} ₽ — "
+                    f"<b>нет подписчиков</b>"
+                )
+        if result.price_per_hall > 0:
+            lines.append(
+                f"\n💰 Абонемент на 1 зал: <b>{result.price_per_hall} ₽</b>"
+            )
+            lines.append(
+                f"💰 Комбо (2 зала): <b>{result.combo_price} ₽</b>"
+            )
+        if result.expected_singles_income > 0:
+            lines.append(
+                f"📈 Ожидаемый доход с разовых: {result.expected_singles_income} ₽"
+            )
+        return "\n".join(lines) if lines else "Платные игры не найдены."
+
+    @staticmethod
+    def _format_subscription_report(
+        total_voters: int,
+        summary_text: str,
+        charged_subscribers: list[dict[str, Any]],
+        fund_balance: int,
+        result: SubscriptionResult | None = None,
+    ) -> str:
+        """Форматирует итоговое сообщение для группового чата."""
+        text = (
+            "📊 <b>Голосование за абонемент завершено</b>\n\n"
+            f"Проголосовали: {total_voters}\n\n"
+            f"<b>Расчёт абонемента:</b>\n{summary_text}\n"
+        )
+        if charged_subscribers:
+            text += "\n<b>Списано с подписчиков:</b>\n"
+            for i, sub in enumerate(charged_subscribers, 1):
+                balance_icon = "🔴" if sub["new_balance"] < 0 else "🟢"
+                text += (
+                    f"{i}. {escape_html(sub['name'])} — {sub['amount']} ₽ "
+                    f"{balance_icon} (баланс: {sub['new_balance']} ₽)\n"
+                )
+        text += f"\n🏦 Касса: <b>{fund_balance} ₽</b>"
+        if result and result.projected_savings != 0:
+            text += f"\n📊 Прогноз казны на конец месяца: <b>{result.projected_savings} ₽</b>"
+        return text
+
+    @staticmethod
+    def _format_admin_subscription_report(
+        month: str,
+        summary_text: str,
+        charged_subscribers: list[dict[str, Any]],
+        fund_balance: int,
+        result: SubscriptionResult | None = None,
+    ) -> str:
+        """Форматирует подробный отчёт для администратора."""
+        text = (
+            "📊 <b>Отчёт по абонементам</b>\n\n"
+            f"📅 Месяц: {month}\n\n"
+            f"<b>Расчёт:</b>\n{summary_text}\n\n"
+        )
+        text += f"<b>Списания ({len(charged_subscribers)}):</b>\n"
+        for i, sub in enumerate(charged_subscribers, 1):
+            halls_str = ", ".join(sub["halls"])
+            balance_icon = "🔴" if sub["new_balance"] < 0 else "🟢"
+            text += (
+                f"{i}. {escape_html(sub['name'])} — {sub['amount']} ₽ "
+                f"({escape_html(halls_str)}) "
+                f"{balance_icon} баланс: {sub['new_balance']} ₽\n"
+            )
+        text += f"\n🏦 Касса: <b>{fund_balance} ₽</b>"
+        if result and result.projected_savings != 0:
+            text += f"\n📊 Прогноз казны на конец месяца: <b>{result.projected_savings} ₽</b>"
+        return text
 
     async def _process_payment_deduction(
         self,

@@ -13,10 +13,59 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
-from src.types import PollTemplate
-
 from .db import clear_paid_poll_subscriptions, get_poll_templates
 from .services import BotStateService, PollService
+from .types import PollTemplate
+
+
+def get_monthly_subscription_poll_params() -> (
+    tuple[str, list[str], list[str | None]] | None
+):
+    """
+    Формирует параметры опроса «Абонемент на следующий месяц».
+
+    Returns:
+        (вопрос, список опций, option_poll_names) или None, если нет платных залов.
+    """
+    from typing import cast
+
+    poll_templates = get_poll_templates()
+    paid_polls = [
+        p for p in poll_templates
+        if int(cast(int, p.get("cost") or 0)) > 0
+    ]
+    if not paid_polls:
+        return None
+
+    utc_tz = ZoneInfo("UTC")
+    moscow_tz = ZoneInfo("Europe/Moscow")
+    options: list[str] = []
+    option_poll_names: list[str | None] = []
+
+    for poll in paid_polls:
+        name = str(poll.get("name", ""))
+        place = str(poll.get("place", ""))
+        game_hour_utc: int = cast(int, poll.get("game_hour_utc") or 0)
+        game_minute_utc: int = cast(int, poll.get("game_minute_utc") or 0)
+        dt_utc = datetime(
+            2000, 1, 1, game_hour_utc, game_minute_utc, tzinfo=utc_tz
+        )
+        dt_moscow = dt_utc.astimezone(moscow_tz)
+        time_moscow = dt_moscow.strftime("%H:%M")
+        if place:
+            options.append(f"{name} — {place} — {time_moscow} МСК")
+        else:
+            options.append(f"{name} — {time_moscow} МСК")
+        option_poll_names.append(name)
+
+    options.append("смотреть результат")
+    option_poll_names.append(None)
+
+    question = (
+        "Абонемент на следующий месяц.\n"
+        "Выберите игры, по которым хотите подписку. Можно выбрать несколько вариантов."
+    )
+    return (question, options, option_poll_names)
 
 
 def create_poll_job(
@@ -263,10 +312,16 @@ def _schedule_monthly_subscription_poll(
     """
     from typing import cast
 
-    paid_polls = [p for p in poll_templates if int(cast(int, p.get("cost") or 0)) > 0]
-    if not paid_polls:
+    params = get_monthly_subscription_poll_params()
+    if params is None:
         logging.info("ℹ️ Платные опросы не найдены, месячный опрос не запланирован")
         return
+
+    _question, _options, _option_poll_names = params
+    paid_polls = [
+        p for p in poll_templates
+        if int(cast(int, p.get("cost") or 0)) > 0
+    ]
 
     moscow_tz = ZoneInfo("Europe/Moscow")
     utc_tz = ZoneInfo("UTC")
@@ -345,30 +400,7 @@ def _schedule_monthly_subscription_poll(
     def to_utc(dt_moscow: datetime) -> datetime:
         return dt_moscow.astimezone(utc_tz)
 
-    paid_poll_options: list[str] = []
-    option_poll_names: list[str | None] = []
-    for poll in paid_polls:
-        name = str(poll.get("name", ""))
-        place = str(poll.get("place", ""))
-        game_hour_utc: int = cast(int, poll.get("game_hour_utc") or 0)
-        game_minute_utc: int = cast(int, poll.get("game_minute_utc") or 0)
-        dt_utc = datetime(2000, 1, 1, game_hour_utc, game_minute_utc, tzinfo=utc_tz)
-        dt_moscow = dt_utc.astimezone(moscow_tz)
-        time_moscow = dt_moscow.strftime("%H:%M")
-        if place:
-            option_text = f"{name} — {place} — {time_moscow} МСК"
-        else:
-            option_text = f"{name} — {time_moscow} МСК"
-        paid_poll_options.append(option_text)
-        option_poll_names.append(name)
-
-    paid_poll_options.append("смотреть результат")
-    option_poll_names.append(None)
-
-    poll_question = (
-        "Абонемент на следующий месяц.\n"
-        "Выберите игры, по которым хотите подписку. Можно выбрать несколько вариантов."
-    )
+    poll_question, paid_poll_options, option_poll_names = _question, _options, _option_poll_names
 
     open_job_id = "monthly_subs_open"
     clear_job_id = "monthly_subs_clear"

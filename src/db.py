@@ -15,6 +15,7 @@ from .types import PollTemplate
 # Ключи хранения в kv_store
 BOT_STATE_KEY = "bot_state"
 POLL_STATE_KEY = "poll_state"
+FUND_BALANCE_KEY = "fund_balance"
 
 
 def _get_db_path() -> str:
@@ -105,6 +106,31 @@ def init_db() -> None:
             )
             """
         )
+
+        # Таблица для отслеживания оплаты залов
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hall_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                poll_name TEXT NOT NULL,
+                month TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                paid_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (poll_name) REFERENCES poll_templates(name) ON DELETE CASCADE,
+                UNIQUE(poll_name, month)
+            )
+            """
+        )
+
+        # Миграция: добавление monthly_cost если его ещё нет
+        cursor = conn.execute("PRAGMA table_info(poll_templates)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "monthly_cost" not in columns:
+            conn.execute(
+                "ALTER TABLE poll_templates ADD COLUMN monthly_cost INTEGER DEFAULT 0"
+            )
+            logging.info("✅ Миграция: добавлен столбец monthly_cost в poll_templates")
+
         conn.commit()
     logging.debug(f"✅ База данных инициализирована: {db_path}")
 
@@ -366,8 +392,8 @@ def save_poll_template(template: dict[str, Any]) -> None:
                 """
                 INSERT INTO poll_templates (
                     name, place, message, open_day, open_hour_utc, open_minute_utc,
-                    game_day, game_hour_utc, game_minute_utc, cost
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    game_day, game_hour_utc, game_minute_utc, cost, monthly_cost
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                     place = excluded.place,
                     message = excluded.message,
@@ -378,6 +404,7 @@ def save_poll_template(template: dict[str, Any]) -> None:
                     game_hour_utc = excluded.game_hour_utc,
                     game_minute_utc = excluded.game_minute_utc,
                     cost = excluded.cost,
+                    monthly_cost = excluded.monthly_cost,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -391,6 +418,7 @@ def save_poll_template(template: dict[str, Any]) -> None:
                     template.get("game_hour_utc", 0),
                     template.get("game_minute_utc", 0),
                     template.get("cost", 0),
+                    template.get("monthly_cost", 0),
                 ),
             )
 
@@ -459,3 +487,135 @@ def add_transaction(
         )
     except sqlite3.Error:
         logging.exception(f"❌ Ошибка при добавлении транзакции для игрока {player_id}")
+
+
+# ── Fund (касса) ────────────────────────────────────────────────────────────
+
+
+def get_fund_balance() -> int:
+    """Возвращает текущий баланс кассы."""
+    try:
+        init_db()
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM kv_store WHERE key = ?", (FUND_BALANCE_KEY,)
+            ).fetchone()
+        if row is None:
+            return 0
+        return int(json.loads(row[0]))
+    except (sqlite3.Error, json.JSONDecodeError, ValueError):
+        logging.exception("❌ Ошибка при получении баланса кассы")
+        return 0
+
+
+def update_fund_balance(amount: int) -> None:
+    """
+    Атомарно изменяет баланс кассы на указанную сумму.
+
+    Args:
+        amount: Сумма изменения (положительная — пополнение, отрицательная — списание)
+    """
+    try:
+        init_db()
+        current = get_fund_balance()
+        new_balance = current + amount
+        payload = json.dumps(new_balance)
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO kv_store(key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (FUND_BALANCE_KEY, payload),
+            )
+            conn.commit()
+        logging.info(
+            f"💰 Касса изменена: {current} → {new_balance} (изменение: {amount:+d})"
+        )
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при обновлении баланса кассы на {amount}")
+
+
+# ── Hall payments (оплата залов) ─────────────────────────────────────────────
+
+
+def get_unpaid_halls(month: str) -> list[PollTemplate]:
+    """
+    Возвращает платные залы (monthly_cost > 0), ещё не оплаченные в данном месяце.
+
+    Args:
+        month: Месяц в формате "YYYY-MM"
+
+    Returns:
+        Список шаблонов опросов с monthly_cost > 0, не имеющих записи в hall_payments
+    """
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                """
+                SELECT pt.*
+                FROM poll_templates pt
+                WHERE pt.monthly_cost > 0
+                  AND pt.name NOT IN (
+                      SELECT hp.poll_name FROM hall_payments hp WHERE hp.month = ?
+                  )
+                """,
+                (month,),
+            )
+            templates: list[PollTemplate] = []
+            for row in cursor.fetchall():
+                template = dict(row)
+                sub_cursor = conn.execute(
+                    "SELECT user_id FROM poll_subscriptions WHERE poll_name = ?",
+                    (template["name"],),
+                )
+                template["subs"] = [r[0] for r in sub_cursor.fetchall()]
+                templates.append(template)
+            return templates
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при получении неоплаченных залов за {month}")
+        return []
+
+
+def record_hall_payment(poll_name: str, month: str, amount: int) -> bool:
+    """
+    Записывает оплату зала за месяц.
+
+    Args:
+        poll_name: Название опроса (зала)
+        month: Месяц в формате "YYYY-MM"
+        amount: Сумма оплаты
+
+    Returns:
+        True если запись успешно добавлена, False при ошибке
+    """
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO hall_payments (poll_name, month, amount)
+                VALUES (?, ?, ?)
+                """,
+                (poll_name, month, amount),
+            )
+            conn.commit()
+        logging.info(
+            f"✅ Оплата зала записана: {poll_name}, месяц={month}, сумма={amount}"
+        )
+        return True
+    except sqlite3.IntegrityError:
+        logging.warning(
+            f"⚠️ Зал '{poll_name}' за {month} уже оплачен (дубликат)"
+        )
+        return False
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка при записи оплаты зала '{poll_name}' за {month}"
+        )
+        return False
