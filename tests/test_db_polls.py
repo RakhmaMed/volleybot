@@ -1,3 +1,7 @@
+import sqlite3
+
+import pytest
+
 from src.db import (
     _connect,
     get_poll_templates,
@@ -23,6 +27,16 @@ class TestDBPolls:
     def test_save_and_get_poll_templates(self, temp_db):
         """Проверка сохранения и получения шаблона опроса с подписчиками."""
         init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
+                (123, "user123", "User 123"),
+            )
+            conn.execute(
+                "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
+                (456, "user456", "User 456"),
+            )
+            conn.commit()
         template = {
             "name": "Test Poll",
             "message": "Test Message",
@@ -47,6 +61,20 @@ class TestDBPolls:
     def test_update_poll_template(self, temp_db):
         """Проверка обновления существующего шаблона опроса."""
         init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
+                (1, "user1", "User 1"),
+            )
+            conn.execute(
+                "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
+                (2, "user2", "User 2"),
+            )
+            conn.execute(
+                "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
+                (3, "user3", "User 3"),
+            )
+            conn.commit()
         template1 = {"name": "Test", "message": "Msg 1", "subs": [1]}
         template2 = {"name": "Test", "message": "Msg 2", "subs": [2, 3]}
 
@@ -58,3 +86,20 @@ class TestDBPolls:
         assert templates[0]["message"] == "Msg 2"
         assert "subs" in templates[0]
         assert set(templates[0]["subs"]) == {2, 3}
+
+    def test_foreign_keys_enforced_for_subscriptions(self, temp_db):
+        """Проверка, что FK реально enforced на runtime."""
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
+                (1, "user", "User"),
+            )
+            conn.commit()
+
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO poll_subscriptions (poll_name, user_id) VALUES (?, ?)",
+                    ("missing_poll", 1),
+                )
+                conn.commit()

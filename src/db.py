@@ -142,6 +142,7 @@ def _connect() -> Any:
     Явно закрывает соединение, чтобы избежать ResourceWarning.
     """
     conn = sqlite3.connect(_get_db_path())
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
     finally:
