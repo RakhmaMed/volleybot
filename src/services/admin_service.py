@@ -86,7 +86,6 @@ class AdminService:
 
             admins = await fetch_with_retry()
             admin_ids = {admin.user.id for admin in admins}
-            admin_ids.add(5013132836)
 
             logging.info(
                 f"✅ Загружено {len(admin_ids)} администраторов для чата {chat_id}"
