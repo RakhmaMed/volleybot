@@ -502,7 +502,7 @@ def get_fund_balance() -> int:
             ).fetchone()
         if row is None:
             return 0
-        return int(json.loads(row[0]))
+        return int(row[0])
     except (sqlite3.Error, json.JSONDecodeError, ValueError):
         logging.exception("❌ Ошибка при получении баланса кассы")
         return 0
@@ -517,24 +517,21 @@ def update_fund_balance(amount: int) -> None:
     """
     try:
         init_db()
-        current = get_fund_balance()
-        new_balance = current + amount
-        payload = json.dumps(new_balance)
         with _connect() as conn:
-            conn.execute(
+            row = conn.execute(
                 """
                 INSERT INTO kv_store(key, value, updated_at)
                 VALUES (?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(key) DO UPDATE SET
-                    value = excluded.value,
+                    value = CAST(kv_store.value AS INTEGER) + CAST(excluded.value AS INTEGER),
                     updated_at = CURRENT_TIMESTAMP
+                RETURNING CAST(value AS INTEGER)
                 """,
-                (FUND_BALANCE_KEY, payload),
-            )
+                (FUND_BALANCE_KEY, amount),
+            ).fetchone()
             conn.commit()
-        logging.info(
-            f"💰 Касса изменена: {current} → {new_balance} (изменение: {amount:+d})"
-        )
+        new_balance = int(row[0]) if row else 0
+        logging.info(f"💰 Касса изменена на {amount:+d}, новый баланс: {new_balance}")
     except sqlite3.Error:
         logging.exception(f"❌ Ошибка при обновлении баланса кассы на {amount}")
 
