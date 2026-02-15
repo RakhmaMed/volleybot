@@ -42,14 +42,6 @@ class Settings(BaseSettings):
     webhook_port: int = Field(default=8443, validation_alias="WEBHOOK_PORT")
     trust_proxy: bool = Field(default=False, validation_alias="TRUST_PROXY")
 
-    # SSL сертификаты
-    ssl_cert_path: str = Field(
-        default="/app/certs/fullchain.pem", validation_alias="SSL_CERT_PATH"
-    )
-    ssl_key_path: str = Field(
-        default="/app/certs/privkey.pem", validation_alias="SSL_KEY_PATH"
-    )
-
     # Настройки опросов
     min_players: int = Field(default=12, validation_alias="MIN_PLAYERS")
     max_players: int = Field(default=18, validation_alias="MAX_PLAYERS")
@@ -129,8 +121,6 @@ WEBHOOK_HOST: str = settings.webhook_host
 WEBHOOK_PATH: str = settings.webhook_path
 WEBHOOK_PORT: int = settings.webhook_port
 TRUST_PROXY: bool = settings.trust_proxy
-WEBHOOK_SSL_CERT: str = settings.ssl_cert_path
-WEBHOOK_SSL_PRIV: str = settings.ssl_key_path
 
 # Расписание опросов теперь в БД, оставляем пустой список для совместимости миграции
 POLLS_SCHEDULE: list[PollSchedule] = []

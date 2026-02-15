@@ -84,7 +84,7 @@ cp .env.example .env
 Минимально необходимые параметры:
 - `TELEGRAM_TOKEN` — токен от @BotFather
 - `CHAT_ID` — ID группы, где будут проходить опросы
-- `ADMIN_USERNAME` — ваш никнейм в Telegram (без @)
+- `ADMIN_USER_ID` — ваш цифровой ID в Telegram
 
 ### 3. Установите зависимости
 ```bash

@@ -23,7 +23,7 @@
 
 *   **`TELEGRAM_TOKEN`**: Токен вашего бота от [@BotFather](https://t.me/BotFather).
 *   **`CHAT_ID`**: ID чата или группы, куда бот будет отправлять опросы (для групп начинается с `-100`).
-*   **`ADMIN_USERNAME`**: Telegram username администратора (без символа `@`). Только этот пользователь сможет управлять ботом.
+*   **`ADMIN_USER_ID`**: Цифровой ID администратора Telegram. Используется для отправки системных уведомлений и отчетов. Управление ботом доступно всем администраторам группы.
 
 ### Настройки Webhook (опционально)
 
@@ -33,13 +33,7 @@
 *   **`WEBHOOK_PATH`**: Путь для вебхука (по умолчанию `/webhook`).
 *   **`WEBHOOK_SECRET`**: Секретный токен для проверки подлинности запросов от Telegram.
 *   **`WEBHOOK_PORT`**: Порт, который будет слушать бот (по умолчанию `8443`).
-
-### SSL сертификаты (для Webhook)
-
-Обязательны, если используется режим Webhook без внешнего прокси (типа Nginx).
-
-*   **`SSL_CERT_PATH`**: Путь к файлу сертификата (fullchain).
-*   **`SSL_KEY_PATH`**: Путь к приватному ключу.
+*   **`TRUST_PROXY`**: Разрешить доверие заголовкам `X-Forwarded-For` (по умолчанию `false`). Установите `true` при работе за Nginx.
 
 ### Настройки приложения
 
@@ -87,3 +81,41 @@
 
 1. **Защита данных**: База данных `volleybot.db` содержит балансы игроков и их ID. Ограничьте доступ к этому файлу на сервере.
 2. **Секреты**: Никогда не передавайте ваш `TELEGRAM_TOKEN` и содержимое `.env` третьим лицам.
+
+---
+
+## Настройка за Nginx (Reverse Proxy)
+
+Рекомендуемая схема развертывания для максимальной безопасности.
+
+### 1. Настройка .env
+```env
+WEBHOOK_HOST=https://your-domain.com
+TRUST_PROXY=true
+WEBHOOK_SECRET=ваш_секретный_токен_тут
+```
+
+### 2. Настройка Nginx
+Создайте конфиг `/etc/nginx/sites-available/volleybot`:
+
+```nginx
+server {
+    server_name your-domain.com;
+    listen 443 ssl;
+
+    location /webhook {
+        proxy_pass http://127.0.0.1:8443;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # SSL сертификаты (managed by Certbot)
+    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+}
+```
+
+### 3. Безопасность портов
+Убедитесь, что порт бота (`8443`) закрыт снаружи и доступен только локально. При использовании Docker с нашими скриптами управления (`manage.sh`), это настраивается автоматически через привязку к `127.0.0.1`.

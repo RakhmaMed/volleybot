@@ -338,32 +338,19 @@ function Deploy-Container {
         New-Item -Path $dataPath -ItemType Directory | Out-Null
     }
 
-    # Проверка наличия директории certs
-    $certsPath = Join-Path $PSScriptRoot "certs"
+    # Запуск бота. Порт $PORT (127.0.0.1:8443:8443) ограничивает доступ только локальным хостом.
+    # SSL теперь терминируется на Nginx, поэтому сертификаты внутрь контейнера не пробрасываем.
     $envPath = Join-Path $PSScriptRoot ".env"
 
-    if (Test-Path $certsPath) {
-        # Запуск с webhook (с сертификатами)
-        docker run -d `
-            --name $CONTAINER_NAME `
-            --restart unless-stopped `
-            -p $PORT `
-            -v "${certsPath}:/app/certs:ro" `
-            -v "${envPath}:/app/.env:ro" `
-            -v "${dataPath}:/app/data" `
-            $IMAGE_NAME
-        Write-Host "✓ Контейнер запущен в режиме webhook" -ForegroundColor Green
-    } else {
-        # Запуск без webhook (polling mode)
-        docker run -d `
-            --name $CONTAINER_NAME `
-            --restart unless-stopped `
-            -v "${envPath}:/app/.env:ro" `
-            -v "${dataPath}:/app/data" `
-            $IMAGE_NAME
-        Write-Host "✓ Контейнер запущен в режиме polling" -ForegroundColor Green
-        Write-Host "  (директория certs не найдена)" -ForegroundColor Gray
-    }
+    docker run -d `
+        --name $CONTAINER_NAME `
+        --restart unless-stopped `
+        -p $PORT `
+        -v "${envPath}:/app/.env:ro" `
+        -v "${dataPath}:/app/data" `
+        $IMAGE_NAME
+
+    Write-Host "✓ Контейнер запущен" -ForegroundColor Green
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "✗ Ошибка при запуске контейнера" -ForegroundColor Red

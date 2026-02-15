@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramNetworkError
@@ -24,8 +25,6 @@ from aiogram.types import (
     Update,
     User,
 )
-
-from datetime import datetime
 
 from .config import POLLS_SCHEDULE
 from .db import (
@@ -87,8 +86,12 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="subs", description="Абонементы по дням"),
         BotCommand(command="pay", description="Изменить баланс / оплата зала"),
         BotCommand(command="restore", description="Восстановить баланс (без кассы)"),
-        BotCommand(command="open_monthly", description="Тест: открыть опрос абонемента"),
-        BotCommand(command="close_monthly", description="Тест: закрыть опрос абонемента"),
+        BotCommand(
+            command="open_monthly", description="Тест: открыть опрос абонемента"
+        ),
+        BotCommand(
+            command="close_monthly", description="Тест: закрыть опрос абонемента"
+        ),
         BotCommand(command="player", description="Подробная информация об игроках"),
         BotCommand(command="start", description="Включить бота"),
         BotCommand(command="stop", description="Выключить бота"),
@@ -827,9 +830,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         if update_player_balance(target_user_id, amount):
             update_fund_balance(amount)
             admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
-            add_transaction(
-                target_user_id, amount, f"Оплата (admin: {admin_name})"
-            )
+            add_transaction(target_user_id, amount, f"Оплата (admin: {admin_name})")
             new_balance_data = get_player_balance(target_user_id)
             new_balance = (
                 new_balance_data["balance"] if new_balance_data else "неизвестно"
@@ -1183,9 +1184,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
             if update_fund:
                 update_fund_balance(amount)
-                add_transaction(
-                    target_user_id, amount, f"Оплата (admin: {admin_name})"
-                )
+                add_transaction(target_user_id, amount, f"Оплата (admin: {admin_name})")
             else:
                 add_transaction(
                     target_user_id, amount, f"Восстановление (admin: {admin_name})"
@@ -1283,9 +1282,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         # Получаем стоимость зала
         poll_templates = get_poll_templates()
-        hall = next(
-            (p for p in poll_templates if p["name"] == poll_name), None
-        )
+        hall = next((p for p in poll_templates if p["name"] == poll_name), None)
         if not hall:
             await callback_query.answer(
                 f"❌ Зал '{poll_name}' не найден.", show_alert=True
@@ -1307,9 +1304,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         update_fund_balance(-monthly_cost)
-        admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
         add_transaction(
-            user.id, -monthly_cost,
+            user.id,
+            -monthly_cost,
             f"Оплата зала: {poll_name} ({month})",
             poll_name,
         )

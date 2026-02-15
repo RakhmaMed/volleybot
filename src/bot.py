@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import ssl
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -33,8 +31,6 @@ from .config import (
     WEBHOOK_PATH,
     WEBHOOK_PORT,
     WEBHOOK_SECRET,
-    WEBHOOK_SSL_CERT,
-    WEBHOOK_SSL_PRIV,
     WEBHOOK_URL,
 )
 from .db import init_db
@@ -234,15 +230,6 @@ async def run_polling() -> None:
 
 def run_webhook() -> None:
     """Запуск в режиме webhook."""
-    # Проверяем наличие сертификатов для webhook
-    if not os.path.exists(WEBHOOK_SSL_CERT) or not os.path.exists(WEBHOOK_SSL_PRIV):
-        logging.warning(
-            f"⚠️ Файлы сертификатов не найдены: cert={WEBHOOK_SSL_CERT}, key={WEBHOOK_SSL_PRIV}"
-        )
-        logging.info("🔄 Переключение в режим polling...")
-        asyncio.run(run_polling())
-        return
-
     logging.info("🚀 Запуск бота в режиме webhook")
     logging.debug(
         f"Webhook настройки: Host={WEBHOOK_HOST}, Port={WEBHOOK_PORT}, Path={WEBHOOK_PATH}"
@@ -271,21 +258,6 @@ def run_webhook() -> None:
 
     # Планировщик задач
     scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
-
-    # Настройка SSL
-    ssl_context: ssl.SSLContext | None = None
-    try:
-        logging.debug(
-            f"Загрузка SSL сертификатов: cert={WEBHOOK_SSL_CERT}, key={WEBHOOK_SSL_PRIV}"
-        )
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ssl_context.load_cert_chain(WEBHOOK_SSL_CERT, WEBHOOK_SSL_PRIV)
-        logging.info("✅ SSL сертификаты успешно загружены")
-    except (ssl.SSLError, OSError, FileNotFoundError) as e:
-        logging.error(f"❌ Ошибка при загрузке SSL сертификатов: {e}")
-        logging.info("🔄 Переключение в режим polling...")
-        asyncio.run(run_polling())
-        return
 
     # Регистрация обработчиков
     register_handlers(dp, bot)
@@ -370,7 +342,7 @@ def run_webhook() -> None:
 
     # Запускаем сервер
     logging.info(f"🌐 Запуск веб-сервера на порту {WEBHOOK_PORT}...")
-    web.run_app(app, host="0.0.0.0", port=WEBHOOK_PORT, ssl_context=ssl_context)
+    web.run_app(app, host="0.0.0.0", port=WEBHOOK_PORT)
 
 
 if __name__ == "__main__":

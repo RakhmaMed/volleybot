@@ -318,29 +318,17 @@ deploy_container() {
     # Создаем директорию для базы данных на хосте, чтобы Docker не создал ее от root
     mkdir -p "$(pwd)/data"
 
-    # Проверка наличия директории certs
-    if [ -d "./certs" ]; then
-        # Запуск с webhook (с сертификатами)
-        docker run -d \
-            --name $CONTAINER_NAME \
-            --restart unless-stopped \
-            -p $PORT \
-            -v "$(pwd)/certs:/app/certs:ro" \
-            -v "$(pwd)/.env:/app/.env:ro" \
-            -v "$(pwd)/data:/app/data" \
-            $IMAGE_NAME
-        echo -e "${GREEN}✓ Контейнер запущен в режиме webhook${NC}"
-    else
-        # Запуск без webhook (polling mode)
-        docker run -d \
-            --name $CONTAINER_NAME \
-            --restart unless-stopped \
-            -v "$(pwd)/.env:/app/.env:ro" \
-            -v "$(pwd)/data:/app/data" \
-            $IMAGE_NAME
-        echo -e "${GREEN}✓ Контейнер запущен в режиме polling${NC}"
-        echo -e "${GRAY}  (директория certs не найдена)${NC}"
-    fi
+    # Запуск бота. Порт $PORT (127.0.0.1:8443:8443) ограничивает доступ только локальным хостом.
+    # SSL теперь терминируется на Nginx, поэтому сертификаты внутрь контейнера не пробрасываем.
+    docker run -d \
+        --name $CONTAINER_NAME \
+        --restart unless-stopped \
+        -p $PORT \
+        -v "$(pwd)/.env:/app/.env:ro" \
+        -v "$(pwd)/data:/app/data" \
+        $IMAGE_NAME
+
+    echo -e "${GREEN}✓ Контейнер запущен${NC}"
 
     # Показ логов
     echo ""
