@@ -28,6 +28,7 @@ from .config import (
     LOG_LEVEL,
     SCHEDULER_TIMEZONE,
     TOKEN,
+    TRUST_PROXY,
     WEBHOOK_HOST,
     WEBHOOK_PATH,
     WEBHOOK_PORT,
@@ -315,10 +316,15 @@ def run_webhook() -> None:
         handler: Handler,
     ) -> StreamResponse:
         """Middleware для проверки безопасности входящих webhook запросов."""
-        # Получаем реальный IP (учитываем прокси)
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            client_ip = forwarded_for.split(",")[0].strip()
+        # Получаем реальный IP
+        # Если TRUST_PROXY=True, доверяем заголовку X-Forwarded-For (от reverse proxy)
+        # Если TRUST_PROXY=False, используем только прямой IP подключения
+        if TRUST_PROXY:
+            forwarded_for = request.headers.get("X-Forwarded-For")
+            if forwarded_for:
+                client_ip = forwarded_for.split(",")[0].strip()
+            else:
+                client_ip = request.remote if request.remote else "unknown"
         else:
             client_ip = request.remote if request.remote else "unknown"
 
@@ -350,6 +356,7 @@ def run_webhook() -> None:
     webhook_handler.register(app, path=effective_webhook_path)
 
     logging.info(f"🔐 Webhook path: {effective_webhook_path}")
+    logging.info(f"🛡️ Trust Proxy: {'ENABLED' if TRUST_PROXY else 'DISABLED'}")
     if WEBHOOK_SECRET:
         logging.info("🔐 Webhook secret token verification: ENABLED")
     else:

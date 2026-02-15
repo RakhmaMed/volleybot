@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     webhook_path: str = Field(default="/webhook", validation_alias="WEBHOOK_PATH")
     webhook_secret: str = Field(default="", validation_alias="WEBHOOK_SECRET")
     webhook_port: int = Field(default=8443, validation_alias="WEBHOOK_PORT")
+    trust_proxy: bool = Field(default=False, validation_alias="TRUST_PROXY")
 
     # SSL сертификаты
     ssl_cert_path: str = Field(
@@ -127,6 +128,7 @@ LOG_LEVEL: str = settings.log_level
 WEBHOOK_HOST: str = settings.webhook_host
 WEBHOOK_PATH: str = settings.webhook_path
 WEBHOOK_PORT: int = settings.webhook_port
+TRUST_PROXY: bool = settings.trust_proxy
 WEBHOOK_SSL_CERT: str = settings.ssl_cert_path
 WEBHOOK_SSL_PRIV: str = settings.ssl_key_path
 

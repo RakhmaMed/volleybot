@@ -14,7 +14,7 @@ NC='\033[0m' # No Color
 
 CONTAINER_NAME="volleybot"
 IMAGE_NAME="volleybot:latest"
-PORT="8443:8443"
+PORT="127.0.0.1:8443:8443"
 
 # Подбираем совместимый Python (<=3.13), чтобы зависимости имели готовые колёса
 find_compatible_python() {
