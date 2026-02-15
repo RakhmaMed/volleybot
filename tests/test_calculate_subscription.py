@@ -1,6 +1,5 @@
 """Тесты для бюджетного расчёта абонемента (calculate_subscription)."""
 
-import pytest
 from rich import print
 
 from src.services.poll_service import (
@@ -13,7 +12,6 @@ from src.services.poll_service import (
     SAFETY_K,
     SAVINGS_BUFFER,
     SINGLE_GAME_PRICE,
-    TARGET_GROWTH,
     calculate_subscription,
 )
 from src.types import PollTemplate
@@ -51,7 +49,10 @@ class TestEmptyInputs:
         assert result.hall_breakdown == []
         assert result.subscriber_charges == []
         assert result.price_per_hall == DEFAULT_SUB_PRICE
-        assert result.combo_price == round(DEFAULT_SUB_PRICE * COMBO_DISCOUNT_COEFF / 10) * 10
+        assert (
+            result.combo_price
+            == round(DEFAULT_SUB_PRICE * COMBO_DISCOUNT_COEFF / 10) * 10
+        )
 
     def test_no_votes(self):
         """Есть платные опросы, но никто не голосовал."""
@@ -193,7 +194,9 @@ class TestPriceRange:
         }
         result = calculate_subscription(polls, votes)
 
-        paid_halls = [h for h in result.hall_breakdown if h.monthly_cost > 0 and h.num_subs > 0]
+        paid_halls = [
+            h for h in result.hall_breakdown if h.monthly_cost > 0 and h.num_subs > 0
+        ]
         prices = {h.per_person for h in paid_halls}
         assert len(prices) == 1  # все цены одинаковые
 
@@ -312,7 +315,9 @@ class TestFundBalance:
         """Мало денег в казне → прирост TARGET_GROWTH → цена выше."""
         polls, votes = self._two_halls_with_votes()
         result_low = calculate_subscription(polls, votes, fund_balance=0)
-        result_high = calculate_subscription(polls, votes, fund_balance=SAVINGS_BUFFER * 2)
+        result_high = calculate_subscription(
+            polls, votes, fund_balance=SAVINGS_BUFFER * 2
+        )
 
         assert result_low.price_per_hall >= result_high.price_per_hall
 
@@ -328,9 +333,7 @@ class TestFundBalance:
     def test_excess_savings_negative_adjustment(self):
         """Казна >= 1.5 * SAVINGS_BUFFER → adjustment = -1000 → цена ещё ниже."""
         polls, votes = self._two_halls_with_votes()
-        result_full = calculate_subscription(
-            polls, votes, fund_balance=SAVINGS_BUFFER
-        )
+        result_full = calculate_subscription(polls, votes, fund_balance=SAVINGS_BUFFER)
         result_excess = calculate_subscription(
             polls, votes, fund_balance=int(SAVINGS_BUFFER * 1.5)
         )
@@ -429,7 +432,9 @@ class TestProjectedSavings:
         result = calculate_subscription(polls, votes, fund_balance=fund)
 
         total_sub_income = sum(c.total for c in result.subscriber_charges)
-        total_rent = sum(h.monthly_cost for h in result.hall_breakdown if h.monthly_cost > 0)
+        total_rent = sum(
+            h.monthly_cost for h in result.hall_breakdown if h.monthly_cost > 0
+        )
         expected = fund + total_sub_income + result.expected_singles_income - total_rent
 
         assert result.projected_savings == expected
@@ -448,7 +453,11 @@ class TestProjectedSavings:
 
         num_halls = 2
         expected = round(
-            AVG_SINGLES_PER_GAME * SINGLE_GAME_PRICE * GAMES_PER_MONTH * num_halls * SAFETY_K
+            AVG_SINGLES_PER_GAME
+            * SINGLE_GAME_PRICE
+            * GAMES_PER_MONTH
+            * num_halls
+            * SAFETY_K
         )
         assert result.expected_singles_income == expected
 
@@ -584,9 +593,10 @@ class TestRealWorldScenario:
         result = calculate_subscription(polls, votes, fund_balance=0)
 
         assert MIN_SUB_PRICE <= result.price_per_hall <= MAX_SUB_PRICE
-        assert result.combo_price == round(
-            result.price_per_hall * COMBO_DISCOUNT_COEFF / 10
-        ) * 10
+        assert (
+            result.combo_price
+            == round(result.price_per_hall * COMBO_DISCOUNT_COEFF / 10) * 10
+        )
         assert len(result.subscriber_charges) == 17
 
     def test_with_free_wednesday(self):

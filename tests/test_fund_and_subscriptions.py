@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.types import (
-    CallbackQuery,
     Chat,
     InlineKeyboardMarkup,
     Message,
@@ -27,7 +26,6 @@ from src.db import (
 )
 from src.handlers import register_handlers
 from src.services import BotStateService, PollService
-
 
 # ── DB-level fund tests ─────────────────────────────────────────────────────
 
@@ -75,23 +73,27 @@ class TestHallPayments:
     """Тесты для оплаты залов."""
 
     def _create_paid_template(self, name: str = "Пятница", monthly_cost: int = 6000):
-        save_poll_template({
-            "name": name,
-            "message": f"Игра {name}",
-            "cost": 150,
-            "monthly_cost": monthly_cost,
-        })
+        save_poll_template(
+            {
+                "name": name,
+                "message": f"Игра {name}",
+                "cost": 150,
+                "monthly_cost": monthly_cost,
+            }
+        )
 
     def test_get_unpaid_halls_returns_paid_only(self, temp_db):
         """get_unpaid_halls возвращает только залы с monthly_cost > 0."""
         init_db()
         self._create_paid_template("Пятница", monthly_cost=6000)
-        save_poll_template({
-            "name": "Среда",
-            "message": "Бесплатная игра",
-            "cost": 0,
-            "monthly_cost": 0,
-        })
+        save_poll_template(
+            {
+                "name": "Среда",
+                "message": "Бесплатная игра",
+                "cost": 0,
+                "monthly_cost": 0,
+            }
+        )
 
         unpaid = get_unpaid_halls("2026-02")
         assert len(unpaid) == 1
@@ -152,10 +154,12 @@ class TestMonthlyCost:
     def test_monthly_cost_default_zero(self, temp_db):
         """monthly_cost по умолчанию равен 0."""
         init_db()
-        save_poll_template({
-            "name": "Test",
-            "message": "Test",
-        })
+        save_poll_template(
+            {
+                "name": "Test",
+                "message": "Test",
+            }
+        )
         with _connect() as conn:
             conn.row_factory = __import__("sqlite3").Row
             row = conn.execute(
@@ -166,11 +170,13 @@ class TestMonthlyCost:
     def test_monthly_cost_saved(self, temp_db):
         """monthly_cost сохраняется корректно."""
         init_db()
-        save_poll_template({
-            "name": "Пятница",
-            "message": "Игра",
-            "monthly_cost": 6000,
-        })
+        save_poll_template(
+            {
+                "name": "Пятница",
+                "message": "Игра",
+                "monthly_cost": 6000,
+            }
+        )
         with _connect() as conn:
             conn.row_factory = __import__("sqlite3").Row
             row = conn.execute(
@@ -260,11 +266,13 @@ class TestPayFundTracking:
             "balance": 500,
         }
 
-        dp.workflow_data.update({
-            "admin_service": admin_service,
-            "bot_state_service": MagicMock(spec=BotStateService),
-            "poll_service": MagicMock(spec=PollService),
-        })
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
 
         register_handlers(dp, bot)
 
@@ -323,11 +331,13 @@ class TestPayFundTracking:
             "balance": 500,
         }
 
-        dp.workflow_data.update({
-            "admin_service": admin_service,
-            "bot_state_service": MagicMock(spec=BotStateService),
-            "poll_service": MagicMock(spec=PollService),
-        })
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
 
         register_handlers(dp, bot)
 
@@ -389,11 +399,13 @@ class TestRestoreCommand:
             "balance": 0,
         }
 
-        dp.workflow_data.update({
-            "admin_service": admin_service,
-            "bot_state_service": MagicMock(spec=BotStateService),
-            "poll_service": MagicMock(spec=PollService),
-        })
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
 
         register_handlers(dp, bot)
 
@@ -449,11 +461,13 @@ class TestRestoreCommand:
             "balance": 150,
         }
 
-        dp.workflow_data.update({
-            "admin_service": admin_service,
-            "bot_state_service": MagicMock(spec=BotStateService),
-            "poll_service": MagicMock(spec=PollService),
-        })
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
 
         register_handlers(dp, bot)
 
@@ -507,11 +521,13 @@ class TestHallPaymentHandler:
             {"name": "Понедельник", "place": "Зал №2", "monthly_cost": 4000},
         ]
 
-        dp.workflow_data.update({
-            "admin_service": admin_service,
-            "bot_state_service": MagicMock(spec=BotStateService),
-            "poll_service": MagicMock(spec=PollService),
-        })
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
 
         register_handlers(dp, bot)
 
@@ -533,6 +549,7 @@ class TestHallPaymentHandler:
         buttons = method.reply_markup.inline_keyboard
         assert len(buttons) == 2
         assert "6000" in buttons[0][0].text
+        assert buttons[0][0].callback_data is not None
         assert "hall_pay:" in buttons[0][0].callback_data
 
     @patch("src.handlers.get_unpaid_halls", return_value=[])
@@ -546,11 +563,13 @@ class TestHallPaymentHandler:
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
 
-        dp.workflow_data.update({
-            "admin_service": admin_service,
-            "bot_state_service": MagicMock(spec=BotStateService),
-            "poll_service": MagicMock(spec=PollService),
-        })
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
 
         register_handlers(dp, bot)
 
@@ -586,11 +605,13 @@ class TestHallPaymentHandler:
             {"name": "Пятница", "place": "Зал №1", "monthly_cost": 6000},
         ]
 
-        dp.workflow_data.update({
-            "admin_service": admin_service,
-            "bot_state_service": MagicMock(spec=BotStateService),
-            "poll_service": MagicMock(spec=PollService),
-        })
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
 
         register_handlers(dp, bot)
 
@@ -630,11 +651,13 @@ class TestBalanceFundDisplay:
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
 
-        dp.workflow_data.update({
-            "admin_service": admin_service,
-            "bot_state_service": MagicMock(spec=BotStateService),
-            "poll_service": MagicMock(spec=PollService),
-        })
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
 
         register_handlers(dp, bot)
 
@@ -714,12 +737,14 @@ class TestFullPaymentFlow:
         init_db()
 
         # Настройка
-        save_poll_template({
-            "name": "Пятница",
-            "message": "Игра",
-            "cost": 150,
-            "monthly_cost": 6000,
-        })
+        save_poll_template(
+            {
+                "name": "Пятница",
+                "message": "Игра",
+                "cost": 150,
+                "monthly_cost": 6000,
+            }
+        )
         user_id = 100
         ensure_player(user_id=user_id, name="casual", fullname="Casual Player")
 
@@ -728,6 +753,7 @@ class TestFullPaymentFlow:
         add_transaction(user_id, -150, "Зал: Пятница (07.02.2026)", "Пятница")
 
         player = get_player_balance(user_id)
+        assert player is not None
         assert player["balance"] == -150
         assert get_fund_balance() == 0  # Касса не меняется
 
@@ -737,6 +763,7 @@ class TestFullPaymentFlow:
         add_transaction(user_id, 150, "Оплата (admin: @admin)")
 
         player = get_player_balance(user_id)
+        assert player is not None
         assert player["balance"] == 0
         assert get_fund_balance() == 150  # Касса увеличилась
 
@@ -764,18 +791,21 @@ class TestFullPaymentFlow:
         # НЕ вызываем update_fund_balance!
 
         player = get_player_balance(user_id)
+        assert player is not None
         assert player["balance"] == 0
         assert get_fund_balance() == 0  # Касса не изменилась
 
     def test_subscription_then_hall_payment(self, temp_db):
         """Абонемент списывается с баланса, затем зал оплачивается из кассы."""
         init_db()
-        save_poll_template({
-            "name": "Пятница",
-            "message": "Игра",
-            "cost": 150,
-            "monthly_cost": 6000,
-        })
+        save_poll_template(
+            {
+                "name": "Пятница",
+                "message": "Игра",
+                "cost": 150,
+                "monthly_cost": 6000,
+            }
+        )
 
         # Касса накопилась от предыдущих оплат
         update_fund_balance(2000)

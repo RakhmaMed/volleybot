@@ -550,6 +550,8 @@ def get_unpaid_halls(month: str) -> list[PollTemplate]:
     Returns:
         Список шаблонов опросов с monthly_cost > 0, не имеющих записи в hall_payments
     """
+    from typing import cast
+
     try:
         init_db()
         with _connect() as conn:
@@ -567,7 +569,7 @@ def get_unpaid_halls(month: str) -> list[PollTemplate]:
             )
             templates: list[PollTemplate] = []
             for row in cursor.fetchall():
-                template = dict(row)
+                template = cast(PollTemplate, dict(row))
                 sub_cursor = conn.execute(
                     "SELECT user_id FROM poll_subscriptions WHERE poll_name = ?",
                     (template["name"],),
@@ -608,12 +610,8 @@ def record_hall_payment(poll_name: str, month: str, amount: int) -> bool:
         )
         return True
     except sqlite3.IntegrityError:
-        logging.warning(
-            f"⚠️ Зал '{poll_name}' за {month} уже оплачен (дубликат)"
-        )
+        logging.warning(f"⚠️ Зал '{poll_name}' за {month} уже оплачен (дубликат)")
         return False
     except sqlite3.Error:
-        logging.exception(
-            f"❌ Ошибка при записи оплаты зала '{poll_name}' за {month}"
-        )
+        logging.exception(f"❌ Ошибка при записи оплаты зала '{poll_name}' за {month}")
         return False
