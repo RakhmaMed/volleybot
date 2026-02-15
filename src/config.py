@@ -136,15 +136,12 @@ WEBHOOK_SSL_PRIV: str = settings.ssl_key_path
 POLLS_SCHEDULE: list[PollSchedule] = []
 
 # Формируем полный URL webhook
+# При использовании reverse proxy (Nginx), WEBHOOK_HOST должен быть публичным URL (напр. https://domain.com)
+# Мы не добавляем WEBHOOK_PORT автоматически, так как внешний порт (443) обычно отличается от внутреннего.
 WEBHOOK_URL: str = ""
 if WEBHOOK_HOST:
-    from urllib.parse import urlparse
-
-    parsed = urlparse(WEBHOOK_HOST)
-    if not parsed.port and WEBHOOK_PORT != 443:
-        host_with_port = f"{parsed.scheme}://{parsed.netloc}:{WEBHOOK_PORT}"
-        WEBHOOK_URL = f"{host_with_port}{WEBHOOK_PATH}"
-    else:
-        WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+    # Просто соединяем хост и путь. Если нужен порт в URL, его следует указать в WEBHOOK_HOST.
+    # Это позволяет избежать проблем при работе за прокси.
+    WEBHOOK_URL = f"{WEBHOOK_HOST.rstrip('/')}{WEBHOOK_PATH}"
 
 logging.info("✅ Конфигурация успешно загружена из .env")
