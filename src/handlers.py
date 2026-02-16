@@ -1435,6 +1435,18 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         user = message.from_user
         username = f"@{user.username}" if user and user.username else "unknown"
         user_id = user.id if user else "unknown"
+
+        # Если в бота прислали видео, сохраняем его file_id для /losiento
+        if message.video:
+            file_id = message.video.file_id
+            save_state("video_losiento_file_id", file_id)
+            logging.info(
+                f"✅ Видео Lo Siento обновлено пользователем {username}. Новый file_id: {file_id}"
+            )
+            await message.reply(
+                f"✅ Видео сохранено! Новый file_id: `{file_id}`", parse_mode="Markdown"
+            )
+
         logging.debug(
             "📨 Сообщение: id=%s, chat_id=%s, от=%s (ID: %s), тип=%s, текст=%r",
             message.message_id,
