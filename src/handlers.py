@@ -149,21 +149,32 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
     @router.message(Command("losiento"))
     async def losiento_handler(message: Message) -> None:
-        """Отправляет видео 'lo siento'."""
+        """Отправляет видео 'lo siento' по очереди из списка."""
         try:
-            # Пытаемся получить file_id из базы, чтобы не загружать файл повторно
-            file_id = load_state("video_losiento_file_id")
+            # Получаем список видео и текущий индекс
+            video_list = load_state("video_losiento_list", [])
+            index = load_state("video_losiento_index", 0)
 
-            if file_id:
-                await message.answer_video(file_id)
+            if video_list:
+                # Если индекс вышел за пределы, сбрасываем
+                if index >= len(video_list):
+                    index = 0
+
+                await message.answer_video(video_list[index])
+                save_state("video_losiento_index", index + 1)
             else:
+                # Если списка нет, пробуем загрузить локальный файл
                 video_path = Path(__file__).parent.parent / "data" / "losiento.mp4"
-                video = FSInputFile(str(video_path))
-                # Увеличиваем таймаут для загрузки тяжелого видео
-                sent_message = await message.answer_video(video, request_timeout=120)
-                # Сохраняем file_id для последующего использования
-                if sent_message.video:
-                    save_state("video_losiento_file_id", sent_message.video.file_id)
+                if video_path.exists():
+                    video = FSInputFile(str(video_path))
+                    sent_message = await message.answer_video(
+                        video, request_timeout=120
+                    )
+                    if sent_message.video:
+                        save_state("video_losiento_list", [sent_message.video.file_id])
+                        save_state("video_losiento_index", 1)
+                else:
+                    await message.answer("😔 Видео пока нет. Пришли мне видео в личку!")
         except Exception:
             logging.exception("❌ Ошибка при отправке видео losiento")
 
@@ -1436,17 +1447,22 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         username = f"@{user.username}" if user and user.username else "unknown"
         user_id = user.id if user else "unknown"
 
-        # Если в бота прислали видео, сохраняем его file_id для /losiento
+        # Если в бота прислали видео, сохраняем его в список для /losiento
         if message.video:
             file_id = message.video.file_id
-            save_state("video_losiento_file_id", file_id)
-            logging.info(
-                f"✅ Видео Lo Siento обновлено пользователем {username}. Новый file_id: {file_id}"
-            )
-            await message.reply(
-                f"✅ Видео сохранено! Новый file_id: <code>{file_id}</code>",
-                parse_mode="HTML",
-            )
+            video_list = load_state("video_losiento_list", [])
+
+            if file_id not in video_list:
+                video_list.append(file_id)
+                save_state("video_losiento_list", video_list)
+                logging.info(
+                    f"✅ Добавлено новое видео от {username}. Всего в списке: {len(video_list)}"
+                )
+                await message.reply(
+                    f"✅ Видео добавлено в очередь! Всего видео: {len(video_list)}"
+                )
+            else:
+                await message.reply("⚠️ Это видео уже есть в списке.")
 
         logging.debug(
             "📨 Сообщение: id=%s, chat_id=%s, от=%s (ID: %s), тип=%s, текст=%r",
