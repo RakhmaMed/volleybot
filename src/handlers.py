@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramNetworkError
@@ -16,6 +17,7 @@ from aiogram.types import (
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     CallbackQuery,
+    FSInputFile,
     InaccessibleMessage,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -38,7 +40,9 @@ from .db import (
     get_players_with_balance,
     get_poll_templates,
     get_unpaid_halls,
+    load_state,
     record_hall_payment,
+    save_state,
     update_fund_balance,
     update_player_balance,
 )
@@ -76,11 +80,13 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="help", description="Показать справку по командам"),
         BotCommand(command="schedule", description="Показать расписание опросов"),
         BotCommand(command="balance", description="Показать мой баланс"),
+        BotCommand(command="losiento", description="Lo siento"),
     ]
 
     # Команды для администраторов (включая пользовательские)
     admin_commands = [
         BotCommand(command="help", description="Показать справку по командам"),
+        BotCommand(command="losiento", description="Lo siento"),
         BotCommand(command="schedule", description="Показать расписание опросов"),
         BotCommand(command="balance", description="Показать долги/балансы и кассу"),
         BotCommand(command="subs", description="Абонементы по дням"),
@@ -140,6 +146,26 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
     # Создаём роутер для обработчиков
     router: Router = Router()
+
+    @router.message(Command("losiento"))
+    async def losiento_handler(message: Message) -> None:
+        """Отправляет видео 'lo siento'."""
+        try:
+            # Пытаемся получить file_id из базы, чтобы не загружать файл повторно
+            file_id = load_state("video_losiento_file_id")
+
+            if file_id:
+                await message.answer_video(file_id)
+            else:
+                video_path = Path(__file__).parent.parent / "data" / "losiento.mp4"
+                video = FSInputFile(str(video_path))
+                # Увеличиваем таймаут для загрузки тяжелого видео
+                sent_message = await message.answer_video(video, request_timeout=120)
+                # Сохраняем file_id для последующего использования
+                if sent_message.video:
+                    save_state("video_losiento_file_id", sent_message.video.file_id)
+        except Exception:
+            logging.exception("❌ Ошибка при отправке видео losiento")
 
     @router.message(Command("start"))
     async def start_bot_handler(message: Message) -> None:
