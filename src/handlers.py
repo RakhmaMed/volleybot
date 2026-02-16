@@ -1444,7 +1444,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 f"✅ Видео Lo Siento обновлено пользователем {username}. Новый file_id: {file_id}"
             )
             await message.reply(
-                f"✅ Видео сохранено! Новый file_id: `{file_id}`", parse_mode="Markdown"
+                f"✅ Видео сохранено! Новый file_id: <code>{file_id}</code>",
+                parse_mode="HTML",
             )
 
         logging.debug(
