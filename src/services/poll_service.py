@@ -11,6 +11,7 @@ from typing import Any
 from aiogram import Bot
 from aiogram.exceptions import (
     TelegramAPIError,
+    TelegramBadRequest,
     TelegramMigrateToChat,
     TelegramNetworkError,
 )
@@ -39,16 +40,16 @@ from ..types import HallBreakdown, PollTemplate, SubscriberCharge, SubscriptionR
 from ..utils import escape_html, retry_async, save_error_dump
 
 # ── Константы бюджетного расчёта абонемента ──────────────────────────────────
-AVG_SINGLES_PER_GAME = 7       # Среднее кол-во разовых игроков за игру
-SINGLE_GAME_PRICE = 150        # Цена разового входа (руб.)
-GAMES_PER_MONTH = 4            # Игр в месяц на один зал
-SAFETY_K = 0.7                 # Коэффициент надёжности (риск неявки)
-TARGET_GROWTH = 1000           # Желаемый прирост казны в месяц (руб.)
-SAVINGS_BUFFER = 6000          # Целевая «подушка» казны (руб.)
-COMBO_DISCOUNT_COEFF = 1.7     # Комбо = 1.7× одного зала (скидка ~15%)
-MIN_SUB_PRICE = 400            # Минимальная цена абонемента за 1 зал
-MAX_SUB_PRICE = 500            # Максимальная цена абонемента за 1 зал
-DEFAULT_SUB_PRICE = 450        # Цена по умолчанию, если нет подписчиков
+AVG_SINGLES_PER_GAME = 7  # Среднее кол-во разовых игроков за игру
+SINGLE_GAME_PRICE = 150  # Цена разового входа (руб.)
+GAMES_PER_MONTH = 4  # Игр в месяц на один зал
+SAFETY_K = 0.7  # Коэффициент надёжности (риск неявки)
+TARGET_GROWTH = 1000  # Желаемый прирост казны в месяц (руб.)
+SAVINGS_BUFFER = 6000  # Целевая «подушка» казны (руб.)
+COMBO_DISCOUNT_COEFF = 1.7  # Комбо = 1.7× одного зала (скидка ~15%)
+MIN_SUB_PRICE = 400  # Минимальная цена абонемента за 1 зал
+MAX_SUB_PRICE = 500  # Максимальная цена абонемента за 1 зал
+DEFAULT_SUB_PRICE = 450  # Цена по умолчанию, если нет подписчиков
 
 
 def calculate_subscription(
@@ -95,9 +96,7 @@ def calculate_subscription(
         )
 
     num_halls = len(paid_hall_names)
-    total_rent = sum(
-        h.monthly_cost for h in hall_breakdown if h.monthly_cost > 0
-    )
+    total_rent = sum(h.monthly_cost for h in hall_breakdown if h.monthly_cost > 0)
 
     # --- 2. Классифицируем подписчиков: single-hall vs combo ---
     user_halls: dict[int, list[str]] = {}
@@ -110,7 +109,11 @@ def calculate_subscription(
 
     # --- 3. Прогноз дохода с разовых игроков ---
     expected_singles_income = round(
-        AVG_SINGLES_PER_GAME * SINGLE_GAME_PRICE * GAMES_PER_MONTH * num_halls * SAFETY_K
+        AVG_SINGLES_PER_GAME
+        * SINGLE_GAME_PRICE
+        * GAMES_PER_MONTH
+        * num_halls
+        * SAFETY_K
     )
 
     # --- 4. Корректировка целевой суммы по состоянию казны ---
@@ -159,7 +162,9 @@ def calculate_subscription(
 
     # --- 10. Финансовый прогноз ---
     total_sub_income = sum(c.total for c in subscriber_charges)
-    projected_savings = fund_balance + total_sub_income + expected_singles_income - total_rent
+    projected_savings = (
+        fund_balance + total_sub_income + expected_singles_income - total_rent
+    )
 
     return SubscriptionResult(
         hall_breakdown=hall_breakdown,
@@ -682,7 +687,17 @@ class PollService:
                 (TelegramNetworkError, asyncio.TimeoutError, OSError), tries=3, delay=2
             )
             async def stop_poll_with_retry():
-                await bot.stop_poll(chat_id=data.chat_id, message_id=data.poll_msg_id)
+                try:
+                    await bot.stop_poll(
+                        chat_id=data.chat_id, message_id=data.poll_msg_id
+                    )
+                except TelegramBadRequest as e:
+                    if "message with poll to stop not found" in e.message:
+                        logging.warning(
+                            f"⚠️ Опрос '{poll_name}' уже удален из Telegram."
+                        )
+                        return
+                    raise
 
             await stop_poll_with_retry()
             logging.info(f"✅ Опрос '{poll_name}' (poll_id={poll_id}) остановлен")
@@ -880,9 +895,7 @@ class PollService:
         # Касса не меняется при закрытии опроса — уменьшается только при оплате залов
 
         # Применяем списания к БД
-        charged_subscribers = self._apply_subscription_charges(
-            result, current_month
-        )
+        charged_subscribers = self._apply_subscription_charges(result, current_month)
 
         # --- Формируем и отправляем итоговое сообщение ---
         summary_text = self._format_hall_summary(result)
@@ -902,12 +915,24 @@ class PollService:
                 delay=2,
             )
             async def send_final_with_retry():
-                return await bot.send_message(
-                    chat_id=data.chat_id,
-                    reply_to_message_id=data.poll_msg_id,
-                    text=final_text,
-                    parse_mode="HTML",
-                )
+                try:
+                    return await bot.send_message(
+                        chat_id=data.chat_id,
+                        reply_to_message_id=data.poll_msg_id,
+                        text=final_text,
+                        parse_mode="HTML",
+                    )
+                except TelegramBadRequest as e:
+                    if "message to be replied not found" in e.message:
+                        logging.warning(
+                            "⚠️ Сообщение для ответа не найдено, отправляем новым сообщением"
+                        )
+                        return await bot.send_message(
+                            chat_id=data.chat_id,
+                            text=final_text,
+                            parse_mode="HTML",
+                        )
+                    raise
 
             await send_final_with_retry()
             logging.info(
@@ -991,14 +1016,16 @@ class PollService:
             else:
                 player_name = f"ID: {charge.user_id}"
 
-            charged.append({
-                "user_id": charge.user_id,
-                "name": player_name,
-                "halls": charge.halls,
-                "amount": charge.total,
-                "old_balance": old_balance,
-                "new_balance": new_balance,
-            })
+            charged.append(
+                {
+                    "user_id": charge.user_id,
+                    "name": player_name,
+                    "halls": charge.halls,
+                    "amount": charge.total,
+                    "old_balance": old_balance,
+                    "new_balance": new_balance,
+                }
+            )
         return charged
 
     @staticmethod
@@ -1017,12 +1044,8 @@ class PollService:
                     f"<b>нет подписчиков</b>"
                 )
         if result.price_per_hall > 0:
-            lines.append(
-                f"\n💰 Абонемент на 1 зал: <b>{result.price_per_hall} ₽</b>"
-            )
-            lines.append(
-                f"💰 Комбо (2 зала): <b>{result.combo_price} ₽</b>"
-            )
+            lines.append(f"\n💰 Абонемент на 1 зал: <b>{result.price_per_hall} ₽</b>")
+            lines.append(f"💰 Комбо (2 зала): <b>{result.combo_price} ₽</b>")
         if result.expected_singles_income > 0:
             lines.append(
                 f"📈 Ожидаемый доход с разовых: {result.expected_singles_income} ₽"
@@ -1038,22 +1061,21 @@ class PollService:
         result: SubscriptionResult | None = None,
     ) -> str:
         """Форматирует итоговое сообщение для группового чата."""
+        total_due = sum(max(int(sub["amount"]) - int(sub["old_balance"]), 0) for sub in charged_subscribers)
         text = (
             "📊 <b>Голосование за абонемент завершено</b>\n\n"
             f"Проголосовали: {total_voters}\n\n"
             f"<b>Расчёт абонемента:</b>\n{summary_text}\n"
         )
         if charged_subscribers:
-            text += "\n<b>Списано с подписчиков:</b>\n"
+            text += "\n<b>К оплате с учётом текущего баланса:</b>\n"
             for i, sub in enumerate(charged_subscribers, 1):
-                balance_icon = "🔴" if sub["new_balance"] < 0 else "🟢"
+                amount_due = max(int(sub["amount"]) - int(sub["old_balance"]), 0)
                 text += (
-                    f"{i}. {escape_html(sub['name'])} — {sub['amount']} ₽ "
-                    f"{balance_icon} (баланс: {sub['new_balance']} ₽)\n"
+                    f"{i}. {escape_html(sub['name'])} - {amount_due} ₽\n"
                 )
         text += f"\n🏦 Касса: <b>{fund_balance} ₽</b>"
-        if result and result.projected_savings != 0:
-            text += f"\n📊 Прогноз казны на конец месяца: <b>{result.projected_savings} ₽</b>"
+        text += f"\n💸 Ожидаемая сумма к оплате: <b>{total_due} ₽</b>"
         return text
 
     @staticmethod
@@ -1065,23 +1087,23 @@ class PollService:
         result: SubscriptionResult | None = None,
     ) -> str:
         """Форматирует подробный отчёт для администратора."""
+        total_due = sum(max(int(sub["amount"]) - int(sub["old_balance"]), 0) for sub in charged_subscribers)
         text = (
             "📊 <b>Отчёт по абонементам</b>\n\n"
             f"📅 Месяц: {month}\n\n"
             f"<b>Расчёт:</b>\n{summary_text}\n\n"
         )
-        text += f"<b>Списания ({len(charged_subscribers)}):</b>\n"
+        text += f"<b>К оплате ({len(charged_subscribers)}):</b>\n"
         for i, sub in enumerate(charged_subscribers, 1):
             halls_str = ", ".join(sub["halls"])
-            balance_icon = "🔴" if sub["new_balance"] < 0 else "🟢"
+            amount_due = max(int(sub["amount"]) - int(sub["old_balance"]), 0)
             text += (
-                f"{i}. {escape_html(sub['name'])} — {sub['amount']} ₽ "
-                f"({escape_html(halls_str)}) "
-                f"{balance_icon} баланс: {sub['new_balance']} ₽\n"
+                f"{i}. {escape_html(sub['name'])} — к оплате {amount_due} ₽ "
+                f"(списание: {sub['amount']} ₽, было: {sub['old_balance']} ₽, "
+                f"станет: {sub['new_balance']} ₽, {escape_html(halls_str)})\n"
             )
         text += f"\n🏦 Касса: <b>{fund_balance} ₽</b>"
-        if result and result.projected_savings != 0:
-            text += f"\n📊 Прогноз казны на конец месяца: <b>{result.projected_savings} ₽</b>"
+        text += f"\n💸 Ожидаемая сумма к оплате: <b>{total_due} ₽</b>"
         return text
 
     async def _process_payment_deduction(
