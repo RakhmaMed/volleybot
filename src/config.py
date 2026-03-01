@@ -8,25 +8,6 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class PollSchedule(BaseSettings):
-    """
-    Модель конфигурации одного опроса.
-    Примечание: Теперь используется только для миграции или типизации,
-    так как основные данные опросов перенесены в БД.
-    """
-
-    name: str
-    place: str = ""
-    message: str
-    open_day: str = "*"
-    open_hour_utc: int = 0
-    open_minute_utc: int = 0
-    game_day: str = "*"
-    game_hour_utc: int = 0
-    game_minute_utc: int = 0
-    subs: list[int] = []
-
-
 class Settings(BaseSettings):
     """Настройки приложения, загружаемые из .env или переменных окружения."""
 
@@ -121,9 +102,6 @@ WEBHOOK_HOST: str = settings.webhook_host
 WEBHOOK_PATH: str = settings.webhook_path
 WEBHOOK_PORT: int = settings.webhook_port
 TRUST_PROXY: bool = settings.trust_proxy
-
-# Расписание опросов теперь в БД, оставляем пустой список для совместимости миграции
-POLLS_SCHEDULE: list[PollSchedule] = []
 
 # Формируем полный URL webhook
 # При использовании reverse proxy (Nginx), WEBHOOK_HOST должен быть публичным URL (напр. https://domain.com)

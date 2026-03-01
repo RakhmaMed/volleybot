@@ -7,7 +7,6 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.types import Chat, Message, PollAnswer, Update
 
-from src.config import PollSchedule
 from src.handlers import register_handlers
 from src.services import BotStateService, PollService
 
@@ -161,17 +160,19 @@ class TestScheduleCommand:
         register_handlers(dp, bot)
 
         polls = [
-            PollSchedule(
-                name="Test Poll",
-                place="Test Place",
-                message="Test Message",
-                open_day="mon",
-                open_hour_utc=10,
-                open_minute_utc=0,
-                game_day="tue",
-                game_hour_utc=15,  # 18:00 MSK (UTC+3)
-                game_minute_utc=30,
-            )
+            {
+                "id": 1,
+                "name": "Test Poll",
+                "place": "Test Place",
+                "message": "Test Message",
+                "open_day": "mon",
+                "open_hour_utc": 10,
+                "open_minute_utc": 0,
+                "game_day": "tue",
+                "game_hour_utc": 15,  # 18:30 MSK (UTC+3)
+                "game_minute_utc": 30,
+                "subs": [],
+            }
         ]
 
         chat = Chat(id=123, type="private")
@@ -184,7 +185,7 @@ class TestScheduleCommand:
         )
         update = Update(update_id=1, message=message)
 
-        with patch("src.handlers.POLLS_SCHEDULE", polls):
+        with patch("src.handlers.get_poll_templates", return_value=polls):
             await dp.feed_update(bot, update)
 
         assert bot.called

@@ -25,7 +25,6 @@ from aiogram.types import (
     User,
 )
 
-from .config import POLLS_SCHEDULE
 from .db import (
     add_transaction,
     ensure_player,
@@ -356,7 +355,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 logging.warning("⚠️ Сетевая ошибка при отправке rate limit сообщения")
             return
 
-        if not POLLS_SCHEDULE:
+        poll_templates = get_poll_templates()
+        if not poll_templates:
             try:
                 await message.reply("📅 Расписание опросов пока не настроено.")
             except TelegramNetworkError:
@@ -377,14 +377,15 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         schedule_text = "📅 <b>Расписание игр</b> (время МСК)\n\n"
 
-        for poll in POLLS_SCHEDULE:
-            game_day = days_ru.get(poll.game_day, poll.game_day)
+        for poll in poll_templates:
+            game_day = days_ru.get(str(poll["game_day"]), str(poll["game_day"]))
 
             # Конвертация в МСК (UTC+3)
-            msk_hour = (poll.game_hour_utc + 3) % 24
-            msk_minute = poll.game_minute_utc
+            msk_hour = (int(poll["game_hour_utc"]) + 3) % 24
+            msk_minute = int(poll["game_minute_utc"])
 
-            place_info = f" ({poll.place})" if poll.place else ""
+            place = str(poll.get("place") or "")
+            place_info = f" ({place})" if place else ""
 
             schedule_text += f"{game_day} {msk_hour:02d}:{msk_minute:02d}{place_info}\n"
 

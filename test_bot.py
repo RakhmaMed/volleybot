@@ -34,6 +34,7 @@ def _seed_test_data() -> None:
     """Заполняет тестовую БД начальными данными."""
     from src.db import (
         ensure_player,
+        get_poll_templates,
         init_db,
         save_poll_template,
         update_fund_balance,
@@ -41,48 +42,6 @@ def _seed_test_data() -> None:
     )
 
     init_db()
-
-    # ── Опросы ───────────────────────────────────────────────────────────
-    save_poll_template({
-        "name": "Понедельник",
-        "place": "Зал №1 (тест)",
-        "message": "🧪 Понедельник — тестовый опрос",
-        "open_day": "*",
-        "open_hour_utc": 10,
-        "open_minute_utc": 0,
-        "game_day": "*",
-        "game_hour_utc": 18,
-        "game_minute_utc": 0,
-        "cost": 150,
-        "monthly_cost": 6000,
-    })
-    save_poll_template({
-        "name": "Среда",
-        "place": "Школа (бесплатно)",
-        "message": "🧪 Среда — бесплатный зал",
-        "open_day": "*",
-        "open_hour_utc": 10,
-        "open_minute_utc": 0,
-        "game_day": "*",
-        "game_hour_utc": 19,
-        "game_minute_utc": 0,
-        "cost": 0,
-        "monthly_cost": 0,
-    })
-    save_poll_template({
-        "name": "Пятница",
-        "place": "Зал №2 (тест)",
-        "message": "🧪 Пятница — тестовый опрос",
-        "open_day": "*",
-        "open_hour_utc": 10,
-        "open_minute_utc": 0,
-        "game_day": "*",
-        "game_hour_utc": 20,
-        "game_minute_utc": 0,
-        "cost": 150,
-        "monthly_cost": 4500,
-    })
-    logger.info("✅ Создано 3 тестовых опроса (Понедельник 6000₽, Среда бесплатно, Пятница 4500₽)")
 
     # ── Игроки ───────────────────────────────────────────────────────────
     test_players = [
@@ -100,9 +59,66 @@ def _seed_test_data() -> None:
     # Карина — баланс 0
     logger.info("   💰 Алиса: -300₽, Борис: -150₽, Карина: 0₽")
 
+    # ── Опросы ───────────────────────────────────────────────────────────
+    save_poll_template({
+        "name": "Понедельник",
+        "place": "Зал №1 (тест)",
+        "message": "🧪 Понедельник — тестовый опрос",
+        "open_day": "*",
+        "open_hour_utc": 10,
+        "open_minute_utc": 0,
+        "game_day": "*",
+        "game_hour_utc": 18,
+        "game_minute_utc": 0,
+        "cost": 150,
+        "monthly_cost": 6000,
+        "subs": [1001, 1003],
+    })
+    save_poll_template({
+        "name": "Среда",
+        "place": "Школа (бесплатно)",
+        "message": "🧪 Среда — бесплатный зал",
+        "open_day": "*",
+        "open_hour_utc": 10,
+        "open_minute_utc": 0,
+        "game_day": "*",
+        "game_hour_utc": 19,
+        "game_minute_utc": 0,
+        "cost": 0,
+        "monthly_cost": 0,
+        "subs": [],
+    })
+    save_poll_template({
+        "name": "Пятница",
+        "place": "Зал №2 (тест)",
+        "message": "🧪 Пятница — тестовый опрос",
+        "open_day": "*",
+        "open_hour_utc": 10,
+        "open_minute_utc": 0,
+        "game_day": "*",
+        "game_hour_utc": 20,
+        "game_minute_utc": 0,
+        "cost": 150,
+        "monthly_cost": 4500,
+        "subs": [1002, 1003],
+    })
+    logger.info("✅ Создано 3 тестовых опроса (Понедельник 6000₽, Среда бесплатно, Пятница 4500₽)")
+
     # ── Касса ────────────────────────────────────────────────────────────
     update_fund_balance(2500)
     logger.info("   🏦 Касса: 2500₽")
+
+    # ── Отладочная сводка по шаблонам ───────────────────────────────────
+    logger.info("   🧾 Шаблоны опросов в тестовой БД:")
+    for template in get_poll_templates():
+        logger.info(
+            "      id=%s | %s | cost=%s₽ | monthly_cost=%s₽ | subs=%s",
+            template["id"],
+            template["name"],
+            template.get("cost", 0),
+            template.get("monthly_cost", 0),
+            template.get("subs", []),
+        )
 
 
 async def main():
@@ -187,6 +203,7 @@ async def main():
         logger.info("     /schedule        — Расписание опросов")
         logger.info("     /subs            — Абонементы по дням")
         logger.info("     /player          — Список всех игроков")
+        logger.info("     /webhookinfo     — Проверить webhook/allowed_updates")
         logger.info("")
         logger.info("  💰 Финансы:")
         logger.info("     /pay Алиса 300   — Оплатить за Алису (касса +300)")
@@ -198,14 +215,16 @@ async def main():
         logger.info("     /close_monthly — Закрыть опрос и выполнить расчёт")
         logger.info("")
         logger.info("  🧪 Тестовые данные:")
-        logger.info("     Залы: Понедельник (6000₽), Среда (бесплатно), Пятница (4500₽)")
+        logger.info("     Залы: Понедельник (150₽ / 6000₽), Среда (бесплатно), Пятница (150₽ / 4500₽)")
         logger.info("     Игроки: Алиса (-300₽), Борис (-150₽), Карина (0₽)")
+        logger.info("     Подписки: Понедельник → Алиса, Карина; Пятница → Борис, Карина")
         logger.info("     Касса: 2500₽")
         logger.info("")
         logger.info("  💡 Советы:")
         logger.info("     — Добавьте бота в тестовую группу")
         logger.info("     — Дайте боту права администратора")
-        logger.info("     — Можно тестировать и в личке с ботом")
+        logger.info("     — /balance, /subs, /player и финансовые команды проверяйте из-под админа")
+        logger.info("     — /pay Оплата зала покажет inline-кнопки по внутренним poll_template_id")
         logger.info("     — Для остановки нажмите Ctrl+C")
         logger.info("")
         logger.info("=" * 65)
