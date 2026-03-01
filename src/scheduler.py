@@ -59,18 +59,15 @@ def get_monthly_subscription_poll_params() -> (
         )
         dt_moscow = dt_utc.astimezone(moscow_tz)
         time_moscow = dt_moscow.strftime("%H:%M")
-        if place:
-            options.append(f"{name} — {place} — {time_moscow} МСК")
-        else:
-            options.append(f"{name} — {time_moscow} МСК")
+        options.append(f"{name} — {time_moscow} МСК")
         option_poll_names.append(name)
 
-    options.append("смотреть результат")
+    options.append("Смотреть результат")
     option_poll_names.append(None)
 
     question = (
         "Абонемент на следующий месяц.\n"
-        "Выберите игры, по которым хотите подписку. Можно выбрать несколько вариантов."
+        "Выберите игры для подписки. Можно выбрать несколько вариантов."
     )
     return (question, options, option_poll_names)
 

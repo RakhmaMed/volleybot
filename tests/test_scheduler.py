@@ -264,6 +264,47 @@ class TestSetupScheduler:
 class TestMonthlySubscriptionScheduler:
     """Тесты фильтрации платных выключенных опросов."""
 
+    def test_monthly_params_use_updated_question_and_option_labels(self):
+        """Месячный опрос использует новый текст вопроса и короткие подписи игр."""
+        test_polls = [
+            {
+                "name": "Понедельник в Академии",
+                "place": "Академия",
+                "game_hour_utc": 15,
+                "game_minute_utc": 30,
+                "cost": 100,
+                "enabled": 1,
+            },
+            {
+                "name": "Пятница в Академии",
+                "place": "Академия",
+                "game_hour_utc": 16,
+                "game_minute_utc": 0,
+                "cost": 200,
+                "enabled": 1,
+            },
+        ]
+
+        with patch("src.scheduler.get_poll_templates", return_value=test_polls):
+            params = get_monthly_subscription_poll_params()
+
+        assert params is not None
+        question, options, option_poll_names = params
+        assert question == (
+            "Абонемент на следующий месяц.\n"
+            "Выберите игры для подписки. Можно выбрать несколько вариантов."
+        )
+        assert options == [
+            "Понедельник в Академии — 18:30 МСК",
+            "Пятница в Академии — 19:00 МСК",
+            "Смотреть результат",
+        ]
+        assert option_poll_names == [
+            "Понедельник в Академии",
+            "Пятница в Академии",
+            None,
+        ]
+
     def test_monthly_params_include_only_enabled_paid_polls(self):
         """Параметры месячного опроса включают только enabled платные шаблоны."""
         test_polls = [
@@ -301,6 +342,26 @@ class TestMonthlySubscriptionScheduler:
         assert any("Enabled Paid" in option for option in options)
         assert all("Disabled Paid" not in option for option in options)
         assert option_poll_names == ["Enabled Paid", None]
+
+    def test_monthly_params_use_capitalized_result_option(self):
+        """Последняя опция месячного опроса начинается с заглавной буквы."""
+        test_polls = [
+            {
+                "name": "Enabled Paid",
+                "place": "Hall A",
+                "game_hour_utc": 18,
+                "game_minute_utc": 0,
+                "cost": 100,
+                "enabled": 1,
+            }
+        ]
+
+        with patch("src.scheduler.get_poll_templates", return_value=test_polls):
+            params = get_monthly_subscription_poll_params()
+
+        assert params is not None
+        _, options, _ = params
+        assert options[-1] == "Смотреть результат"
 
     def test_monthly_params_return_none_when_all_paid_polls_disabled(self):
         """Если все платные опросы выключены, месячный опрос не строится."""
