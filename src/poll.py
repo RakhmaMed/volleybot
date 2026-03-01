@@ -18,10 +18,19 @@ class VoterInfo(BaseModel):
 class PollData(BaseModel):
     """Данные активного опроса."""
 
+    kind: str = Field(default="regular", description="Тип опроса")
+    status: str = Field(default="open", description="Статус игры")
+    poll_template_id: int | None = Field(default=None, description="ID шаблона")
+    poll_name_snapshot: str = Field(default="", description="Имя опроса в момент создания")
+    question_snapshot: str = Field(default="", description="Текст вопроса")
+    opened_at: str = Field(default="", description="Время открытия")
     chat_id: int = Field(..., description="ID чата")
     poll_msg_id: int = Field(..., description="ID сообщения с опросом")
     info_msg_id: int | None = Field(
         default=None, description="ID информационного сообщения"
+    )
+    final_message_id: int | None = Field(
+        default=None, description="ID финального сообщения"
     )
     yes_voters: list[VoterInfo] = Field(
         default_factory=list, description="Список проголосовавших 'Да'"
@@ -30,7 +39,6 @@ class PollData(BaseModel):
         default="⏳ Идёт сбор голосов...", description="Последний отправленный текст"
     )
     subs: list[int] = Field(default_factory=list, description="Список ID подписчиков")
-    poll_kind: str = Field(default="regular", description="Тип опроса")
     options: list[str] = Field(default_factory=list, description="Список опций опроса")
     option_poll_names: list[str | None] = Field(
         default_factory=list, description="Соответствие опция → poll_name"
@@ -40,6 +48,15 @@ class PollData(BaseModel):
     )
 
     model_config = {"arbitrary_types_allowed": True, "frozen": False}
+
+    @property
+    def poll_kind(self) -> str:
+        """Совместимость со старым именем поля."""
+        return self.kind
+
+    @poll_kind.setter
+    def poll_kind(self, value: str) -> None:
+        self.kind = value
 
 
 def sort_voters_by_update_id(

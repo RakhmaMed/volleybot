@@ -7,6 +7,7 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.types import Chat, Message, PollAnswer, Update
 
+from src.db import close_game, create_game, init_db, save_poll_template
 from src.handlers import register_handlers
 from src.services import BotStateService, PollService
 
@@ -796,6 +797,91 @@ class TestPollAnswerHandler:
 
         # Проверяем, что опрос существует
         assert poll_service.has_poll("test_poll_id")
+
+
+@pytest.mark.asyncio
+class TestMonthlyAndStatsHandlers:
+    async def test_close_monthly_uses_open_monthly_game(
+        self, admin_user, admin_service, temp_db
+    ):
+        init_db()
+        create_game(
+            poll_id="monthly-1",
+            kind="monthly_subscription",
+            status="open",
+            poll_template_id=None,
+            poll_name_snapshot="monthly_subscription",
+            question_snapshot="Абонемент?",
+            chat_id=-1001234567890,
+            poll_message_id=1,
+            opened_at="2026-03-01T10:00:00+00:00",
+        )
+
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        poll_service = PollService()
+        poll_service.close_poll = AsyncMock()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": poll_service,
+            }
+        )
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=1,
+            date=datetime.now(),
+            chat=chat,
+            from_user=admin_user,
+            text="/close_monthly",
+        )
+        await dp.feed_update(bot, Update(update_id=1, message=message))
+        poll_service.close_poll.assert_called_once_with(bot, "monthly-1")
+
+    async def test_stats_summary_command(
+        self, admin_user, admin_service, temp_db
+    ):
+        init_db()
+        save_poll_template({"name": "Пятница", "message": "Игра"})
+        template_id = 1
+        create_game(
+            poll_id="regular-1",
+            kind="regular",
+            status="open",
+            poll_template_id=template_id,
+            poll_name_snapshot="Пятница",
+            question_snapshot="Играем?",
+            chat_id=-1001234567890,
+            poll_message_id=1,
+            opened_at="2026-03-01T10:00:00+00:00",
+        )
+        close_game("regular-1", closed_at="2026-03-02T10:00:00+00:00", final_message_id=2)
+
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": PollService(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=1,
+            date=datetime.now(),
+            chat=chat,
+            from_user=admin_user,
+            text="/stats",
+        )
+        await dp.feed_update(bot, Update(update_id=2, message=message))
+        method = bot.call_args.args[0]
+        assert "Статистика" in (method.text or "")
 
     async def test_poll_answer_handler_removes_voter(self, admin_user, admin_service):
         """Тест удаления голосующего при ответе 'Нет'."""

@@ -31,14 +31,19 @@ from .db import (
     find_player_by_name,
     get_all_players,
     get_fund_balance,
+    get_open_monthly_game,
     get_player_balance,
     get_player_info,
+    get_player_stats,
     get_players_with_balance,
+    get_poll_stats,
     get_poll_templates,
+    get_stats_summary,
     get_unpaid_halls,
     load_state,
     record_hall_payment,
     save_poll_template,
+    save_monthly_vote,
     save_state,
     update_fund_balance,
     update_player_balance,
@@ -77,6 +82,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="help", description="Показать справку по командам"),
         BotCommand(command="schedule", description="Показать расписание опросов"),
         BotCommand(command="balance", description="Показать мой баланс"),
+        BotCommand(command="stats", description="Показать статистику"),
     ]
 
     # Команды для администраторов (включая пользовательские)
@@ -84,6 +90,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="help", description="Показать справку по командам"),
         BotCommand(command="schedule", description="Показать расписание опросов"),
         BotCommand(command="balance", description="Показать долги/балансы и кассу"),
+        BotCommand(command="stats", description="Статистика по играм и игрокам"),
         BotCommand(command="subs", description="Абонементы по дням"),
         BotCommand(command="pay", description="Изменить баланс / оплата зала"),
         BotCommand(command="restore", description="Восстановить баланс (без кассы)"),
@@ -646,6 +653,158 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 f"⚠️ Сетевая ошибка при ответе на /subs от @{user.username if user else 'unknown'}"
             )
 
+    @router.message(Command("stats"))
+    async def stats_handler(message: Message) -> None:
+        """Показывает статистику по играм, залам и игрокам."""
+        user = message.from_user
+        if user is None:
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+        if not is_admin:
+            return
+
+        args = (message.text or "").split()
+        month: str | None = None
+        text: str
+
+        if len(args) == 1:
+            month = datetime.now().strftime("%Y-%m")
+            stats = get_stats_summary(month)
+            text = (
+                f"📊 <b>Статистика за {month}</b>\n\n"
+                f"Игры: <b>{stats['games_count']}</b>\n"
+                f"Уникальных игроков: <b>{stats['unique_players']}</b>\n"
+                f"Средний основной состав: <b>{stats['avg_main']:.2f}</b>\n"
+                f"Средний интерес: <b>{stats['avg_interest']:.2f}</b>\n"
+                f"Участий по абонементу: <b>{stats['subscription_uses']}</b>\n"
+                f"Разовых списаний: <b>{stats['single_game_charges']}</b>\n"
+                f"Сумма разовых списаний: <b>{stats['single_game_sum']} ₽</b>\n"
+                f"Пополнения: <b>{stats['topups_sum']} ₽</b>\n"
+                f"Оплаты залов: <b>{stats['hall_payments_sum']} ₽</b>\n"
+                f"Касса: <b>{stats['fund_balance']} ₽</b>\n"
+                f"Месячных голосований: <b>{stats['monthly_polls']}</b>"
+            )
+        elif len(args) >= 3 and args[1] == "month":
+            month = args[2]
+            stats = get_stats_summary(month)
+            text = (
+                f"📊 <b>Статистика за {escape_html(month)}</b>\n\n"
+                f"Игры: <b>{stats['games_count']}</b>\n"
+                f"Уникальных игроков: <b>{stats['unique_players']}</b>\n"
+                f"Средний основной состав: <b>{stats['avg_main']:.2f}</b>\n"
+                f"Средний интерес: <b>{stats['avg_interest']:.2f}</b>\n"
+                f"Участий по абонементу: <b>{stats['subscription_uses']}</b>\n"
+                f"Разовых списаний: <b>{stats['single_game_charges']}</b>\n"
+                f"Сумма разовых списаний: <b>{stats['single_game_sum']} ₽</b>\n"
+                f"Пополнения: <b>{stats['topups_sum']} ₽</b>\n"
+                f"Оплаты залов: <b>{stats['hall_payments_sum']} ₽</b>\n"
+                f"Касса: <b>{stats['fund_balance']} ₽</b>"
+            )
+        elif len(args) >= 3 and args[1] == "poll":
+            identifier = args[2]
+            if len(args) >= 4:
+                month = args[3]
+            template, partial_matches = _find_poll_template(identifier)
+            if template is None:
+                if partial_matches:
+                    lines = [
+                        f"❌ Найдено несколько опросов по запросу <code>{escape_html(identifier)}</code>.",
+                        "Уточните запрос. Подходящие варианты:",
+                    ]
+                    lines.extend(
+                        _format_poll_reference_line(candidate)
+                        for candidate in partial_matches
+                    )
+                    await message.reply("\n".join(lines), parse_mode="HTML")
+                    return
+                await message.reply(
+                    f"❌ Опрос не найден: <code>{escape_html(identifier)}</code>",
+                    parse_mode="HTML",
+                )
+                return
+            stats = get_poll_stats(int(template["id"]), month)
+            period = month or "всё время"
+            text = (
+                f"🏐 <b>Статистика зала</b>\n\n"
+                f"Зал: <b>{escape_html(str(template.get('name') or ''))}</b>\n"
+                f"Период: <b>{escape_html(period)}</b>\n"
+                f"Игры: <b>{stats['games_count']}</b>\n"
+                f"Уникальных игроков: <b>{stats['unique_players']}</b>\n"
+                f"Средний основной состав: <b>{stats['avg_main']:.2f}</b>\n"
+                f"Средний интерес: <b>{stats['avg_interest']:.2f}</b>\n"
+                f"Участий по абонементу: <b>{stats['subscription_uses']}</b>\n"
+                f"Сумма разовых списаний: <b>{stats['single_game_sum']} ₽</b>\n"
+                f"Последняя игра: <b>{escape_html(str(stats['last_game'] or '—'))}</b>"
+            )
+        elif len(args) >= 3 and args[1] == "player":
+            if message.reply_to_message and message.reply_to_message.from_user:
+                target_user_id = message.reply_to_message.from_user.id
+                if len(args) >= 4:
+                    month = args[3]
+            else:
+                identifier = args[2].lstrip("@")
+                if len(args) >= 4:
+                    month = args[3]
+                if identifier.isdigit():
+                    target_user_id = int(identifier)
+                else:
+                    players = find_player_by_name(identifier)
+                    if not players:
+                        await message.reply(
+                            f"❌ Игрок не найден: <code>{escape_html(identifier)}</code>",
+                            parse_mode="HTML",
+                        )
+                        return
+                    if len(players) > 1:
+                        matches = "\n".join(
+                            f"• {format_player_link(player)}"
+                            for player in players[:10]
+                        )
+                        await message.reply(
+                            "❌ Найдено несколько игроков. Уточните запрос:\n"
+                            f"{matches}",
+                            parse_mode="HTML",
+                        )
+                        return
+                    target_user_id = int(players[0]["id"])
+            player = get_player_info(target_user_id)
+            stats = get_player_stats(target_user_id, month)
+            player_name = (
+                format_player_link(player, target_user_id)
+                if player
+                else f"ID: {target_user_id}"
+            )
+            period = month or "всё время"
+            text = (
+                f"👤 <b>Статистика игрока</b>\n\n"
+                f"{player_name}\n"
+                f"Период: <b>{escape_html(period)}</b>\n"
+                f"Игр всего: <b>{stats['games_total']}</b>\n"
+                f"Основной состав: <b>{stats['main_count']}</b>\n"
+                f"Запасной: <b>{stats['reserve_count']}</b>\n"
+                f"Забронирован: <b>{stats['booked_count']}</b>\n"
+                f"Игр по абонементу: <b>{stats['subscription_games']}</b>\n"
+                f"Разовых игр: <b>{stats['single_game_count']}</b>\n"
+                f"Списано разово: <b>{stats['single_game_sum']} ₽</b>\n"
+                f"Текущий баланс: <b>{stats['balance']} ₽</b>"
+            )
+        else:
+            text = (
+                "❌ Неверный формат.\n\n"
+                "<code>/stats</code>\n"
+                "<code>/stats month YYYY-MM</code>\n"
+                "<code>/stats poll ID|Название [YYYY-MM]</code>\n"
+                "<code>/stats player ID|@username [YYYY-MM]</code>"
+            )
+
+        await message.reply(
+            text,
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+        )
+
     async def _set_poll_enabled(message: Message, enabled: bool) -> None:
         """Переключает состояние шаблона опроса по id или имени."""
         user = message.from_user
@@ -745,6 +904,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 "❌ Нет платных залов. Добавьте опросы с cost > 0 в БД."
             )
             return
+        if get_open_monthly_game() is not None:
+            await message.reply("ℹ️ Месячный опрос уже открыт.")
+            return
 
         bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
         poll_service: PollService = dp.workflow_data["poll_service"]
@@ -762,6 +924,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             allows_multiple_answers=True,
             poll_kind="monthly_subscription",
             option_poll_names=option_poll_names,
+            poll_template_id=None,
         )
         if new_chat_id != chat_id:
             bot_state_service.set_chat_id(new_chat_id)
@@ -783,22 +946,14 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         poll_service: PollService = dp.workflow_data["poll_service"]
-        first = poll_service.get_first_poll()
-        if first is None:
+        monthly_game = get_open_monthly_game()
+        if monthly_game is None:
             await message.reply(
                 "❌ Нет активного опроса. Сначала откройте месячный опрос: /open_monthly"
             )
             return
 
-        _poll_id, data = first
-        if data.poll_kind != "monthly_subscription":
-            await message.reply(
-                "❌ Сейчас открыт не месячный опрос, а обычный. "
-                "Закройте его или дождитесь авто-закрытия, затем откройте /open_monthly."
-            )
-            return
-
-        await poll_service.close_poll(bot, "monthly_subscription")
+        await poll_service.close_poll(bot, str(monthly_game["poll_id"]))
         await message.reply("✅ Месячный опрос закрыт. Расчёт абонемента выполнен.")
 
     @router.message(Command("webhookinfo"))
@@ -1559,8 +1714,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         if data is None:
             return
 
-        if data.poll_kind == "monthly_subscription":
+        if data.kind == "monthly_subscription":
             data.monthly_votes[user.id] = selected
+            save_monthly_vote(poll_id, user.id, selected)
             poll_service.persist_state()
             return
 

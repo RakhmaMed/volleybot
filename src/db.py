@@ -17,7 +17,7 @@ from .types import PollTemplate
 BOT_STATE_KEY = "bot_state"
 POLL_STATE_KEY = "poll_state"
 FUND_BALANCE_KEY = "fund_balance"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _get_db_path() -> str:
@@ -85,6 +85,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if user_version < 4:
         _migrate_to_v4(conn)
         user_version = 4
+    if user_version < 5:
+        _migrate_to_v5(conn)
+        user_version = 5
 
     if user_version != SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -192,21 +195,56 @@ def _create_schema_v4(conn: sqlite3.Connection) -> None:
 
 def _create_indexes(conn: sqlite3.Connection) -> None:
     """Создаёт индексы для актуальной схемы."""
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_poll_subscriptions_user_id ON poll_subscriptions(user_id)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_hall_payments_month ON hall_payments(month)"
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_transactions_player_created_at
-        ON transactions(player_id, created_at DESC)
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_transactions_poll_template_id ON transactions(poll_template_id)"
-    )
+    if _table_exists(conn, "poll_subscriptions"):
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_poll_subscriptions_user_id ON poll_subscriptions(user_id)"
+        )
+    if _table_exists(conn, "hall_payments"):
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hall_payments_month ON hall_payments(month)"
+        )
+    if _table_exists(conn, "transactions"):
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_transactions_player_created_at
+            ON transactions(player_id, created_at DESC)
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_transactions_poll_template_id ON transactions(poll_template_id)"
+        )
+    if _table_exists(conn, "games"):
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_games_status_kind ON games(status, kind)"
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_games_template_opened_at
+            ON games(poll_template_id, opened_at DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_games_chat_opened_at
+            ON games(chat_id, opened_at DESC)
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_games_opened_at ON games(opened_at DESC)"
+        )
+    if _table_exists(conn, "game_participants"):
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_game_participants_player_created_at
+            ON game_participants(player_id, created_at DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_game_participants_game_bucket_sort
+            ON game_participants(game_poll_id, roster_bucket, sort_order)
+            """
+        )
 
 
 def _migrate_to_v3(conn: sqlite3.Connection) -> None:
@@ -371,6 +409,73 @@ def _migrate_to_v4(conn: sqlite3.Connection) -> None:
         )
         logging.info("✅ Миграция: добавлен столбец enabled в poll_templates")
     conn.execute("PRAGMA user_version = 4")
+
+
+def _migrate_to_v5(conn: sqlite3.Connection) -> None:
+    """Добавляет таблицы игр и статистики."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS games (
+            poll_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL CHECK (kind IN ('regular', 'monthly_subscription')),
+            status TEXT NOT NULL CHECK (status IN ('open', 'closed', 'cancelled')),
+            poll_template_id INTEGER,
+            poll_name_snapshot TEXT NOT NULL,
+            question_snapshot TEXT NOT NULL,
+            chat_id INTEGER NOT NULL,
+            poll_message_id INTEGER NOT NULL,
+            info_message_id INTEGER,
+            final_message_id INTEGER,
+            opened_at TEXT NOT NULL,
+            closed_at TEXT,
+            game_date TEXT,
+            place_snapshot TEXT,
+            cost_snapshot INTEGER NOT NULL DEFAULT 0,
+            monthly_cost_snapshot INTEGER NOT NULL DEFAULT 0,
+            options_json TEXT NOT NULL DEFAULT '[]',
+            option_poll_names_json TEXT NOT NULL DEFAULT '[]',
+            last_info_text TEXT NOT NULL DEFAULT '⏳ Идёт сбор голосов...',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (poll_template_id) REFERENCES poll_templates(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS game_participants (
+            game_poll_id TEXT NOT NULL,
+            player_id INTEGER NOT NULL,
+            roster_bucket TEXT NOT NULL CHECK (roster_bucket IN ('main', 'reserve', 'booked')),
+            sort_order INTEGER NOT NULL,
+            is_subscriber INTEGER NOT NULL DEFAULT 0,
+            charged_amount INTEGER NOT NULL DEFAULT 0,
+            charge_source TEXT NOT NULL DEFAULT 'none'
+                CHECK (charge_source IN ('single_game', 'subscription', 'none')),
+            balance_before INTEGER,
+            balance_after INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (game_poll_id, player_id),
+            FOREIGN KEY (game_poll_id) REFERENCES games(poll_id) ON DELETE CASCADE,
+            FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS monthly_poll_votes (
+            game_poll_id TEXT NOT NULL,
+            player_id INTEGER NOT NULL,
+            option_ids_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (game_poll_id, player_id),
+            FOREIGN KEY (game_poll_id) REFERENCES games(poll_id) ON DELETE CASCADE,
+            FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE
+        )
+        """
+    )
+    _create_indexes(conn)
+    conn.execute("PRAGMA user_version = 5")
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -904,3 +1009,604 @@ def record_hall_payment(poll_template_id: int, month: str, amount: int) -> bool:
             f"❌ Ошибка при записи оплаты зала poll_template_id={poll_template_id} за {month}"
         )
         return False
+
+
+def create_game(
+    *,
+    poll_id: str,
+    kind: str,
+    status: str,
+    poll_template_id: int | None,
+    poll_name_snapshot: str,
+    question_snapshot: str,
+    chat_id: int,
+    poll_message_id: int,
+    opened_at: str,
+    game_date: str | None = None,
+    place_snapshot: str | None = None,
+    cost_snapshot: int = 0,
+    monthly_cost_snapshot: int = 0,
+    options: list[str] | None = None,
+    option_poll_names: list[str | None] | None = None,
+    info_message_id: int | None = None,
+    final_message_id: int | None = None,
+    last_info_text: str = "⏳ Идёт сбор голосов...",
+) -> None:
+    """Создаёт или обновляет запись игры/голосования."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO games (
+                    poll_id, kind, status, poll_template_id, poll_name_snapshot,
+                    question_snapshot, chat_id, poll_message_id, info_message_id,
+                    final_message_id, opened_at, game_date, place_snapshot,
+                    cost_snapshot, monthly_cost_snapshot, options_json,
+                    option_poll_names_json, last_info_text, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(poll_id) DO UPDATE SET
+                    kind = excluded.kind,
+                    status = excluded.status,
+                    poll_template_id = excluded.poll_template_id,
+                    poll_name_snapshot = excluded.poll_name_snapshot,
+                    question_snapshot = excluded.question_snapshot,
+                    chat_id = excluded.chat_id,
+                    poll_message_id = excluded.poll_message_id,
+                    info_message_id = COALESCE(excluded.info_message_id, games.info_message_id),
+                    final_message_id = COALESCE(excluded.final_message_id, games.final_message_id),
+                    opened_at = excluded.opened_at,
+                    game_date = excluded.game_date,
+                    place_snapshot = excluded.place_snapshot,
+                    cost_snapshot = excluded.cost_snapshot,
+                    monthly_cost_snapshot = excluded.monthly_cost_snapshot,
+                    options_json = excluded.options_json,
+                    option_poll_names_json = excluded.option_poll_names_json,
+                    last_info_text = excluded.last_info_text,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    poll_id,
+                    kind,
+                    status,
+                    poll_template_id,
+                    poll_name_snapshot,
+                    question_snapshot,
+                    chat_id,
+                    poll_message_id,
+                    info_message_id,
+                    final_message_id,
+                    opened_at,
+                    game_date,
+                    place_snapshot,
+                    cost_snapshot,
+                    monthly_cost_snapshot,
+                    json.dumps(options or [], ensure_ascii=False),
+                    json.dumps(option_poll_names or [], ensure_ascii=False),
+                    last_info_text,
+                ),
+            )
+            conn.commit()
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при создании игры poll_id={poll_id}")
+
+
+def update_game_info_message(
+    poll_id: str,
+    *,
+    info_message_id: int | None,
+    last_info_text: str | None = None,
+) -> None:
+    """Обновляет ID информационного сообщения и кеш текста."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                """
+                UPDATE games
+                SET info_message_id = ?,
+                    last_info_text = COALESCE(?, last_info_text),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE poll_id = ?
+                """,
+                (info_message_id, last_info_text, poll_id),
+            )
+            conn.commit()
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка при обновлении info_message_id для игры poll_id={poll_id}"
+        )
+
+
+def update_game_last_info_text(poll_id: str, text: str) -> None:
+    """Обновляет последний отправленный текст промежуточного сообщения."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                """
+                UPDATE games
+                SET last_info_text = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE poll_id = ?
+                """,
+                (text, poll_id),
+            )
+            conn.commit()
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка при обновлении last_info_text для игры poll_id={poll_id}"
+        )
+
+
+def close_game(
+    poll_id: str,
+    *,
+    status: str = "closed",
+    closed_at: str,
+    final_message_id: int | None = None,
+) -> None:
+    """Закрывает игру в БД."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                """
+                UPDATE games
+                SET status = ?,
+                    closed_at = ?,
+                    final_message_id = COALESCE(?, final_message_id),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE poll_id = ?
+                """,
+                (status, closed_at, final_message_id, poll_id),
+            )
+            conn.commit()
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при закрытии игры poll_id={poll_id}")
+
+
+def save_monthly_vote(game_poll_id: str, player_id: int, option_ids: list[int]) -> None:
+    """Сохраняет выбор пользователя в месячном голосовании."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO monthly_poll_votes (game_poll_id, player_id, option_ids_json, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(game_poll_id, player_id) DO UPDATE SET
+                    option_ids_json = excluded.option_ids_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (game_poll_id, player_id, json.dumps(option_ids)),
+            )
+            conn.commit()
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка при сохранении monthly vote game_poll_id={game_poll_id}, player_id={player_id}"
+        )
+
+
+def load_monthly_votes(game_poll_id: str) -> dict[int, list[int]]:
+    """Возвращает сохранённые голоса месячного опроса."""
+    try:
+        init_db()
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT player_id, option_ids_json
+                FROM monthly_poll_votes
+                WHERE game_poll_id = ?
+                """,
+                (game_poll_id,),
+            ).fetchall()
+        result: dict[int, list[int]] = {}
+        for player_id, option_ids_json in rows:
+            try:
+                loaded = json.loads(option_ids_json)
+            except (TypeError, ValueError):
+                loaded = []
+            result[int(player_id)] = [int(value) for value in loaded if isinstance(value, int)]
+        return result
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при загрузке monthly votes game_poll_id={game_poll_id}")
+        return {}
+
+
+def get_game(poll_id: str) -> dict[str, Any] | None:
+    """Возвращает игру по poll_id."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM games WHERE poll_id = ?",
+                (poll_id,),
+            ).fetchone()
+        return dict(row) if row else None
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при получении игры poll_id={poll_id}")
+        return None
+
+
+def get_open_games() -> list[dict[str, Any]]:
+    """Возвращает все открытые игры."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM games WHERE status = 'open' ORDER BY opened_at"
+            ).fetchall()
+        return [dict(row) for row in rows]
+    except sqlite3.Error:
+        logging.exception("❌ Ошибка при получении списка открытых игр")
+        return []
+
+
+def get_open_game_by_template_id(poll_template_id: int) -> dict[str, Any] | None:
+    """Возвращает открытую regular-игру по шаблону."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT *
+                FROM games
+                WHERE status = 'open'
+                  AND kind = 'regular'
+                  AND poll_template_id = ?
+                ORDER BY opened_at DESC
+                LIMIT 1
+                """,
+                (poll_template_id,),
+            ).fetchone()
+        return dict(row) if row else None
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка при получении открытой игры для шаблона {poll_template_id}"
+        )
+        return None
+
+
+def get_open_monthly_game() -> dict[str, Any] | None:
+    """Возвращает открытый месячный опрос."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT *
+                FROM games
+                WHERE status = 'open' AND kind = 'monthly_subscription'
+                ORDER BY opened_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return dict(row) if row else None
+    except sqlite3.Error:
+        logging.exception("❌ Ошибка при получении открытого месячного опроса")
+        return None
+
+
+def save_game_participants(game_poll_id: str, participants: list[dict[str, Any]]) -> None:
+    """Сохраняет состав и финансовый итог игры."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.execute("DELETE FROM game_participants WHERE game_poll_id = ?", (game_poll_id,))
+            for participant in participants:
+                conn.execute(
+                    """
+                    INSERT INTO game_participants (
+                        game_poll_id, player_id, roster_bucket, sort_order,
+                        is_subscriber, charged_amount, charge_source,
+                        balance_before, balance_after
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        game_poll_id,
+                        participant["player_id"],
+                        participant["roster_bucket"],
+                        participant["sort_order"],
+                        1 if participant.get("is_subscriber") else 0,
+                        int(participant.get("charged_amount", 0) or 0),
+                        participant.get("charge_source", "none"),
+                        participant.get("balance_before"),
+                        participant.get("balance_after"),
+                    ),
+                )
+            conn.commit()
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка при сохранении участников игры game_poll_id={game_poll_id}"
+        )
+
+
+def _month_bounds(month: str | None) -> tuple[str | None, str | None]:
+    if month is None:
+        return None, None
+    year_str, month_str = month.split("-")
+    year = int(year_str)
+    month_num = int(month_str)
+    start = f"{year:04d}-{month_num:02d}-01"
+    if month_num == 12:
+        end = f"{year + 1:04d}-01-01"
+    else:
+        end = f"{year:04d}-{month_num + 1:02d}-01"
+    return start, end
+
+
+def get_stats_summary(month: str | None = None) -> dict[str, Any]:
+    """Сводная статистика по regular-играм."""
+    start, end = _month_bounds(month)
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            filter_sql = ""
+            params: list[Any] = []
+            if start and end:
+                filter_sql = "AND g.closed_at >= ? AND g.closed_at < ?"
+                params.extend([start, end])
+
+            summary_row = conn.execute(
+                f"""
+                SELECT
+                    COUNT(DISTINCT g.poll_id) AS games_count,
+                    COUNT(DISTINCT gp.player_id) AS unique_players,
+                    COUNT(CASE WHEN gp.charge_source = 'subscription' THEN 1 END) AS subscription_uses,
+                    COUNT(CASE WHEN gp.charge_source = 'single_game' THEN 1 END) AS single_game_charges,
+                    COALESCE(SUM(CASE WHEN gp.charge_source = 'single_game' THEN gp.charged_amount ELSE 0 END), 0) AS single_game_sum
+                FROM games g
+                LEFT JOIN game_participants gp ON gp.game_poll_id = g.poll_id
+                WHERE g.kind = 'regular' AND g.status = 'closed' {filter_sql}
+                """,
+                params,
+            ).fetchone()
+
+            roster_rows = conn.execute(
+                f"""
+                SELECT g.poll_id, COUNT(gp.player_id) AS interested
+                FROM games g
+                LEFT JOIN game_participants gp ON gp.game_poll_id = g.poll_id
+                WHERE g.kind = 'regular' AND g.status = 'closed' {filter_sql}
+                GROUP BY g.poll_id
+                """,
+                params,
+            ).fetchall()
+            main_rows = conn.execute(
+                f"""
+                SELECT g.poll_id, COUNT(gp.player_id) AS main_count
+                FROM games g
+                LEFT JOIN game_participants gp
+                    ON gp.game_poll_id = g.poll_id AND gp.roster_bucket = 'main'
+                WHERE g.kind = 'regular' AND g.status = 'closed' {filter_sql}
+                GROUP BY g.poll_id
+                """,
+                params,
+            ).fetchall()
+            monthly_filter = ""
+            monthly_params: list[Any] = []
+            if start and end:
+                monthly_filter = "AND opened_at >= ? AND opened_at < ?"
+                monthly_params = [start, end]
+            monthly_row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS monthly_polls
+                FROM games
+                WHERE kind = 'monthly_subscription' {monthly_filter}
+                """,
+                monthly_params,
+            ).fetchone()
+            avg_interest = (
+                sum(int(row["interested"]) for row in roster_rows) / len(roster_rows)
+                if roster_rows
+                else 0.0
+            )
+            avg_main = (
+                sum(int(row["main_count"]) for row in main_rows) / len(main_rows)
+                if main_rows
+                else 0.0
+            )
+
+            transactions_filter = ""
+            tx_params: list[Any] = []
+            hall_filter = ""
+            hall_params: list[Any] = []
+            if start and end:
+                transactions_filter = "WHERE created_at >= ? AND created_at < ?"
+                tx_params = [start, end]
+                hall_filter = "WHERE paid_at >= ? AND paid_at < ?"
+                hall_params = [start, end]
+
+            payments_row = conn.execute(
+                f"SELECT COALESCE(SUM(amount), 0) AS topups_sum FROM transactions {transactions_filter} AND amount > 0"
+                if transactions_filter
+                else "SELECT COALESCE(SUM(amount), 0) AS topups_sum FROM transactions WHERE amount > 0",
+                tx_params,
+            ).fetchone()
+            hall_row = conn.execute(
+                f"SELECT COALESCE(SUM(amount), 0) AS hall_payments_sum FROM hall_payments {hall_filter}"
+                if hall_filter
+                else "SELECT COALESCE(SUM(amount), 0) AS hall_payments_sum FROM hall_payments",
+                hall_params,
+            ).fetchone()
+
+        return {
+            "games_count": int(summary_row["games_count"] or 0) if summary_row else 0,
+            "unique_players": int(summary_row["unique_players"] or 0) if summary_row else 0,
+            "avg_main": avg_main,
+            "avg_interest": avg_interest,
+            "subscription_uses": int(summary_row["subscription_uses"] or 0) if summary_row else 0,
+            "single_game_charges": int(summary_row["single_game_charges"] or 0) if summary_row else 0,
+            "single_game_sum": int(summary_row["single_game_sum"] or 0) if summary_row else 0,
+            "topups_sum": int(payments_row["topups_sum"] or 0) if payments_row else 0,
+            "hall_payments_sum": int(hall_row["hall_payments_sum"] or 0) if hall_row else 0,
+            "fund_balance": get_fund_balance(),
+            "monthly_polls": int(monthly_row["monthly_polls"] or 0) if monthly_row else 0,
+        }
+    except sqlite3.Error:
+        logging.exception("❌ Ошибка при получении сводной статистики")
+        return {
+            "games_count": 0,
+            "unique_players": 0,
+            "avg_main": 0.0,
+            "avg_interest": 0.0,
+            "subscription_uses": 0,
+            "single_game_charges": 0,
+            "single_game_sum": 0,
+            "topups_sum": 0,
+            "hall_payments_sum": 0,
+            "fund_balance": get_fund_balance(),
+            "monthly_polls": 0,
+        }
+
+
+def get_poll_stats(poll_template_id: int, month: str | None = None) -> dict[str, Any]:
+    """Статистика по одному залу."""
+    start, end = _month_bounds(month)
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            filter_sql = ""
+            params: list[Any] = [poll_template_id]
+            if start and end:
+                filter_sql = "AND g.closed_at >= ? AND g.closed_at < ?"
+                params.extend([start, end])
+            games = conn.execute(
+                f"""
+                SELECT g.poll_id, g.poll_name_snapshot, g.closed_at
+                FROM games g
+                WHERE g.kind = 'regular' AND g.status = 'closed'
+                  AND g.poll_template_id = ? {filter_sql}
+                ORDER BY g.closed_at DESC
+                """,
+                params,
+            ).fetchall()
+            stats_rows = conn.execute(
+                f"""
+                SELECT
+                    COUNT(DISTINCT g.poll_id) AS games_count,
+                    COUNT(DISTINCT gp.player_id) AS unique_players,
+                    COUNT(CASE WHEN gp.charge_source = 'subscription' THEN 1 END) AS subscription_uses,
+                    COALESCE(SUM(CASE WHEN gp.charge_source = 'single_game' THEN gp.charged_amount ELSE 0 END), 0) AS single_game_sum
+                FROM games g
+                LEFT JOIN game_participants gp ON gp.game_poll_id = g.poll_id
+                WHERE g.kind = 'regular' AND g.status = 'closed'
+                  AND g.poll_template_id = ? {filter_sql}
+                """,
+                params,
+            ).fetchone()
+            avg_interest_rows = conn.execute(
+                f"""
+                SELECT g.poll_id, COUNT(gp.player_id) AS interested
+                FROM games g
+                LEFT JOIN game_participants gp ON gp.game_poll_id = g.poll_id
+                WHERE g.kind = 'regular' AND g.status = 'closed'
+                  AND g.poll_template_id = ? {filter_sql}
+                GROUP BY g.poll_id
+                """,
+                params,
+            ).fetchall()
+            main_rows = conn.execute(
+                f"""
+                SELECT g.poll_id, COUNT(gp.player_id) AS main_count
+                FROM games g
+                LEFT JOIN game_participants gp
+                    ON gp.game_poll_id = g.poll_id AND gp.roster_bucket = 'main'
+                WHERE g.kind = 'regular' AND g.status = 'closed'
+                  AND g.poll_template_id = ? {filter_sql}
+                GROUP BY g.poll_id
+                """,
+                params,
+            ).fetchall()
+        return {
+            "games_count": int(stats_rows["games_count"] or 0) if stats_rows else 0,
+            "unique_players": int(stats_rows["unique_players"] or 0) if stats_rows else 0,
+            "avg_main": (
+                sum(int(row["main_count"]) for row in main_rows) / len(main_rows)
+                if main_rows
+                else 0.0
+            ),
+            "avg_interest": (
+                sum(int(row["interested"]) for row in avg_interest_rows) / len(avg_interest_rows)
+                if avg_interest_rows
+                else 0.0
+            ),
+            "subscription_uses": int(stats_rows["subscription_uses"] or 0) if stats_rows else 0,
+            "single_game_sum": int(stats_rows["single_game_sum"] or 0) if stats_rows else 0,
+            "last_game": games[0]["closed_at"] if games else None,
+            "poll_name_snapshot": games[0]["poll_name_snapshot"] if games else "",
+        }
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка при получении статистики по шаблону {poll_template_id}"
+        )
+        return {
+            "games_count": 0,
+            "unique_players": 0,
+            "avg_main": 0.0,
+            "avg_interest": 0.0,
+            "subscription_uses": 0,
+            "single_game_sum": 0,
+            "last_game": None,
+            "poll_name_snapshot": "",
+        }
+
+
+def get_player_stats(player_id: int, month: str | None = None) -> dict[str, Any]:
+    """Статистика по игроку."""
+    start, end = _month_bounds(month)
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            filter_sql = ""
+            params: list[Any] = [player_id]
+            if start and end:
+                filter_sql = "AND g.closed_at >= ? AND g.closed_at < ?"
+                params.extend([start, end])
+            row = conn.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS games_total,
+                    COUNT(CASE WHEN gp.roster_bucket = 'main' THEN 1 END) AS main_count,
+                    COUNT(CASE WHEN gp.roster_bucket = 'reserve' THEN 1 END) AS reserve_count,
+                    COUNT(CASE WHEN gp.roster_bucket = 'booked' THEN 1 END) AS booked_count,
+                    COUNT(CASE WHEN gp.charge_source = 'subscription' THEN 1 END) AS subscription_games,
+                    COUNT(CASE WHEN gp.charge_source = 'single_game' THEN 1 END) AS single_game_count,
+                    COALESCE(SUM(CASE WHEN gp.charge_source = 'single_game' THEN gp.charged_amount ELSE 0 END), 0) AS single_game_sum
+                FROM game_participants gp
+                JOIN games g ON g.poll_id = gp.game_poll_id
+                WHERE gp.player_id = ? AND g.kind = 'regular' AND g.status = 'closed' {filter_sql}
+                """,
+                params,
+            ).fetchone()
+        balance = get_player_balance(player_id)
+        return {
+            "games_total": int(row["games_total"] or 0) if row else 0,
+            "main_count": int(row["main_count"] or 0) if row else 0,
+            "reserve_count": int(row["reserve_count"] or 0) if row else 0,
+            "booked_count": int(row["booked_count"] or 0) if row else 0,
+            "subscription_games": int(row["subscription_games"] or 0) if row else 0,
+            "single_game_count": int(row["single_game_count"] or 0) if row else 0,
+            "single_game_sum": int(row["single_game_sum"] or 0) if row else 0,
+            "balance": int(balance["balance"]) if balance else 0,
+        }
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при получении статистики по игроку {player_id}")
+        balance = get_player_balance(player_id)
+        return {
+            "games_total": 0,
+            "main_count": 0,
+            "reserve_count": 0,
+            "booked_count": 0,
+            "subscription_games": 0,
+            "single_game_count": 0,
+            "single_game_sum": 0,
+            "balance": int(balance["balance"]) if balance else 0,
+        }

@@ -79,12 +79,18 @@ class TestCreateClosePollJob:
         # Мокаем метод close_poll
         poll_service.close_poll = AsyncMock()
 
-        job = create_close_poll_job(bot, "test_poll", poll_service)
+        with patch(
+            "src.scheduler.get_open_game_by_template_id",
+            return_value={"poll_id": "test_poll_id"},
+        ):
+            job = create_close_poll_job(
+                bot, poll_service, poll_template_id=1
+            )
 
-        await job()
+            await job()
 
         poll_service.close_poll.assert_called_once()
-        assert poll_service.close_poll.call_args[0][1] == "test_poll"
+        assert poll_service.close_poll.call_args[0][1] == "test_poll_id"
 
 
 class TestSetupScheduler:

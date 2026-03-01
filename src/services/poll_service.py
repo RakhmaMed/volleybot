@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from asyncio import Task
-from datetime import datetime
+from datetime import datetime, timezone
+import json
 from typing import Any
 
 from aiogram import Bot
@@ -26,13 +27,22 @@ from ..config import (
 from ..db import (
     POLL_STATE_KEY,
     add_transaction,
+    close_game,
+    create_game,
     ensure_player,
     get_fund_balance,
+    get_game,
+    get_open_games,
     get_player_balance,
     get_poll_templates,
+    load_monthly_votes,
     load_state,
+    save_game_participants,
+    save_monthly_vote,
     save_poll_template,
     save_state,
+    update_game_info_message,
+    update_game_last_info_text,
     update_player_balance,
 )
 from ..poll import PollData, VoterInfo, sort_voters_by_update_id
@@ -220,15 +230,81 @@ class PollService:
         stored = load_state(POLL_STATE_KEY, default={})
         if not isinstance(stored, dict):
             logging.warning(
-                "⚠️ Сохранённое состояние опросов повреждено (не словарь), пропускаем восстановление"
+                "⚠️ Сохранённое состояние опросов повреждено (не словарь), fallback будет пропущен"
             )
-            return
+            stored = {}
 
         self._poll_data.clear()
         self._update_tasks.clear()
 
         successful = 0
         failed = 0
+        stored_games = {row["poll_id"]: row for row in get_open_games()}
+        templates_by_id = {
+            int(template["id"]): template for template in get_poll_templates() if "id" in template
+        }
+        if stored_games:
+            for poll_id, row in stored_games.items():
+                try:
+                    fallback = stored.get(poll_id, {})
+                    options = json.loads(row.get("options_json") or "[]")
+                    option_poll_names = json.loads(
+                        row.get("option_poll_names_json") or "[]"
+                    )
+                    template_subs = []
+                    template_id = row.get("poll_template_id")
+                    if template_id is not None and int(template_id) in templates_by_id:
+                        template_subs = list(
+                            templates_by_id[int(template_id)].get("subs", [])
+                        )
+                    restored = PollData(
+                        kind=str(row.get("kind") or "regular"),
+                        status=str(row.get("status") or "open"),
+                        poll_template_id=row.get("poll_template_id"),
+                        poll_name_snapshot=str(row.get("poll_name_snapshot") or ""),
+                        question_snapshot=str(row.get("question_snapshot") or ""),
+                        opened_at=str(row.get("opened_at") or ""),
+                        chat_id=int(row["chat_id"]),
+                        poll_msg_id=int(row["poll_message_id"]),
+                        info_msg_id=row.get("info_message_id"),
+                        final_message_id=row.get("final_message_id"),
+                        yes_voters=[
+                            VoterInfo(**item)
+                            for item in fallback.get("yes_voters", [])
+                            if isinstance(item, dict)
+                        ],
+                        last_message_text=str(
+                            fallback.get(
+                                "last_message_text",
+                                row.get("last_info_text") or "⏳ Идёт сбор голосов...",
+                            )
+                        ),
+                        subs=list(fallback.get("subs", template_subs)),
+                        options=[str(value) for value in options],
+                        option_poll_names=[
+                            str(value) if value is not None else None
+                            for value in option_poll_names
+                        ],
+                        monthly_votes=load_monthly_votes(poll_id)
+                        or fallback.get("monthly_votes", {}),
+                    )
+                    self._poll_data[poll_id] = restored
+                    self._update_tasks[poll_id] = None
+                    successful += 1
+                    logging.debug(f"  Восстановлен опрос из games {poll_id}")
+                except (TypeError, KeyError, ValueError):
+                    failed += 1
+                    logging.exception(
+                        f"❌ Не удалось восстановить состояние игры {poll_id} из таблицы games"
+                    )
+            if successful > 0:
+                logging.info(f"✅ Восстановлено опросов из games: {successful}")
+            if failed > 0:
+                logging.warning(
+                    f"⚠️ Не удалось восстановить опросов из games: {failed}"
+                )
+            return
+
         for poll_id, data in stored.items():
             try:
                 restored = PollData(**data)
@@ -325,6 +401,7 @@ class PollService:
         allows_multiple_answers: bool = False,
         poll_kind: str = "regular",
         option_poll_names: list[str | None] | None = None,
+        poll_template_id: int | None = None,
     ) -> int:
         """
         Отправка опроса в чат.
@@ -349,9 +426,6 @@ class PollService:
         poll_options = options if options is not None else list(POLL_OPTIONS)
         logging.debug(f"  Опции: {poll_options}")
         logging.debug(f"  Подписчиков: {len(subs) if subs else 0}")
-
-        self.clear_all_polls()
-        self.persist_state()
 
         try:
 
@@ -508,14 +582,61 @@ class PollService:
             )
             return chat_id
 
+        opened_at = datetime.now(timezone.utc).isoformat()
+        poll_templates = get_poll_templates()
+        poll_template = next(
+            (
+                template
+                for template in poll_templates
+                if poll_template_id is not None
+                and int(template.get("id", 0) or 0) == poll_template_id
+            ),
+            None,
+        )
+        place_snapshot = (
+            str(poll_template.get("place") or "") if poll_template is not None else ""
+        )
+        cost_snapshot = int(poll_template.get("cost", 0) or 0) if poll_template else 0
+        monthly_cost_snapshot = (
+            int(poll_template.get("monthly_cost", 0) or 0) if poll_template else 0
+        )
+        create_game(
+            poll_id=poll_message.poll.id,
+            kind=poll_kind,
+            status="open",
+            poll_template_id=poll_template_id,
+            poll_name_snapshot=poll_name,
+            question_snapshot=question,
+            chat_id=chat_id,
+            poll_message_id=poll_message.message_id,
+            info_message_id=info_message.message_id if info_message else None,
+            opened_at=opened_at,
+            place_snapshot=place_snapshot,
+            cost_snapshot=cost_snapshot,
+            monthly_cost_snapshot=monthly_cost_snapshot,
+            options=poll_options,
+            option_poll_names=option_poll_names or [],
+        )
+        update_game_info_message(
+            poll_message.poll.id,
+            info_message_id=info_message.message_id if info_message else None,
+            last_info_text="⏳ Идёт сбор голосов...",
+        )
+
         self._poll_data[poll_message.poll.id] = PollData(
+            kind=poll_kind,
+            status="open",
+            poll_template_id=poll_template_id,
+            poll_name_snapshot=poll_name,
+            question_snapshot=question,
+            opened_at=opened_at,
             chat_id=chat_id,
             poll_msg_id=poll_message.message_id,
             info_msg_id=info_message.message_id if info_message else None,
+            final_message_id=None,
             yes_voters=[],
             last_message_text="⏳ Идёт сбор голосов...",
             subs=subs or [],
-            poll_kind=poll_kind,
             options=poll_options,
             option_poll_names=option_poll_names or [],
         )
@@ -633,6 +754,7 @@ class PollService:
 
                 await edit_with_retry()
                 data.last_message_text = text
+                update_game_last_info_text(poll_id, text)
                 main_count = min(len(yes_voters), MAX_PLAYERS)
                 reserve_count = max(
                     0, min(len(yes_voters) - MAX_PLAYERS, RESERVE_PLAYERS)
@@ -657,26 +779,28 @@ class PollService:
         self._update_tasks[poll_id] = None
         self.persist_state()
 
-    async def close_poll(self, bot: Bot, poll_name: str) -> None:
+    async def close_poll(self, bot: Bot, poll_id: str) -> None:
         """
         Закрыть активный опрос и опубликовать финальный список.
 
         Args:
             bot: Экземпляр бота
-            poll_name: Название опроса для логирования
+            poll_id: ID опроса Telegram
         """
-        logging.info(f"🔒 Начало процедуры закрытия опроса '{poll_name}'...")
+        logging.info(f"🔒 Начало процедуры закрытия опроса poll_id='{poll_id}'...")
 
-        if not self.has_active_polls():
-            logging.info(f"⚠️ Нет активных опросов для закрытия ('{poll_name}')")
+        data = self.get_poll_data(poll_id)
+        if data is None:
+            game = get_game(poll_id)
+            if game is None or str(game.get("status")) != "open":
+                logging.info(f"⚠️ Нет активного опроса для закрытия poll_id={poll_id}")
+                return
+            logging.warning(
+                f"⚠️ Игра poll_id={poll_id} есть в БД, но отсутствует в памяти. Закрытие пропущено."
+            )
             return
 
-        # Берём первый (и обычно единственный) активный опрос
-        first_poll = self.get_first_poll()
-        if first_poll is None:
-            return
-
-        poll_id, data = first_poll
+        poll_name = data.poll_name_snapshot or poll_id
         logging.debug(f"Закрываем опрос: poll_id={poll_id}, chat_id={data.chat_id}")
 
         # Останавливаем опрос
@@ -708,8 +832,8 @@ class PollService:
                 f"Продолжаем обработку финального списка..."
             )
 
-        if data.poll_kind == "monthly_subscription":
-            await self._close_monthly_subscription_poll(bot, poll_name, data)
+        if data.kind == "monthly_subscription":
+            await self._close_monthly_subscription_poll(bot, poll_id, poll_name, data)
             logging.debug(f"Очистка данных опроса {poll_id}...")
             self.delete_poll(poll_id)
             self.persist_state()
@@ -783,10 +907,13 @@ class PollService:
         final_text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
 
         # Обработка списания средств для платных залов
-        await self._process_payment_deduction(bot, poll_name, yes_voters, data.subs)
+        charge_rows = await self._process_payment_deduction(
+            bot, poll_name, yes_voters, data.subs
+        )
 
         # Отправляем финальный список новым сообщением с ответом на голосовалку
         info_msg_id = data.info_msg_id
+        final_message_id: int | None = None
         try:
             logging.debug(
                 f"Отправка финального списка новым сообщением для опроса '{poll_name}'..."
@@ -805,7 +932,9 @@ class PollService:
                     parse_mode="HTML",
                 )
 
-            _ = await send_final_with_retry()
+            final_message = await send_final_with_retry()
+            final_message_id = final_message.message_id
+            data.final_message_id = final_message_id
             main_count = min(len(yes_voters), MAX_PLAYERS)
             reserve_count = max(0, min(len(yes_voters) - MAX_PLAYERS, RESERVE_PLAYERS))
             booked_count = max(0, len(yes_voters) - MAX_PLAYERS - RESERVE_PLAYERS)
@@ -853,6 +982,38 @@ class PollService:
                 f"(chat_id={data.chat_id}, reply_to={data.poll_msg_id})"
             )
 
+        participant_rows: list[dict[str, Any]] = []
+        charge_by_player = {int(row["player_id"]): row for row in charge_rows}
+        for index, voter in enumerate(yes_voters):
+            if index < MAX_PLAYERS:
+                bucket = "main"
+            elif index < MAX_PLAYERS + RESERVE_PLAYERS:
+                bucket = "reserve"
+            else:
+                bucket = "booked"
+            charge = charge_by_player.get(voter.id, {})
+            participant_rows.append(
+                {
+                    "player_id": voter.id,
+                    "roster_bucket": bucket,
+                    "sort_order": index + 1,
+                    "is_subscriber": bool(charge.get("is_subscriber", voter.id in data.subs)),
+                    "charged_amount": int(charge.get("charged_amount", 0) or 0),
+                    "charge_source": str(charge.get("charge_source", "none")),
+                    "balance_before": charge.get("balance_before"),
+                    "balance_after": charge.get("balance_after"),
+                }
+            )
+        if participant_rows:
+            save_game_participants(poll_id, participant_rows)
+
+        close_game(
+            poll_id,
+            status="closed",
+            closed_at=datetime.now(timezone.utc).isoformat(),
+            final_message_id=final_message_id,
+        )
+
         # Очищаем данные опроса
         logging.debug(f"Очистка данных опроса {poll_id}...")
         self.delete_poll(poll_id)
@@ -862,9 +1023,12 @@ class PollService:
         )
 
     async def _close_monthly_subscription_poll(
-        self, bot: Bot, poll_name: str, data: PollData
+        self, bot: Bot, poll_id: str, poll_name: str, data: PollData
     ) -> None:
         """Закрыть месячный опрос, записать подписчиков и рассчитать стоимость абонемента."""
+        persisted_votes = load_monthly_votes(poll_id)
+        if persisted_votes:
+            data.monthly_votes = persisted_votes
         option_poll_names = data.option_poll_names
         votes_by_poll: dict[str, set[int]] = {}
         for user_id, option_ids in data.monthly_votes.items():
@@ -907,6 +1071,7 @@ class PollService:
             result,
         )
 
+        final_message_id: int | None = None
         try:
 
             @retry_async(
@@ -934,7 +1099,9 @@ class PollService:
                         )
                     raise
 
-            await send_final_with_retry()
+            final_message = await send_final_with_retry()
+            final_message_id = final_message.message_id
+            data.final_message_id = final_message_id
             logging.info(
                 f"✅ Итоги голосования за абонемент отправлены для '{poll_name}'"
             )
@@ -982,6 +1149,13 @@ class PollService:
                 OSError,
             ):
                 logging.exception("❌ Не удалось отправить отчёт по абонементам админу")
+
+        close_game(
+            poll_id,
+            status="closed",
+            closed_at=datetime.now(timezone.utc).isoformat(),
+            final_message_id=final_message_id,
+        )
 
     # ── Вспомогательные методы для абонемента ────────────────────────────────
 
@@ -1112,7 +1286,7 @@ class PollService:
         poll_name: str,
         yes_voters: list[VoterInfo],
         subs: list[int],
-    ) -> None:
+    ) -> list[dict[str, Any]]:
         """
         Обработка списания средств с игроков без подписки для платных залов.
 
@@ -1130,7 +1304,7 @@ class PollService:
             logging.warning(
                 f"⚠️ Конфигурация опроса '{poll_name}' не найдена, списание пропущено"
             )
-            return
+            return []
 
         cost = poll_config.get("cost", 0)
 
@@ -1139,7 +1313,18 @@ class PollService:
             logging.info(
                 f"ℹ️ Опрос '{poll_name}' бесплатный (cost={cost}), списание не требуется"
             )
-            return
+            return [
+                {
+                    "player_id": voter.id,
+                    "name": voter.name,
+                    "is_subscriber": voter.id in subs,
+                    "charged_amount": 0,
+                    "charge_source": "none",
+                    "balance_before": None,
+                    "balance_after": None,
+                }
+                for voter in yes_voters
+            ]
 
         logging.info(
             f"💳 Начало списания для опроса '{poll_name}' (стоимость: {cost}₽)"
@@ -1148,12 +1333,24 @@ class PollService:
         # Список для статистики
         charged_players: list[dict[str, Any]] = []
         subscribed_players: list[str] = []
+        participant_finance_rows: list[dict[str, Any]] = []
 
         # Проходим по всем проголосовавшим (основной состав + запасные)
         for voter in yes_voters:
             # Проверяем, есть ли у игрока подписка
             if voter.id in subs:
                 subscribed_players.append(voter.name)
+                participant_finance_rows.append(
+                    {
+                        "player_id": voter.id,
+                        "name": voter.name,
+                        "is_subscriber": True,
+                        "charged_amount": 0,
+                        "charge_source": "subscription",
+                        "balance_before": None,
+                        "balance_after": None,
+                    }
+                )
                 logging.debug(
                     f"  ⏭️  Игрок {voter.name} (ID: {voter.id}) с подпиской, списание пропущено"
                 )
@@ -1189,6 +1386,17 @@ class PollService:
                     "new_balance": new_balance,
                 }
             )
+            participant_finance_rows.append(
+                {
+                    "player_id": voter.id,
+                    "name": voter.name,
+                    "is_subscriber": False,
+                    "charged_amount": cost,
+                    "charge_source": "single_game",
+                    "balance_before": old_balance,
+                    "balance_after": new_balance,
+                }
+            )
 
             logging.info(
                 f"  💳 Списано {cost}₽ с {voter.name} (ID: {voter.id}), "
@@ -1206,6 +1414,7 @@ class PollService:
             f"✅ Списание завершено: {len(charged_players)} игроков, "
             f"итого {total_charged}₽. С подпиской: {len(subscribed_players)}"
         )
+        return participant_finance_rows
 
     async def _send_admin_report(
         self,

@@ -8,10 +8,13 @@ from aiogram.methods import SendPoll
 
 from src.config import MAX_PLAYERS, MIN_PLAYERS
 from src.db import (
+    _connect,
     POLL_STATE_KEY,
     ensure_player,
+    get_game,
     get_player_balance,
     init_db,
+    load_monthly_votes,
     load_state,
     save_poll_template,
     update_player_balance,
@@ -145,7 +148,7 @@ class TestSendPoll:
         assert result == -1001234567890
         mock_bot.send_poll.assert_not_called()
 
-    async def test_send_poll_success(self, mock_bot):
+    async def test_send_poll_success(self, mock_bot, temp_db):
         """Тест успешной отправки опроса."""
         service = PollService()
 
@@ -172,8 +175,12 @@ class TestSendPoll:
         poll_data = service.get_poll_data("test_poll_id")
         assert poll_data is not None
         assert poll_data.yes_voters == []
+        game = get_game("test_poll_id")
+        assert game is not None
+        assert game["poll_message_id"] == 123
+        assert game["info_message_id"] == 124
 
-    async def test_send_poll_handles_migration(self, mock_bot):
+    async def test_send_poll_handles_migration(self, mock_bot, temp_db):
         """Тест обработки миграции группы в супергруппу."""
         service = PollService()
 
@@ -203,7 +210,7 @@ class TestSendPoll:
         assert result == new_chat_id
         mock_bot.send_message.assert_called_once()
 
-    async def test_send_poll_handles_general_error(self, mock_bot):
+    async def test_send_poll_handles_general_error(self, mock_bot, temp_db):
         """Тест обработки общей ошибки при отправке опроса."""
         from aiogram.exceptions import TelegramAPIError
 
@@ -367,11 +374,11 @@ class TestClosePoll:
         """Тест закрытия опроса при отсутствии активных опросов."""
         service = PollService()
 
-        await service.close_poll(mock_bot, "test_poll")
+        await service.close_poll(mock_bot, "test_poll_id")
 
         mock_bot.stop_poll.assert_not_called()
 
-    async def test_close_poll_success(self, mock_bot):
+    async def test_close_poll_success(self, mock_bot, temp_db):
         """Тест успешного закрытия опроса."""
         service = PollService()
         poll_id = "test_poll_id"
@@ -390,7 +397,7 @@ class TestClosePoll:
         mock_bot.send_message = AsyncMock()
         mock_bot.delete_message = AsyncMock()
 
-        await service.close_poll(mock_bot, "test_poll")
+        await service.close_poll(mock_bot, poll_id)
 
         mock_bot.stop_poll.assert_called_once()
         mock_bot.send_message.assert_called_once()
@@ -400,7 +407,7 @@ class TestClosePoll:
         assert call_args.kwargs["reply_to_message_id"] == 123
         assert not service.has_poll(poll_id)
 
-    async def test_close_poll_with_full_team(self, mock_bot):
+    async def test_close_poll_with_full_team(self, mock_bot, temp_db):
         """Тест закрытия опроса с полным составом."""
         service = PollService()
         poll_id = "test_poll_id"
@@ -421,7 +428,7 @@ class TestClosePoll:
         mock_bot.send_message = AsyncMock()
         mock_bot.delete_message = AsyncMock()
 
-        await service.close_poll(mock_bot, "test_poll")
+        await service.close_poll(mock_bot, poll_id)
 
         call_args = mock_bot.send_message.call_args
         assert "✅" in call_args.kwargs["text"]
@@ -645,7 +652,7 @@ class TestHtmlEscapingInPollTexts:
         assert "⭐️ — оплативший за месяц" in text
         assert "🏐 — донат на мяч" in text
 
-    async def test_close_poll_includes_legend(self, mock_bot):
+    async def test_close_poll_includes_legend(self, mock_bot, temp_db):
         """Финальный текст опроса должен содержать легенду эмодзи."""
         service = PollService()
         poll_id = "test_close_poll_legend_id"
@@ -663,7 +670,7 @@ class TestHtmlEscapingInPollTexts:
         mock_bot.send_message = AsyncMock()
         mock_bot.delete_message = AsyncMock()
 
-        await service.close_poll(mock_bot, "test_poll")
+        await service.close_poll(mock_bot, poll_id)
 
         mock_bot.send_message.assert_called_once()
         text = mock_bot.send_message.call_args.kwargs["text"]

@@ -13,7 +13,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
-from .db import clear_paid_poll_subscriptions, get_poll_templates
+from .db import (
+    clear_paid_poll_subscriptions,
+    get_open_game_by_template_id,
+    get_open_monthly_game,
+    get_poll_templates,
+)
 from .services import BotStateService, PollService
 from .types import PollTemplate
 
@@ -80,6 +85,7 @@ def create_poll_job(
     allows_multiple_answers: bool = False,
     poll_kind: str = "regular",
     option_poll_names: list[str | None] | None = None,
+    poll_template_id: int | None = None,
 ) -> Callable[[], Awaitable[None]]:
     """
     Создаёт асинхронную задачу для отправки опроса.
@@ -97,6 +103,18 @@ def create_poll_job(
     """
 
     async def job() -> None:
+        if poll_kind == "monthly_subscription" and get_open_monthly_game() is not None:
+            logging.info("ℹ️ Месячный опрос уже открыт, повторное открытие пропущено")
+            return
+        if (
+            poll_kind == "regular"
+            and poll_template_id is not None
+            and get_open_game_by_template_id(poll_template_id) is not None
+        ):
+            logging.info(
+                f"ℹ️ Опрос для шаблона {poll_template_id} уже открыт, повторное открытие пропущено"
+            )
+            return
         chat_id: int = bot_state_service.get_chat_id()
         new_chat_id: int = await poll_service.send_poll(
             bot,
@@ -109,6 +127,7 @@ def create_poll_job(
             allows_multiple_answers,
             poll_kind,
             option_poll_names,
+            poll_template_id,
         )
         if new_chat_id != chat_id:
             bot_state_service.set_chat_id(new_chat_id)
@@ -117,14 +136,16 @@ def create_poll_job(
 
 
 def create_close_poll_job(
-    bot: Bot, poll_name: str, poll_service: PollService
+    bot: Bot,
+    poll_service: PollService,
+    poll_template_id: int | None = None,
+    monthly: bool = False,
 ) -> Callable[[], Awaitable[None]]:
     """
     Создаёт асинхронную задачу для закрытия опроса.
 
     Args:
         bot: Экземпляр бота
-        poll_name: Название опроса
         poll_service: Сервис опросов
 
     Returns:
@@ -132,7 +153,18 @@ def create_close_poll_job(
     """
 
     async def job() -> None:
-        await poll_service.close_poll(bot, poll_name)
+        game = (
+            get_open_monthly_game()
+            if monthly
+            else (
+                get_open_game_by_template_id(poll_template_id)
+                if poll_template_id is not None
+                else None
+            )
+        )
+        if game is None:
+            return
+        await poll_service.close_poll(bot, str(game["poll_id"]))
 
     return job
 
@@ -157,13 +189,8 @@ def create_reminder_job(
     """
 
     async def job() -> None:
-        if not poll_service.has_active_polls():
-            return
-        first_poll = poll_service.get_first_poll()
-        if first_poll is None:
-            return
-        _, data = first_poll
-        if data.poll_kind != "monthly_subscription":
+        game = get_open_monthly_game()
+        if game is None:
             return
         chat_id: int = bot_state_service.get_chat_id()
         await bot.send_message(chat_id=chat_id, text=message)
@@ -242,7 +269,13 @@ def setup_scheduler(
         subs: list[int] = poll_config.get("subs", [])
 
         poll_job: Callable[[], Awaitable[None]] = create_poll_job(
-            bot, message, poll_name, bot_state_service, poll_service, subs
+            bot,
+            message,
+            poll_name,
+            bot_state_service,
+            poll_service,
+            subs,
+            poll_template_id=int(poll_config.get("id", 0) or 0) or None,
         )
 
         scheduler.add_job(
@@ -292,7 +325,9 @@ def setup_scheduler(
             close_trigger_kwargs["day_of_week"] = current_close_day
 
         close_job: Callable[[], Awaitable[None]] = create_close_poll_job(
-            bot, poll_name, poll_service
+            bot,
+            poll_service,
+            poll_template_id=int(poll_config.get("id", 0) or 0) or None,
         )
 
         scheduler.add_job(
@@ -473,7 +508,7 @@ def _schedule_monthly_subscription_poll(
         replace_existing=True,
     )
 
-    close_job = create_close_poll_job(bot, poll_name, poll_service)
+    close_job = create_close_poll_job(bot, poll_service, monthly=True)
     scheduler.add_job(
         close_job,
         trigger=DateTrigger(run_date=to_utc(close_moscow)),
