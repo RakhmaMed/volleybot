@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import Command
@@ -43,8 +44,8 @@ from .db import (
     get_unpaid_halls,
     load_state,
     record_hall_payment,
-    save_poll_template,
     save_monthly_vote,
+    save_poll_template,
     save_state,
     update_fund_balance,
     update_player_balance,
@@ -166,7 +167,9 @@ def _find_poll_template(
     if identifier.isdigit():
         poll_id = int(identifier)
         return (
-            next((p for p in poll_templates if int(p.get("id", 0) or 0) == poll_id), None),
+            next(
+                (p for p in poll_templates if int(p.get("id", 0) or 0) == poll_id), None
+            ),
             [],
         )
 
@@ -503,12 +506,27 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             if not players:
                 text += "💰 Все балансы на нуле. Долгов нет!"
             else:
-                text += "💰 <b>Список балансов:</b>\n\n"
-                for p in players:
-                    balance = p["balance"]
-                    player_link = format_player_link(p)
-                    icon = "🔴" if balance < 0 else "🟢"
-                    text += f"{icon} {player_link}: <b>{balance} ₽</b>\n"
+                positive_players = [p for p in players if p.get("balance", 0) > 0]
+                debtor_players = [p for p in players if p.get("balance", 0) < 0]
+
+                if positive_players:
+                    text += "🟢 <b>Положительный баланс:</b>\n\n"
+                    for p in positive_players:
+                        balance = p["balance"]
+                        player_link = format_player_link(p)
+                        text += f"🟢 {player_link}: <b>{balance} ₽</b>\n"
+                    text += "\n"
+
+                if debtor_players:
+                    text += "🔴 <b>Отрицательный баланс:</b>\n\n"
+                    for p in debtor_players:
+                        balance = p["balance"]
+                        username = str(p.get("name") or "").strip().lstrip("@")
+                        if username:
+                            debtor_ref = f"@{escape_html(username)}"
+                        else:
+                            debtor_ref = format_player_link(p)
+                        text += f"🔴 {debtor_ref}: <b>{balance} ₽</b>\n"
         else:
             # Обычный пользователь видит только свой баланс
             player = get_player_balance(user.id)
@@ -762,8 +780,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         return
                     if len(players) > 1:
                         matches = "\n".join(
-                            f"• {format_player_link(player)}"
-                            for player in players[:10]
+                            f"• {format_player_link(player)}" for player in players[:10]
                         )
                         await message.reply(
                             "❌ Найдено несколько игроков. Уточните запрос:\n"
@@ -1618,7 +1635,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         try:
             poll_template_id = int(parts[1])
         except ValueError:
-            await callback_query.answer("❌ Ошибка идентификатора зала.", show_alert=True)
+            await callback_query.answer(
+                "❌ Ошибка идентификатора зала.", show_alert=True
+            )
             return
         month = parts[2]
 
@@ -1626,9 +1645,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         poll_templates = get_poll_templates()
         hall = next((p for p in poll_templates if p["id"] == poll_template_id), None)
         if not hall:
-            await callback_query.answer(
-                "❌ Зал не найден.", show_alert=True
-            )
+            await callback_query.answer("❌ Зал не найден.", show_alert=True)
             return
         poll_name = str(hall["name"])
 

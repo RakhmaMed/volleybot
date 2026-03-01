@@ -55,9 +55,12 @@ class TestBalanceCommand:
 
         assert bot.called
         method = bot.call_args.args[0]
-        # Проверяем, что в ответе есть гиперссылки на пользователей
-        assert '<a href="https://t.me/user1">User One</a>: <b>-500 ₽</b>' in method.text
+        assert "Положительный баланс" in method.text
+        assert "Отрицательный баланс" in method.text
+        # Положительный баланс остаётся в прежнем формате с ссылкой
         assert '<a href="https://t.me/user2">User Two</a>: <b>100 ₽</b>' in method.text
+        # Задолжники отмечаются через @username
+        assert "@user1: <b>-500 ₽</b>" in method.text
 
 
 @pytest.mark.asyncio
