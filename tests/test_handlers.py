@@ -433,7 +433,7 @@ class TestPollToggleCommands:
     async def test_poll_on_by_name(
         self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
     ):
-        """Команда /poll_on должна включать шаблон по точному имени."""
+        """Команда /poll_on должна включать шаблон по имени без учёта регистра."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
 
@@ -461,7 +461,7 @@ class TestPollToggleCommands:
             date=MagicMock(),
             chat=chat,
             from_user=admin_user,
-            text="/poll_on Test Poll",
+            text="/poll_on test poll",
         )
 
         await dp.feed_update(bot, Update(update_id=11, message=message))
@@ -471,6 +471,90 @@ class TestPollToggleCommands:
         assert saved_template["enabled"] == 1
         method = bot.call_args.args[0]
         assert "теперь активен" in (method.text or "")
+
+    @patch("src.handlers.save_poll_template")
+    @patch("src.handlers.get_poll_templates")
+    async def test_poll_off_by_partial_name(
+        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
+    ):
+        """Команда /poll_off должна находить опрос по уникальной части имени."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        template = {
+            "id": 8,
+            "name": "Friday Evening Volleyball",
+            "message": "Msg",
+            "enabled": 1,
+        }
+        mock_get_templates.return_value = [template]
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=111,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="/poll_off Evening Volleyball",
+        )
+
+        await dp.feed_update(bot, Update(update_id=111, message=message))
+
+        mock_save_poll_template.assert_called_once()
+        saved_template = mock_save_poll_template.call_args.args[0]
+        assert saved_template["enabled"] == 0
+
+    @patch("src.handlers.save_poll_template")
+    @patch("src.handlers.get_poll_templates")
+    async def test_poll_off_partial_name_reports_ambiguity(
+        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
+    ):
+        """Команда должна требовать уточнение при нескольких частичных совпадениях."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_templates.return_value = [
+            {"id": 1, "name": "Friday Morning", "message": "Msg", "enabled": 1},
+            {"id": 2, "name": "Friday Evening", "message": "Msg", "enabled": 1},
+        ]
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=112,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="/poll_off Friday",
+        )
+
+        await dp.feed_update(bot, Update(update_id=112, message=message))
+
+        mock_save_poll_template.assert_not_called()
+        method = bot.call_args.args[0]
+        text = method.text or ""
+        assert "Найдено несколько опросов" in text
+        assert "1 — Friday Morning" in text
+        assert "2 — Friday Evening" in text
 
     @patch("src.handlers.save_poll_template")
     @patch("src.handlers.get_poll_templates")

@@ -149,18 +149,37 @@ def _format_poll_reference_line(template: PollTemplate) -> str:
     return f"{template_id} — {poll_name} — {_format_poll_status(template)}"
 
 
-def _find_poll_template(identifier: str) -> PollTemplate | None:
-    """Ищет шаблон опроса по id или точному имени."""
+def _find_poll_template(
+    identifier: str,
+) -> tuple[PollTemplate | None, list[PollTemplate]]:
+    """Ищет шаблон опроса по id, точному имени или уникальной подстроке."""
     poll_templates = get_poll_templates()
 
     if identifier.isdigit():
         poll_id = int(identifier)
-        return next(
-            (p for p in poll_templates if int(p.get("id", 0) or 0) == poll_id),
-            None,
+        return (
+            next((p for p in poll_templates if int(p.get("id", 0) or 0) == poll_id), None),
+            [],
         )
 
-    return next((p for p in poll_templates if str(p.get("name", "")) == identifier), None)
+    normalized_identifier = identifier.strip().casefold()
+    exact_matches = [
+        p
+        for p in poll_templates
+        if str(p.get("name", "")).strip().casefold() == normalized_identifier
+    ]
+    if len(exact_matches) == 1:
+        return exact_matches[0], []
+
+    partial_matches = [
+        p
+        for p in poll_templates
+        if normalized_identifier in str(p.get("name", "")).strip().casefold()
+    ]
+    if len(partial_matches) == 1:
+        return partial_matches[0], []
+
+    return None, partial_matches
 
 
 def register_handlers(dp: Dispatcher, bot: Bot) -> None:
@@ -655,8 +674,19 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             await message.reply("\n".join(lines), parse_mode="HTML")
             return
 
-        template = _find_poll_template(identifier)
+        template, partial_matches = _find_poll_template(identifier)
         if template is None:
+            if partial_matches:
+                lines = [
+                    f"❌ Найдено несколько опросов по запросу <code>{escape_html(identifier)}</code>.",
+                    "Уточните запрос. Подходящие варианты:",
+                ]
+                lines.extend(
+                    _format_poll_reference_line(candidate)
+                    for candidate in partial_matches
+                )
+                await message.reply("\n".join(lines), parse_mode="HTML")
+                return
             await message.reply(
                 f"❌ Опрос не найден: <code>{escape_html(identifier)}</code>",
                 parse_mode="HTML",
