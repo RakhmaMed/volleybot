@@ -7,8 +7,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
-from pathlib import Path
-
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import Command
@@ -17,7 +15,6 @@ from aiogram.types import (
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     CallbackQuery,
-    FSInputFile,
     InaccessibleMessage,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -80,13 +77,11 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="help", description="Показать справку по командам"),
         BotCommand(command="schedule", description="Показать расписание опросов"),
         BotCommand(command="balance", description="Показать мой баланс"),
-        BotCommand(command="losiento", description="Lo siento"),
     ]
 
     # Команды для администраторов (включая пользовательские)
     admin_commands = [
         BotCommand(command="help", description="Показать справку по командам"),
-        BotCommand(command="losiento", description="Lo siento"),
         BotCommand(command="schedule", description="Показать расписание опросов"),
         BotCommand(command="balance", description="Показать долги/балансы и кассу"),
         BotCommand(command="subs", description="Абонементы по дням"),
@@ -160,17 +155,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 await message.answer_video(video_list[index])
                 save_state("video_losiento_index", index + 1)
             else:
-                video_path = Path(__file__).parent.parent / "data" / "losiento.mp4"
-                if video_path.exists():
-                    video = FSInputFile(str(video_path))
-                    sent_message = await message.answer_video(
-                        video, request_timeout=120
-                    )
-                    if sent_message.video:
-                        save_state("video_losiento_list", [sent_message.video.file_id])
-                        save_state("video_losiento_index", 1)
-                else:
-                    await message.answer("😔 Видео losiento пока нет.")
+                await message.answer("😔 Видео losiento пока нет.")
         except Exception:
             logging.exception("❌ Ошибка при отправке видео losiento")
 
@@ -1461,33 +1446,6 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         user = message.from_user
         username = f"@{user.username}" if user and user.username else "unknown"
         user_id = user.id if user else "unknown"
-
-        # Если в бота прислали видео, сохраняем его в соответствующий список
-        if message.video:
-            file_id = message.video.file_id
-            caption = (message.caption or "").lower()
-
-            # Определяем, в какой список добавить
-            if "gay" in caption:
-                key = "video_gay_list"
-                label = "gay"
-            else:
-                key = "video_losiento_list"
-                label = "losiento"
-
-            video_list = load_state(key, [])
-
-            if file_id not in video_list:
-                video_list.append(file_id)
-                save_state(key, video_list)
-                logging.info(
-                    f"✅ Добавлено новое видео ({label}) от {username}. Всего в списке: {len(video_list)}"
-                )
-                await message.reply(
-                    f"✅ Видео добавлено в очередь {label}! Всего видео: {len(video_list)}"
-                )
-            else:
-                await message.reply(f"⚠️ Это видео уже есть в списке {label}.")
 
         logging.debug(
             "📨 Сообщение: id=%s, chat_id=%s, от=%s (ID: %s), тип=%s, текст=%r",
