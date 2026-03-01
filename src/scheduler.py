@@ -33,6 +33,7 @@ def get_monthly_subscription_poll_params() -> (
     paid_polls = [
         p for p in poll_templates
         if int(cast(int, p.get("cost") or 0)) > 0
+        and int(cast(int, p.get("enabled", 1) or 0)) == 1
     ]
     if not paid_polls:
         return None
@@ -186,14 +187,32 @@ def setup_scheduler(
         poll_service: Сервис опросов
     """
     poll_templates = get_poll_templates()
+    enabled_poll_templates = [
+        poll for poll in poll_templates if int(poll.get("enabled", 1) or 0) == 1
+    ]
+    disabled_count = len(poll_templates) - len(enabled_poll_templates)
 
     if not poll_templates:
         logging.warning("⚠️ Расписание опросов не найдено в базе данных.")
         return
 
-    logging.info(f"⏰ Настройка планировщика ({len(poll_templates)} опросов):")
+    if not enabled_poll_templates:
+        logging.warning(
+            "⚠️ Все шаблоны опросов выключены. "
+            f"Найдено: {len(poll_templates)}, включено: 0, выключено: {disabled_count}"
+        )
+        _schedule_monthly_subscription_poll(
+            scheduler, bot, bot_state_service, poll_service, enabled_poll_templates
+        )
+        return
 
-    for idx, poll_config in enumerate(poll_templates):
+    logging.info(
+        "⏰ Настройка планировщика: "
+        f"всего={len(poll_templates)}, включено={len(enabled_poll_templates)}, "
+        f"выключено={disabled_count}"
+    )
+
+    for idx, poll_config in enumerate(enabled_poll_templates):
         poll_name: str = poll_config["name"]
         message: str = poll_config["message"]
 
@@ -293,10 +312,12 @@ def setup_scheduler(
                 f"  🔒 ЗАКРЫТИЕ: {current_close_day.upper()} {close_hour_utc:02d}:{close_minute_utc:02d} UTC (игра {game_day.upper()} в {game_hour_utc:02d}:{game_minute_utc:02d}) - {poll_name}"
             )
 
-    logging.info(f"✅ Планировщик настроен: {len(poll_templates) * 2} задач добавлено")
+    logging.info(
+        f"✅ Планировщик настроен: {len(enabled_poll_templates) * 2} задач добавлено"
+    )
 
     _schedule_monthly_subscription_poll(
-        scheduler, bot, bot_state_service, poll_service, poll_templates
+        scheduler, bot, bot_state_service, poll_service, enabled_poll_templates
     )
 
 
@@ -319,8 +340,7 @@ def _schedule_monthly_subscription_poll(
 
     _question, _options, _option_poll_names = params
     paid_polls = [
-        p for p in poll_templates
-        if int(cast(int, p.get("cost") or 0)) > 0
+        p for p in poll_templates if int(cast(int, p.get("cost") or 0)) > 0
     ]
 
     moscow_tz = ZoneInfo("Europe/Moscow")

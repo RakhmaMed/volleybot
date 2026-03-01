@@ -6,7 +6,12 @@ import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from src.db import init_db
-from src.scheduler import create_close_poll_job, create_poll_job, setup_scheduler
+from src.scheduler import (
+    create_close_poll_job,
+    create_poll_job,
+    get_monthly_subscription_poll_params,
+    setup_scheduler,
+)
 from src.services import BotStateService, PollService
 
 
@@ -105,6 +110,7 @@ class TestSetupScheduler:
                 "game_hour_utc": 10,
                 "game_minute_utc": 0,
                 "subs": [],
+                "enabled": 1,
             }
         ]
 
@@ -114,6 +120,50 @@ class TestSetupScheduler:
             # Проверяем, что задачи добавлены
             jobs = scheduler.get_jobs()
             assert len(jobs) == 2  # Одна задача открытия, одна закрытия
+
+    def test_setup_scheduler_skips_disabled_templates(self, temp_db):
+        """Планировщик не должен создавать jobs для выключенных шаблонов."""
+        init_db()
+        scheduler = AsyncIOScheduler(timezone="UTC")
+        bot = MagicMock()
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
+
+        test_polls = [
+            {
+                "name": "enabled_poll",
+                "message": "Enabled",
+                "open_day": "mon",
+                "open_hour_utc": 10,
+                "open_minute_utc": 0,
+                "game_day": "mon",
+                "game_hour_utc": 12,
+                "game_minute_utc": 0,
+                "enabled": 1,
+            },
+            {
+                "name": "disabled_poll",
+                "message": "Disabled",
+                "open_day": "tue",
+                "open_hour_utc": 10,
+                "open_minute_utc": 0,
+                "game_day": "tue",
+                "game_hour_utc": 12,
+                "game_minute_utc": 0,
+                "enabled": 0,
+            },
+        ]
+
+        with patch("src.scheduler.get_poll_templates", return_value=test_polls):
+            setup_scheduler(scheduler, bot, bot_state_service, poll_service)
+
+        jobs = scheduler.get_jobs()
+        assert len(jobs) == 2
+        job_names = {job.name for job in jobs}
+        assert "enabled_poll (открытие)" in job_names
+        assert "enabled_poll (закрытие)" in job_names
+        assert "disabled_poll (открытие)" not in job_names
+        assert "disabled_poll (закрытие)" not in job_names
 
     def test_setup_scheduler_with_empty_db(self, temp_db):
         """Тест настройки планировщика при отсутствии опросов в БД."""
@@ -153,6 +203,7 @@ class TestSetupScheduler:
                 "game_day": "wed",
                 "game_hour_utc": 18,
                 "game_minute_utc": 0,
+                "enabled": 1,
             },
             # 2. Переход через полночь: 00:15 -> 23:45 (предыдущий день)
             {
@@ -164,6 +215,7 @@ class TestSetupScheduler:
                 "game_day": "tue",
                 "game_hour_utc": 0,
                 "game_minute_utc": 15,
+                "enabled": 1,
             },
             # 3. Переход через начало недели: Mon 00:20 -> Sun 23:50
             {
@@ -175,6 +227,7 @@ class TestSetupScheduler:
                 "game_day": "mon",
                 "game_hour_utc": 0,
                 "game_minute_utc": 20,
+                "enabled": 1,
             },
         ]
 
@@ -198,3 +251,63 @@ class TestSetupScheduler:
             assert "normal (закрытие)" in jobs
             assert "midnight_crossover (закрытие)" in jobs
             assert "week_crossover (закрытие)" in jobs
+
+
+class TestMonthlySubscriptionScheduler:
+    """Тесты фильтрации платных выключенных опросов."""
+
+    def test_monthly_params_include_only_enabled_paid_polls(self):
+        """Параметры месячного опроса включают только enabled платные шаблоны."""
+        test_polls = [
+            {
+                "name": "Enabled Paid",
+                "place": "Hall A",
+                "game_hour_utc": 18,
+                "game_minute_utc": 0,
+                "cost": 100,
+                "enabled": 1,
+            },
+            {
+                "name": "Disabled Paid",
+                "place": "Hall B",
+                "game_hour_utc": 19,
+                "game_minute_utc": 0,
+                "cost": 150,
+                "enabled": 0,
+            },
+            {
+                "name": "Enabled Free",
+                "place": "Hall C",
+                "game_hour_utc": 20,
+                "game_minute_utc": 0,
+                "cost": 0,
+                "enabled": 1,
+            },
+        ]
+
+        with patch("src.scheduler.get_poll_templates", return_value=test_polls):
+            params = get_monthly_subscription_poll_params()
+
+        assert params is not None
+        _, options, option_poll_names = params
+        assert any("Enabled Paid" in option for option in options)
+        assert all("Disabled Paid" not in option for option in options)
+        assert option_poll_names == ["Enabled Paid", None]
+
+    def test_monthly_params_return_none_when_all_paid_polls_disabled(self):
+        """Если все платные опросы выключены, месячный опрос не строится."""
+        test_polls = [
+            {
+                "name": "Disabled Paid",
+                "place": "Hall B",
+                "game_hour_utc": 19,
+                "game_minute_utc": 0,
+                "cost": 150,
+                "enabled": 0,
+            }
+        ]
+
+        with patch("src.scheduler.get_poll_templates", return_value=test_polls):
+            params = get_monthly_subscription_poll_params()
+
+        assert params is None

@@ -25,6 +25,7 @@ class PollTemplate(PollTemplateRequired, total=False):
     place: str  # Место проведения
     cost: int  # Стоимость одной игры
     monthly_cost: int  # Стоимость аренды зала за месяц
+    enabled: int  # 1 = шаблон включён, 0 = выключен
     created_at: str  # Время создания
     updated_at: str  # Время последнего обновления
     subs: list[int]  # Список user_id подписчиков (добавляется в get_poll_templates)

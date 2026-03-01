@@ -332,6 +332,312 @@ class TestSubsCommand:
         text = method.text or ""
         assert "📅 Шаблоны опросов не найдены." in text
 
+    @patch("src.handlers.get_poll_templates")
+    @patch("src.handlers.get_all_players")
+    async def test_subs_command_marks_disabled_poll(
+        self, mock_get_players, mock_get_templates, admin_user, admin_service
+    ):
+        """Выключенные шаблоны должны помечаться в /subs."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_templates.return_value = [
+            {
+                "name": "Disabled Poll",
+                "place": "Main Hall",
+                "game_day": "mon",
+                "game_hour_utc": 18,
+                "game_minute_utc": 15,
+                "subs": [],
+                "enabled": 0,
+            }
+        ]
+        mock_get_players.return_value = []
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=4,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="/subs",
+        )
+
+        await dp.feed_update(bot, Update(update_id=4, message=message))
+
+        method = bot.call_args.args[0]
+        text = method.text or ""
+        assert "⏸️ выключен" in text
+
+
+@pytest.mark.asyncio
+class TestPollToggleCommands:
+    """Тесты команд /poll_off и /poll_on."""
+
+    @patch("src.handlers.save_poll_template")
+    @patch("src.handlers.get_poll_templates")
+    async def test_poll_off_by_id(
+        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
+    ):
+        """Команда /poll_off должна выключать шаблон по id."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        template = {
+            "id": 3,
+            "name": "Friday Poll",
+            "message": "Msg",
+            "enabled": 1,
+        }
+        mock_get_templates.return_value = [template]
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=10,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="/poll_off 3",
+        )
+
+        await dp.feed_update(bot, Update(update_id=10, message=message))
+
+        mock_save_poll_template.assert_called_once()
+        saved_template = mock_save_poll_template.call_args.args[0]
+        assert saved_template["enabled"] == 0
+        method = bot.call_args.args[0]
+        assert "теперь ⏸️ выключен" in (method.text or "")
+
+    @patch("src.handlers.save_poll_template")
+    @patch("src.handlers.get_poll_templates")
+    async def test_poll_on_by_name(
+        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
+    ):
+        """Команда /poll_on должна включать шаблон по точному имени."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        template = {
+            "id": 7,
+            "name": "Test Poll",
+            "message": "Msg",
+            "enabled": 0,
+        }
+        mock_get_templates.return_value = [template]
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=11,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="/poll_on Test Poll",
+        )
+
+        await dp.feed_update(bot, Update(update_id=11, message=message))
+
+        mock_save_poll_template.assert_called_once()
+        saved_template = mock_save_poll_template.call_args.args[0]
+        assert saved_template["enabled"] == 1
+        method = bot.call_args.args[0]
+        assert "теперь активен" in (method.text or "")
+
+    @patch("src.handlers.save_poll_template")
+    @patch("src.handlers.get_poll_templates")
+    async def test_poll_off_without_args_shows_hint(
+        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
+    ):
+        """Команда без аргументов должна показать подсказку и список шаблонов."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_templates.return_value = [
+            {"id": 1, "name": "Monday", "message": "Msg", "enabled": 1},
+            {"id": 2, "name": "Friday", "message": "Msg", "enabled": 0},
+        ]
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=12,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="/poll_off",
+        )
+
+        await dp.feed_update(bot, Update(update_id=12, message=message))
+
+        mock_save_poll_template.assert_not_called()
+        method = bot.call_args.args[0]
+        text = method.text or ""
+        assert "Укажите ID или точное название опроса" in text
+        assert "1 — Monday — активен" in text
+        assert "2 — Friday — ⏸️ выключен" in text
+
+    @patch("src.handlers.save_poll_template")
+    @patch("src.handlers.get_poll_templates")
+    async def test_poll_off_already_disabled(
+        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
+    ):
+        """Повторное выключение должно отвечать без ошибки и без сохранения."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_templates.return_value = [
+            {"id": 5, "name": "Disabled Poll", "message": "Msg", "enabled": 0}
+        ]
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=13,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="/poll_off 5",
+        )
+
+        await dp.feed_update(bot, Update(update_id=13, message=message))
+
+        mock_save_poll_template.assert_not_called()
+        method = bot.call_args.args[0]
+        assert "уже ⏸️ выключен" in (method.text or "")
+
+    @patch("src.handlers.get_poll_templates")
+    async def test_poll_off_as_regular_user(
+        self, mock_get_templates, regular_user, admin_service
+    ):
+        """Команда /poll_off недоступна обычному пользователю."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_templates.return_value = [
+            {"id": 3, "name": "Friday Poll", "message": "Msg", "enabled": 1}
+        ]
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=14,
+            date=MagicMock(),
+            chat=chat,
+            from_user=regular_user,
+            text="/poll_off 3",
+        )
+
+        await dp.feed_update(bot, Update(update_id=14, message=message))
+
+        assert not bot.called
+
+    async def test_schedule_marks_disabled_poll(self, regular_user, admin_service):
+        """Команда /schedule должна помечать выключенный опрос."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": bot_state_service,
+                "poll_service": poll_service,
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        polls = [
+            {
+                "id": 1,
+                "name": "Test Poll",
+                "place": "Test Place",
+                "message": "Test Message",
+                "open_day": "mon",
+                "open_hour_utc": 10,
+                "open_minute_utc": 0,
+                "game_day": "tue",
+                "game_hour_utc": 15,
+                "game_minute_utc": 30,
+                "subs": [],
+                "enabled": 0,
+            }
+        ]
+
+        chat = Chat(id=123, type="private")
+        message = Message(
+            message_id=15,
+            date=datetime.now(),
+            chat=chat,
+            from_user=regular_user,
+            text="/schedule",
+        )
+        update = Update(update_id=15, message=message)
+
+        with patch("src.handlers.get_poll_templates", return_value=polls):
+            await dp.feed_update(bot, update)
+
+        method = bot.call_args.args[0]
+        assert "⏸️ выключен" in (method.text or "")
+
 
 @pytest.mark.asyncio
 class TestChatIdCommand:

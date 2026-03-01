@@ -17,7 +17,7 @@ from .types import PollTemplate
 BOT_STATE_KEY = "bot_state"
 POLL_STATE_KEY = "poll_state"
 FUND_BALANCE_KEY = "fund_balance"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _get_db_path() -> str:
@@ -82,6 +82,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if user_version < 3:
         _migrate_to_v3(conn)
         user_version = 3
+    if user_version < 4:
+        _migrate_to_v4(conn)
+        user_version = 4
 
     if user_version != SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -96,7 +99,10 @@ def _bootstrap_schema(conn: sqlite3.Connection) -> None:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")}
         if "id" in columns:
             _create_indexes(conn)
-            conn.execute("PRAGMA user_version = 3")
+            if "enabled" in columns:
+                conn.execute("PRAGMA user_version = 4")
+            else:
+                conn.execute("PRAGMA user_version = 3")
             return
         if "monthly_cost" in columns:
             conn.execute("PRAGMA user_version = 2")
@@ -104,8 +110,8 @@ def _bootstrap_schema(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA user_version = 1")
         return
 
-    _create_schema_v3(conn)
-    conn.execute("PRAGMA user_version = 3")
+    _create_schema_v4(conn)
+    conn.execute("PRAGMA user_version = 4")
 
 
 def _migrate_to_v2(conn: sqlite3.Connection) -> None:
@@ -117,7 +123,7 @@ def _migrate_to_v2(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA user_version = 2")
 
 
-def _create_schema_v3(conn: sqlite3.Connection) -> None:
+def _create_schema_v4(conn: sqlite3.Connection) -> None:
     """Создаёт актуальную схему данных опросов и финансов."""
     conn.execute(
         """
@@ -134,6 +140,7 @@ def _create_schema_v3(conn: sqlite3.Connection) -> None:
             game_minute_utc INTEGER NOT NULL DEFAULT 0 CHECK (game_minute_utc BETWEEN 0 AND 59),
             cost INTEGER NOT NULL DEFAULT 0 CHECK (cost >= 0),
             monthly_cost INTEGER NOT NULL DEFAULT 0 CHECK (monthly_cost >= 0),
+            enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             CHECK (open_day IN ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', '*')),
@@ -353,6 +360,17 @@ def _migrate_to_v3(conn: sqlite3.Connection) -> None:
     except Exception:
         conn.execute("PRAGMA foreign_keys = ON")
         raise
+
+
+def _migrate_to_v4(conn: sqlite3.Connection) -> None:
+    """Добавляет признак включённости шаблона опроса."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")}
+    if "enabled" not in columns:
+        conn.execute(
+            "ALTER TABLE poll_templates ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))"
+        )
+        logging.info("✅ Миграция: добавлен столбец enabled в poll_templates")
+    conn.execute("PRAGMA user_version = 4")
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -629,8 +647,8 @@ def save_poll_template(template: dict[str, Any]) -> None:
                 """
                 INSERT INTO poll_templates (
                     name, place, message, open_day, open_hour_utc, open_minute_utc,
-                    game_day, game_hour_utc, game_minute_utc, cost, monthly_cost
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    game_day, game_hour_utc, game_minute_utc, cost, monthly_cost, enabled
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                     place = excluded.place,
                     message = excluded.message,
@@ -642,6 +660,7 @@ def save_poll_template(template: dict[str, Any]) -> None:
                     game_minute_utc = excluded.game_minute_utc,
                     cost = excluded.cost,
                     monthly_cost = excluded.monthly_cost,
+                    enabled = excluded.enabled,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -656,6 +675,7 @@ def save_poll_template(template: dict[str, Any]) -> None:
                     template.get("game_minute_utc", 0),
                     template.get("cost", 0),
                     template.get("monthly_cost", 0),
+                    template.get("enabled", 1),
                 ),
             )
             row = conn.execute(

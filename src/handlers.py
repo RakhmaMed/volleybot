@@ -38,6 +38,7 @@ from .db import (
     get_unpaid_halls,
     load_state,
     record_hall_payment,
+    save_poll_template,
     save_state,
     update_fund_balance,
     update_player_balance,
@@ -93,6 +94,8 @@ async def setup_bot_commands(bot: Bot) -> None:
             command="close_monthly", description="Тест: закрыть опрос абонемента"
         ),
         BotCommand(command="player", description="Подробная информация об игроках"),
+        BotCommand(command="poll_off", description="Выключить опрос из расписания"),
+        BotCommand(command="poll_on", description="Включить опрос в расписание"),
         BotCommand(command="start", description="Включить бота"),
         BotCommand(command="stop", description="Выключить бота"),
         BotCommand(command="webhookinfo", description="Статус webhook"),
@@ -127,6 +130,37 @@ def _format_player_detail(p: dict) -> str:
     ball = "да" if p.get("ball_donate") else "нет"
     lines.append(f"🏐 Донат: {ball}")
     return "\n".join(lines)
+
+
+def _is_poll_enabled(template: PollTemplate) -> bool:
+    """Возвращает признак активности шаблона опроса."""
+    return int(template.get("enabled", 1) or 0) == 1
+
+
+def _format_poll_status(template: PollTemplate) -> str:
+    """Форматирует статус шаблона опроса для UI."""
+    return "активен" if _is_poll_enabled(template) else "⏸️ выключен"
+
+
+def _format_poll_reference_line(template: PollTemplate) -> str:
+    """Форматирует строку шаблона для подсказок в командах управления."""
+    template_id = template.get("id", "?")
+    poll_name = escape_html(str(template.get("name") or "Без названия"))
+    return f"{template_id} — {poll_name} — {_format_poll_status(template)}"
+
+
+def _find_poll_template(identifier: str) -> PollTemplate | None:
+    """Ищет шаблон опроса по id или точному имени."""
+    poll_templates = get_poll_templates()
+
+    if identifier.isdigit():
+        poll_id = int(identifier)
+        return next(
+            (p for p in poll_templates if int(p.get("id", 0) or 0) == poll_id),
+            None,
+        )
+
+    return next((p for p in poll_templates if str(p.get("name", "")) == identifier), None)
 
 
 def register_handlers(dp: Dispatcher, bot: Bot) -> None:
@@ -323,6 +357,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "/restore [имя] [сумма] — найти игрока и восстановить баланс\n"
             "/player — список всех игроков с подробной информацией\n"
             "/player [имя] — информация об одном игроке (по имени, @username или ID)\n"
+            "/poll_off [id|name] — выключить опрос из расписания\n"
+            "/poll_on [id|name] — включить опрос в расписание\n"
             "/start — включить бота\n"
             "/stop — выключить бота\n\n"
             "<b>Как пользоваться:</b>\n"
@@ -386,8 +422,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
             place = str(poll.get("place") or "")
             place_info = f" ({place})" if place else ""
+            status_info = "" if _is_poll_enabled(poll) else " ⏸️ выключен"
 
-            schedule_text += f"{game_day} {msk_hour:02d}:{msk_minute:02d}{place_info}\n"
+            schedule_text += (
+                f"{game_day} {msk_hour:02d}:{msk_minute:02d}{place_info}{status_info}\n"
+            )
 
         schedule_text += (
             "\n<i>ℹ️ Опрос начинается за день до игры в 19:00 "
@@ -547,6 +586,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     label = f"{label} ({time_text})"
                 if place:
                     label = f"{label} — {escape_html(place)}"
+                if not _is_poll_enabled(template):
+                    label = f"{label} — ⏸️ выключен"
 
                 subs = template.get("subs") or []
                 subs_links: list[str] = []
@@ -585,6 +626,76 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             logging.warning(
                 f"⚠️ Сетевая ошибка при ответе на /subs от @{user.username if user else 'unknown'}"
             )
+
+    async def _set_poll_enabled(message: Message, enabled: bool) -> None:
+        """Переключает состояние шаблона опроса по id или имени."""
+        user = message.from_user
+        if user is None:
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+        if not is_admin:
+            return
+
+        raw_text = (message.text or "").strip()
+        identifier = raw_text.split(maxsplit=1)[1].strip() if " " in raw_text else ""
+        poll_templates = get_poll_templates()
+
+        if not identifier:
+            lines = [
+                "❌ Укажите ID или точное название опроса.",
+                "Примеры: <code>/poll_off 3</code>, <code>/poll_on Пятница</code>",
+                "",
+                "<b>Доступные опросы:</b>",
+            ]
+            lines.extend(
+                _format_poll_reference_line(template) for template in poll_templates
+            )
+            await message.reply("\n".join(lines), parse_mode="HTML")
+            return
+
+        template = _find_poll_template(identifier)
+        if template is None:
+            await message.reply(
+                f"❌ Опрос не найден: <code>{escape_html(identifier)}</code>",
+                parse_mode="HTML",
+            )
+            return
+
+        poll_name = str(template.get("name") or "Без названия")
+        current_enabled = _is_poll_enabled(template)
+        desired_status = "активен" if enabled else "⏸️ выключен"
+
+        if current_enabled == enabled:
+            await message.reply(
+                f"ℹ️ Опрос <b>{escape_html(poll_name)}</b> (ID: {template.get('id')}) уже {desired_status}.",
+                parse_mode="HTML",
+            )
+            return
+
+        template["enabled"] = 1 if enabled else 0
+        save_poll_template(template)
+
+        result_lines = [
+            f"✅ Опрос <b>{escape_html(poll_name)}</b> (ID: {template.get('id')}) теперь {desired_status}.",
+        ]
+        if not enabled:
+            result_lines.append(
+                "Изменение повлияет на следующие плановые открытия после перезапуска или пересоздания расписания."
+            )
+
+        await message.reply("\n".join(result_lines), parse_mode="HTML")
+
+    @router.message(Command("poll_off"))
+    async def poll_off_handler(message: Message) -> None:
+        """Выключает шаблон опроса из расписания."""
+        await _set_poll_enabled(message, enabled=False)
+
+    @router.message(Command("poll_on"))
+    async def poll_on_handler(message: Message) -> None:
+        """Включает шаблон опроса в расписание."""
+        await _set_poll_enabled(message, enabled=True)
 
     @router.message(Command("open_monthly"))
     async def open_monthly_handler(message: Message) -> None:

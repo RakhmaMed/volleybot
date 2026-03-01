@@ -27,6 +27,7 @@ class TestDBPolls:
                 row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")
             }
             assert "id" in columns
+            assert "enabled" in columns
             sub_columns = {
                 row[1] for row in conn.execute("PRAGMA table_info(poll_subscriptions)")
             }
@@ -64,8 +65,24 @@ class TestDBPolls:
         assert templates[0]["name"] == "Test Poll"
         assert templates[0]["message"] == "Test Message"
         assert templates[0]["open_day"] == "mon"
+        assert templates[0]["enabled"] == 1
         assert "subs" in templates[0]
         assert set(templates[0]["subs"]) == {123, 456}
+
+    def test_save_and_get_poll_templates_with_enabled_flag(self, temp_db):
+        """Проверка сохранения признака enabled у шаблона."""
+        init_db()
+        template = {
+            "name": "Disabled Poll",
+            "message": "Disabled Message",
+            "enabled": 0,
+        }
+        save_poll_template(template)
+
+        templates = get_poll_templates()
+        assert len(templates) == 1
+        assert templates[0]["name"] == "Disabled Poll"
+        assert templates[0]["enabled"] == 0
 
     def test_update_poll_template(self, temp_db):
         """Проверка обновления существующего шаблона опроса."""
@@ -220,6 +237,7 @@ class TestDBPolls:
             assert template is not None
             assert template["id"] is not None
             assert template["monthly_cost"] == 0
+            assert template["enabled"] == 1
             assert template["created_at"] == "2026-02-01 12:00:00"
 
             subscription = conn.execute(
@@ -236,3 +254,75 @@ class TestDBPolls:
             assert tx is not None
             assert tx["poll_template_id"] == template["id"]
             assert tx["poll_name_snapshot"] == "Legacy Poll"
+
+    def test_migrates_v3_schema_to_v4_with_enabled_default(self, temp_db):
+        """Схема v3 обновляется до v4 с enabled=1 для существующих записей."""
+        with _connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE players (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    fullname TEXT,
+                    ball_donate INTEGER DEFAULT 0,
+                    balance INTEGER DEFAULT 0,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE poll_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    place TEXT,
+                    message TEXT NOT NULL,
+                    open_day TEXT NOT NULL DEFAULT '*',
+                    open_hour_utc INTEGER NOT NULL DEFAULT 0,
+                    open_minute_utc INTEGER NOT NULL DEFAULT 0,
+                    game_day TEXT NOT NULL DEFAULT '*',
+                    game_hour_utc INTEGER NOT NULL DEFAULT 0,
+                    game_minute_utc INTEGER NOT NULL DEFAULT 0,
+                    cost INTEGER NOT NULL DEFAULT 0,
+                    monthly_cost INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE poll_subscriptions (
+                    poll_template_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    PRIMARY KEY (poll_template_id, user_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO poll_templates (
+                    name, message, open_day, open_hour_utc, open_minute_utc,
+                    game_day, game_hour_utc, game_minute_utc, cost, monthly_cost
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("Existing Poll", "Msg", "mon", 10, 0, "tue", 18, 0, 100, 4000),
+            )
+            conn.execute("PRAGMA user_version = 3")
+            conn.commit()
+
+        init_db()
+
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")
+            }
+            assert "enabled" in columns
+
+            row = conn.execute(
+                "SELECT enabled FROM poll_templates WHERE name = ?",
+                ("Existing Poll",),
+            ).fetchone()
+            assert row is not None
+            assert row["enabled"] == 1
