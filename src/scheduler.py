@@ -14,6 +14,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
 from .db import (
+    cleanup_old_backups,
     clear_paid_poll_subscriptions,
     get_open_game_by_template_id,
     get_open_monthly_game,
@@ -218,6 +219,14 @@ def setup_scheduler(
         poll for poll in poll_templates if int(poll.get("enabled", 1) or 0) == 1
     ]
     disabled_count = len(poll_templates) - len(enabled_poll_templates)
+
+    scheduler.add_job(
+        cleanup_old_backups,
+        trigger=CronTrigger(hour=0, minute=15, timezone="UTC"),
+        id="backup_cleanup",
+        name="Бэкапы (очистка)",
+        replace_existing=True,
+    )
 
     if not poll_templates:
         logging.warning("⚠️ Расписание опросов не найдено в базе данных.")

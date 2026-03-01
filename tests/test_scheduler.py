@@ -125,7 +125,7 @@ class TestSetupScheduler:
 
             # Проверяем, что задачи добавлены
             jobs = scheduler.get_jobs()
-            assert len(jobs) == 2  # Одна задача открытия, одна закрытия
+            assert len(jobs) == 3  # Открытие, закрытие и очистка старых бэкапов
 
     def test_setup_scheduler_skips_disabled_templates(self, temp_db):
         """Планировщик не должен создавать jobs для выключенных шаблонов."""
@@ -164,12 +164,13 @@ class TestSetupScheduler:
             setup_scheduler(scheduler, bot, bot_state_service, poll_service)
 
         jobs = scheduler.get_jobs()
-        assert len(jobs) == 2
+        assert len(jobs) == 3
         job_names = {job.name for job in jobs}
         assert "enabled_poll (открытие)" in job_names
         assert "enabled_poll (закрытие)" in job_names
         assert "disabled_poll (открытие)" not in job_names
         assert "disabled_poll (закрытие)" not in job_names
+        assert "Бэкапы (очистка)" in job_names
 
     def test_setup_scheduler_with_empty_db(self, temp_db):
         """Тест настройки планировщика при отсутствии опросов в БД."""
@@ -183,7 +184,8 @@ class TestSetupScheduler:
             setup_scheduler(scheduler, bot, bot_state_service, poll_service)
 
             jobs = scheduler.get_jobs()
-            assert len(jobs) == 0
+            assert len(jobs) == 1
+            assert jobs[0].name == "Бэкапы (очистка)"
 
     def test_setup_scheduler_poll_closure_timing(
         self, caplog: pytest.LogCaptureFixture, temp_db

@@ -27,6 +27,7 @@ from ..config import (
 from ..db import (
     POLL_STATE_KEY,
     add_transaction,
+    create_backup,
     close_game,
     create_game,
     ensure_player,
@@ -802,6 +803,12 @@ class PollService:
 
         poll_name = data.poll_name_snapshot or poll_id
         logging.debug(f"Закрываем опрос: poll_id={poll_id}, chat_id={data.chat_id}")
+        backup_reason = (
+            "monthly_poll_finalize"
+            if data.kind == "monthly_subscription"
+            else "daily_poll_finalize"
+        )
+        create_backup(backup_reason)
 
         # Останавливаем опрос
         try:

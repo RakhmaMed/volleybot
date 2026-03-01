@@ -8,6 +8,7 @@ import os
 import sqlite3
 from collections import defaultdict
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ BOT_STATE_KEY = "bot_state"
 POLL_STATE_KEY = "poll_state"
 FUND_BALANCE_KEY = "fund_balance"
 SCHEMA_VERSION = 5
+BACKUP_RETENTION_DAYS = 10
 
 
 def _get_db_path() -> str:
@@ -26,6 +28,89 @@ def _get_db_path() -> str:
     if override:
         return override
     return str(Path(__file__).parent.parent / "data" / "volleybot.db")
+
+
+def _get_backup_dir(db_path: str | None = None) -> Path | None:
+    """Возвращает директорию для бэкапов рядом с основной БД."""
+    resolved_db_path = db_path or _get_db_path()
+    if resolved_db_path == ":memory:":
+        return None
+    return Path(resolved_db_path).resolve().parent / "backups"
+
+
+def _sanitize_backup_reason(reason: str) -> str:
+    """Нормализует причину бэкапа для имени файла."""
+    normalized = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_"
+        for char in reason.strip().lower()
+    )
+    normalized = normalized.strip("_")
+    return normalized or "manual"
+
+
+def create_backup(reason: str) -> Path | None:
+    """Создаёт snapshot SQLite БД и возвращает путь к файлу бэкапа."""
+    db_path = _get_db_path()
+    backup_dir = _get_backup_dir(db_path)
+    if db_path == ":memory:" or backup_dir is None:
+        logging.debug("ℹ️ Бэкап пропущен: используется in-memory БД")
+        return None
+
+    source_path = Path(db_path)
+    if not source_path.exists():
+        logging.warning("⚠️ Бэкап пропущен: файл БД ещё не создан")
+        return None
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = backup_dir / f"{timestamp}_{_sanitize_backup_reason(reason)}.sqlite3"
+
+    try:
+        source_conn = sqlite3.connect(str(source_path))
+        dest_conn = sqlite3.connect(str(backup_path))
+        try:
+            source_conn.backup(dest_conn)
+        finally:
+            dest_conn.close()
+            source_conn.close()
+        logging.info(f"🗄️ Создан бэкап БД: {backup_path}")
+        return backup_path
+    except sqlite3.Error:
+        logging.exception(f"❌ Не удалось создать бэкап БД для события '{reason}'")
+        try:
+            backup_path.unlink(missing_ok=True)
+        except OSError:
+            logging.exception("❌ Не удалось удалить повреждённый файл бэкапа")
+        return None
+
+
+def cleanup_old_backups(
+    retention_days: int = BACKUP_RETENTION_DAYS,
+    now: datetime | None = None,
+) -> int:
+    """Удаляет бэкапы старше retention_days и возвращает число удалённых файлов."""
+    backup_dir = _get_backup_dir()
+    if backup_dir is None or not backup_dir.exists():
+        return 0
+
+    current_time = now or datetime.now(timezone.utc)
+    cutoff = current_time - timedelta(days=retention_days)
+    deleted = 0
+
+    for path in backup_dir.glob("*.sqlite3"):
+        try:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            if mtime < cutoff:
+                path.unlink()
+                deleted += 1
+        except OSError:
+            logging.exception(f"❌ Не удалось обработать файл бэкапа: {path}")
+
+    if deleted:
+        logging.info(
+            f"🧹 Удалены старые бэкапы: {deleted} шт. старше {retention_days} дней"
+        )
+    return deleted
 
 
 def init_db() -> None:

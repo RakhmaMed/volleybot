@@ -33,7 +33,7 @@ from .config import (
     WEBHOOK_SECRET,
     WEBHOOK_URL,
 )
-from .db import init_db
+from .db import cleanup_old_backups, create_backup, init_db
 from .handlers import register_handlers, setup_bot_commands
 from .scheduler import setup_scheduler
 from .services import AdminService, BotStateService, PollService
@@ -58,6 +58,8 @@ async def on_startup(
 ) -> None:
     """Выполняется при запуске бота."""
     logging.info("Инициализация бота...")
+    cleanup_old_backups()
+    create_backup("startup")
 
     # Загружаем список игроков один раз при старте
     poll_service.load_persisted_state()
@@ -151,6 +153,7 @@ async def on_shutdown(
 ) -> None:
     """Выполняется при остановке бота."""
     logging.info("🛑 Начало процедуры остановки бота...")
+    create_backup("shutdown")
 
     if scheduler.running:
         logging.debug("Остановка планировщика...")

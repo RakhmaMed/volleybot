@@ -27,6 +27,7 @@ from aiogram.types import (
 
 from .db import (
     add_transaction,
+    create_backup,
     ensure_player,
     find_player_by_name,
     get_all_players,
@@ -279,6 +280,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     f"ℹ️ Бот уже включен. Команда /start от администратора @{user.username} (ID: {user.id})"
                 )
             else:
+                create_backup("bot_start_command")
                 bot_state_service.set_enabled(True)
                 await message.reply(
                     "✅ Бот включен. Опросы будут создаваться по расписанию."
@@ -333,6 +335,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     f"ℹ️ Бот уже выключен. Команда /stop от администратора @{user.username} (ID: {user.id})"
                 )
             else:
+                create_backup("bot_stop_command")
                 bot_state_service.set_enabled(False)
                 await message.reply(
                     "⏸️ Бот выключен. Опросы не будут создаваться до включения."
