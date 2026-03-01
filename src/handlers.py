@@ -907,6 +907,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         keyboard = []
         lines = [f"🏦 <b>Неоплаченные залы за {current_month}:</b>\n"]
         for hall in unpaid:
+            poll_template_id = int(hall["id"])
             hall_name = str(hall.get("name", ""))
             monthly_cost = int(hall.get("monthly_cost", 0) or 0)
             place = str(hall.get("place", ""))
@@ -915,7 +916,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 label += f" ({place})"
             label += f" — {monthly_cost} ₽"
             lines.append(f"• {escape_html(label)}")
-            callback_data = f"hall_pay:{hall_name}:{current_month}"
+            callback_data = f"hall_pay:{poll_template_id}:{current_month}"
             keyboard.append(
                 [InlineKeyboardButton(text=label, callback_data=callback_data)]
             )
@@ -1308,23 +1309,28 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             await callback_query.answer("❌ Ошибка данных.", show_alert=True)
             return
 
-        # Парсим callback_data: hall_pay:{poll_name}:{month}
+        # Парсим callback_data: hall_pay:{poll_template_id}:{month}
         parts = callback_query.data.split(":", 2)
         if len(parts) != 3:
             await callback_query.answer("❌ Ошибка формата данных.", show_alert=True)
             return
 
-        poll_name = parts[1]
+        try:
+            poll_template_id = int(parts[1])
+        except ValueError:
+            await callback_query.answer("❌ Ошибка идентификатора зала.", show_alert=True)
+            return
         month = parts[2]
 
         # Получаем стоимость зала
         poll_templates = get_poll_templates()
-        hall = next((p for p in poll_templates if p["name"] == poll_name), None)
+        hall = next((p for p in poll_templates if p["id"] == poll_template_id), None)
         if not hall:
             await callback_query.answer(
-                f"❌ Зал '{poll_name}' не найден.", show_alert=True
+                "❌ Зал не найден.", show_alert=True
             )
             return
+        poll_name = str(hall["name"])
 
         monthly_cost = int(hall.get("monthly_cost", 0) or 0)
         if monthly_cost <= 0:
@@ -1334,7 +1340,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         # Записываем оплату
-        if not record_hall_payment(poll_name, month, monthly_cost):
+        if not record_hall_payment(poll_template_id, month, monthly_cost):
             await callback_query.answer(
                 f"⚠️ Зал '{poll_name}' за {month} уже оплачен.", show_alert=True
             )
@@ -1345,7 +1351,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             user.id,
             -monthly_cost,
             f"Оплата зала: {poll_name} ({month})",
-            poll_name,
+            poll_template_id=poll_template_id,
+            poll_name_snapshot=poll_name,
         )
 
         fund = get_fund_balance()

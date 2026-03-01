@@ -2,6 +2,7 @@
 certs/
 volleybot.db
 .env
+data/
 
 # Python
 __pycache__/

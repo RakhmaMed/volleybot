@@ -1173,7 +1173,13 @@ class PollService:
             # Добавляем транзакцию в историю
             game_date = datetime.now().strftime("%d.%m.%Y")
             description = f"Зал: {poll_name} ({game_date})"
-            add_transaction(voter.id, -cost, description, poll_name)
+            add_transaction(
+                voter.id,
+                -cost,
+                description,
+                poll_template_id=int(poll_config["id"]),
+                poll_name_snapshot=poll_name,
+            )
 
             charged_players.append(
                 {

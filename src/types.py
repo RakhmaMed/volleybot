@@ -7,7 +7,8 @@ from typing import TypedDict
 class PollTemplateRequired(TypedDict):
     """Обязательные поля шаблона опроса."""
 
-    name: str  # PRIMARY KEY
+    id: int  # Стабильный идентификатор шаблона
+    name: str  # Уникальное отображаемое имя
     message: str  # Текст сообщения
     open_day: str  # День открытия опроса (mon, tue, wed, ...)
     open_hour_utc: int  # Час открытия (UTC)
@@ -24,6 +25,7 @@ class PollTemplate(PollTemplateRequired, total=False):
     place: str  # Место проведения
     cost: int  # Стоимость одной игры
     monthly_cost: int  # Стоимость аренды зала за месяц
+    created_at: str  # Время создания
     updated_at: str  # Время последнего обновления
     subs: list[int]  # Список user_id подписчиков (добавляется в get_poll_templates)
 

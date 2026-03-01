@@ -30,6 +30,17 @@ from src.services import BotStateService, PollService
 # ── DB-level fund tests ─────────────────────────────────────────────────────
 
 
+def _get_poll_template_id(name: str) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM poll_templates WHERE name = ?",
+            (name,),
+        ).fetchone()
+    if row is None:
+        raise AssertionError(f"Template '{name}' not found")
+    return int(row[0])
+
+
 class TestFundBalance:
     """Тесты для функций кассы в БД."""
 
@@ -105,7 +116,7 @@ class TestHallPayments:
         self._create_paid_template("Пятница", monthly_cost=6000)
         self._create_paid_template("Понедельник", monthly_cost=4000)
 
-        record_hall_payment("Пятница", "2026-02", 6000)
+        record_hall_payment(_get_poll_template_id("Пятница"), "2026-02", 6000)
 
         unpaid = get_unpaid_halls("2026-02")
         assert len(unpaid) == 1
@@ -116,7 +127,7 @@ class TestHallPayments:
         init_db()
         self._create_paid_template("Пятница")
 
-        result = record_hall_payment("Пятница", "2026-02", 6000)
+        result = record_hall_payment(_get_poll_template_id("Пятница"), "2026-02", 6000)
         assert result is True
 
     def test_record_hall_payment_duplicate_fails(self, temp_db):
@@ -124,22 +135,24 @@ class TestHallPayments:
         init_db()
         self._create_paid_template("Пятница")
 
-        assert record_hall_payment("Пятница", "2026-02", 6000) is True
-        assert record_hall_payment("Пятница", "2026-02", 6000) is False
+        poll_template_id = _get_poll_template_id("Пятница")
+        assert record_hall_payment(poll_template_id, "2026-02", 6000) is True
+        assert record_hall_payment(poll_template_id, "2026-02", 6000) is False
 
     def test_different_months_allowed(self, temp_db):
         """Оплата одного зала за разные месяцы допустима."""
         init_db()
         self._create_paid_template("Пятница")
 
-        assert record_hall_payment("Пятница", "2026-02", 6000) is True
-        assert record_hall_payment("Пятница", "2026-03", 6000) is True
+        poll_template_id = _get_poll_template_id("Пятница")
+        assert record_hall_payment(poll_template_id, "2026-02", 6000) is True
+        assert record_hall_payment(poll_template_id, "2026-03", 6000) is True
 
     def test_all_halls_paid(self, temp_db):
         """Если все залы оплачены, get_unpaid_halls возвращает пустой список."""
         init_db()
         self._create_paid_template("Пятница", monthly_cost=6000)
-        record_hall_payment("Пятница", "2026-02", 6000)
+        record_hall_payment(_get_poll_template_id("Пятница"), "2026-02", 6000)
 
         unpaid = get_unpaid_halls("2026-02")
         assert len(unpaid) == 0
@@ -219,14 +232,23 @@ class TestTransactionLogging:
         """Транзакция с привязкой к опросу."""
         init_db()
         ensure_player(user_id=101, name="test2", fullname="Test 2")
-        add_transaction(101, -150, "Зал: Пятница (08.02.2026)", "Пятница")
+        save_poll_template({"name": "Пятница", "message": "Игра"})
+        poll_template_id = _get_poll_template_id("Пятница")
+        add_transaction(
+            101,
+            -150,
+            "Зал: Пятница (08.02.2026)",
+            poll_template_id=poll_template_id,
+            poll_name_snapshot="Пятница",
+        )
 
         with _connect() as conn:
             conn.row_factory = __import__("sqlite3").Row
             row = conn.execute(
                 "SELECT * FROM transactions WHERE player_id = 101"
             ).fetchone()
-            assert row["poll_name"] == "Пятница"
+            assert row["poll_template_id"] == poll_template_id
+            assert row["poll_name_snapshot"] == "Пятница"
             assert row["amount"] == -150
 
 
@@ -517,8 +539,8 @@ class TestHallPaymentHandler:
         dp = Dispatcher()
 
         mock_get_unpaid.return_value = [
-            {"name": "Пятница", "place": "Зал №1", "monthly_cost": 6000},
-            {"name": "Понедельник", "place": "Зал №2", "monthly_cost": 4000},
+            {"id": 1, "name": "Пятница", "place": "Зал №1", "monthly_cost": 6000},
+            {"id": 2, "name": "Понедельник", "place": "Зал №2", "monthly_cost": 4000},
         ]
 
         dp.workflow_data.update(
@@ -550,7 +572,8 @@ class TestHallPaymentHandler:
         assert len(buttons) == 2
         assert "6000" in buttons[0][0].text
         assert buttons[0][0].callback_data is not None
-        assert "hall_pay:" in buttons[0][0].callback_data
+        current_month = __import__("datetime").datetime.now().strftime("%Y-%m")
+        assert buttons[0][0].callback_data == f"hall_pay:1:{current_month}"
 
     @patch("src.handlers.get_unpaid_halls", return_value=[])
     async def test_hall_payment_all_paid(
@@ -602,7 +625,7 @@ class TestHallPaymentHandler:
         dp = Dispatcher()
 
         mock_get_unpaid.return_value = [
-            {"name": "Пятница", "place": "Зал №1", "monthly_cost": 6000},
+            {"id": 1, "name": "Пятница", "place": "Зал №1", "monthly_cost": 6000},
         ]
 
         dp.workflow_data.update(
@@ -750,7 +773,14 @@ class TestFullPaymentFlow:
 
         # 1. Автоматическое списание за игру (бот делает при закрытии голосования)
         update_player_balance(user_id, -150)
-        add_transaction(user_id, -150, "Зал: Пятница (07.02.2026)", "Пятница")
+        poll_template_id = _get_poll_template_id("Пятница")
+        add_transaction(
+            user_id,
+            -150,
+            "Зал: Пятница (07.02.2026)",
+            poll_template_id=poll_template_id,
+            poll_name_snapshot="Пятница",
+        )
 
         player = get_player_balance(user_id)
         assert player is not None
@@ -768,7 +798,7 @@ class TestFullPaymentFlow:
         assert get_fund_balance() == 150  # Касса увеличилась
 
         # 3. Оплата зала из кассы
-        record_hall_payment("Пятница", "2026-02", 6000)
+        record_hall_payment(poll_template_id, "2026-02", 6000)
         update_fund_balance(-6000)
 
         assert get_fund_balance() == -5850  # Касса ушла в минус
@@ -828,7 +858,7 @@ class TestFullPaymentFlow:
         assert get_fund_balance() == 2000  # Касса не изменилась
 
         # Оплата зала из кассы
-        record_hall_payment("Пятница", "2026-03", 6000)
+        record_hall_payment(_get_poll_template_id("Пятница"), "2026-03", 6000)
         update_fund_balance(-6000)
 
         assert get_fund_balance() == -4000
