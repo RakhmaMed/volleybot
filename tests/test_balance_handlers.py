@@ -59,8 +59,8 @@ class TestBalanceCommand:
         assert "Отрицательный баланс" in method.text
         # Положительный баланс остаётся в прежнем формате с ссылкой
         assert '<a href="https://t.me/user2">User Two</a>: <b>100 ₽</b>' in method.text
-        # Задолжники отмечаются через @username
-        assert "@user1: <b>-500 ₽</b>" in method.text
+        # Для отрицательного баланса отображаются и имя, и @username
+        assert "User One (@user1): <b>-500 ₽</b>" in method.text
 
 
 @pytest.mark.asyncio

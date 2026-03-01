@@ -523,7 +523,14 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         balance = p["balance"]
                         username = str(p.get("name") or "").strip().lstrip("@")
                         if username:
-                            debtor_ref = f"@{escape_html(username)}"
+                            fullname = str(p.get("fullname") or "").strip()
+                            username_mention = f"@{escape_html(username)}"
+                            if fullname:
+                                debtor_ref = (
+                                    f"{escape_html(fullname)} ({username_mention})"
+                                )
+                            else:
+                                debtor_ref = username_mention
                         else:
                             debtor_ref = format_player_link(p)
                         text += f"🔴 {debtor_ref}: <b>{balance} ₽</b>\n"
