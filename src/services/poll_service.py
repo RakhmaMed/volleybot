@@ -21,6 +21,9 @@ from ..config import (
     ADMIN_USER_ID,
     MAX_PLAYERS,
     MIN_PLAYERS,
+    PAYMENT_BANK,
+    PAYMENT_NAME,
+    PAYMENT_PHONE,
     POLL_OPTIONS,
     RESERVE_PLAYERS,
 )
@@ -48,7 +51,7 @@ from ..db import (
 )
 from ..poll import PollData, VoterInfo, sort_voters_by_update_id
 from ..types import HallBreakdown, PollTemplate, SubscriberCharge, SubscriptionResult
-from ..utils import escape_html, retry_async, save_error_dump
+from ..utils import escape_html, format_player_link, retry_async, save_error_dump
 
 # ── Константы бюджетного расчёта абонемента ──────────────────────────────────
 AVG_SINGLES_PER_GAME = 7  # Среднее кол-во разовых игроков за игру
@@ -1201,6 +1204,8 @@ class PollService:
                 {
                     "user_id": charge.user_id,
                     "name": player_name,
+                    "username": player_data.get("name") if player_data else None,
+                    "fullname": player_data.get("fullname") if player_data else None,
                     "halls": charge.halls,
                     "amount": charge.total,
                     "old_balance": old_balance,
@@ -1242,21 +1247,46 @@ class PollService:
         result: SubscriptionResult | None = None,
     ) -> str:
         """Форматирует итоговое сообщение для группового чата."""
-        total_due = sum(max(int(sub["amount"]) - int(sub["old_balance"]), 0) for sub in charged_subscribers)
+        sorted_subscribers = sorted(
+            charged_subscribers,
+            key=lambda sub: str(sub.get("name", "")).casefold(),
+        )
+        total_due = sum(
+            max(int(sub["amount"]) - int(sub["old_balance"]), 0)
+            for sub in sorted_subscribers
+        )
         text = (
             "📊 <b>Голосование за абонемент завершено</b>\n\n"
             f"Проголосовали: {total_voters}\n\n"
             f"<b>Расчёт абонемента:</b>\n{summary_text}\n"
         )
-        if charged_subscribers:
+        if sorted_subscribers:
             text += "\n<b>К оплате с учётом текущего баланса:</b>\n"
-            for i, sub in enumerate(charged_subscribers, 1):
+            for i, sub in enumerate(sorted_subscribers, 1):
                 amount_due = max(int(sub["amount"]) - int(sub["old_balance"]), 0)
+                player_link = format_player_link(
+                    {
+                        "id": sub.get("user_id"),
+                        "name": sub.get("username"),
+                        "fullname": sub.get("fullname") or sub.get("name"),
+                    },
+                    user_id=sub.get("user_id"),
+                )
                 text += (
-                    f"{i}. {escape_html(sub['name'])} - {amount_due} ₽\n"
+                    f"{i}. {player_link} - {amount_due} ₽\n"
                 )
         text += f"\n🏦 Касса: <b>{fund_balance} ₽</b>"
         text += f"\n💸 Ожидаемая сумма к оплате: <b>{total_due} ₽</b>"
+        payment_lines = [
+            line for line in (
+                escape_html(PAYMENT_NAME),
+                escape_html(PAYMENT_BANK),
+                escape_html(PAYMENT_PHONE),
+            ) if line
+        ]
+        if payment_lines:
+            text += "\n\n<b>Реквизиты для перевода:</b>\n"
+            text += "\n".join(payment_lines)
         return text
 
     @staticmethod

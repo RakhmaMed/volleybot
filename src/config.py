@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # Настройки логирования
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
+    # Реквизиты для перевода
+    payment_name: str = Field(default="", validation_alias="PAYMENT_NAME")
+    payment_bank: str = Field(default="", validation_alias="PAYMENT_BANK")
+    payment_phone: str = Field(default="", validation_alias="PAYMENT_PHONE")
+
     # Настройка Pydantic Settings
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
@@ -96,6 +101,9 @@ RESERVE_PLAYERS: int = settings.reserve_players
 POLL_OPTIONS: tuple[str, ...] = settings.poll_options
 SCHEDULER_TIMEZONE: str = settings.scheduler_timezone
 LOG_LEVEL: str = settings.log_level
+PAYMENT_NAME: str = settings.payment_name
+PAYMENT_BANK: str = settings.payment_bank
+PAYMENT_PHONE: str = settings.payment_phone
 
 # Webhook настройки
 WEBHOOK_HOST: str = settings.webhook_host

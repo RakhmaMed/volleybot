@@ -19,6 +19,9 @@ class TestConfigLoading:
         assert hasattr(config, "POLL_OPTIONS")
         assert hasattr(config, "LOG_LEVEL")
         assert hasattr(config, "SCHEDULER_TIMEZONE")
+        assert hasattr(config, "PAYMENT_NAME")
+        assert hasattr(config, "PAYMENT_BANK")
+        assert hasattr(config, "PAYMENT_PHONE")
 
     def test_config_token_is_string(self):
         """Тест типа токена."""
@@ -69,3 +72,9 @@ class TestConfigLoading:
         """Тест валидности уровня логирования."""
         valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
         assert config.LOG_LEVEL in valid_levels
+
+    def test_payment_details_are_strings(self):
+        """Платёжные реквизиты должны быть строками."""
+        assert isinstance(config.PAYMENT_NAME, str)
+        assert isinstance(config.PAYMENT_BANK, str)
+        assert isinstance(config.PAYMENT_PHONE, str)

@@ -676,3 +676,67 @@ class TestHtmlEscapingInPollTexts:
         text = mock_bot.send_message.call_args.kwargs["text"]
         assert "⭐️ — оплативший за месяц" in text
         assert "🏐 — донат на мяч" in text
+
+
+def test_format_subscription_report_sorts_by_name():
+    """Итоговый отчёт должен сортировать список оплат по имени."""
+    service = PollService()
+
+    report = service._format_subscription_report(
+        total_voters=3,
+        summary_text="Сводка",
+        charged_subscribers=[
+            {"name": "Марат", "fullname": "Марат", "amount": 400, "old_balance": 0},
+            {"name": "Алим", "fullname": "Алим", "amount": 300, "old_balance": 0},
+            {"name": "Борис", "fullname": "Борис", "amount": 200, "old_balance": 0},
+        ],
+        fund_balance=1000,
+    )
+
+    assert report.index("Алим</a> - 300 ₽") < report.index("Борис</a> - 200 ₽")
+    assert report.index("Борис</a> - 200 ₽") < report.index("Марат</a> - 400 ₽")
+
+
+def test_format_subscription_report_adds_payment_details():
+    """Итоговый отчёт должен включать реквизиты для перевода."""
+    service = PollService()
+
+    with patch("src.services.poll_service.PAYMENT_NAME", "Rakhma"), patch(
+        "src.services.poll_service.PAYMENT_BANK", "TСберk"
+    ), patch("src.services.poll_service.PAYMENT_PHONE", "+79990000000"):
+        report = service._format_subscription_report(
+            total_voters=1,
+            summary_text="Сводка",
+            charged_subscribers=[
+                {"name": "Алим", "fullname": "Алим", "amount": 300, "old_balance": 50},
+            ],
+            fund_balance=1000,
+        )
+
+    assert "Реквизиты для перевода" in report
+    assert "Rakhma" in report
+    assert "TСберk" in report
+    assert "+79990000000" in report
+
+
+def test_format_subscription_report_adds_profile_links():
+    """Итоговый отчёт должен включать ссылки на профили игроков."""
+    service = PollService()
+
+    report = service._format_subscription_report(
+        total_voters=1,
+        summary_text="Сводка",
+        charged_subscribers=[
+            {
+                "user_id": 12345,
+                "name": "petya",
+                "username": "petya",
+                "fullname": "Петя",
+                "amount": 300,
+                "old_balance": 0,
+            },
+        ],
+        fund_balance=1000,
+    )
+
+    assert '<a href="https://t.me/petya">Петя</a> - 300 ₽' in report
