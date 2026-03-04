@@ -101,6 +101,28 @@ def create_poll_job(
     """
 
     async def job() -> None:
+        if poll_kind == "regular" and poll_template_id is not None:
+            poll_templates = get_poll_templates()
+            template = next(
+                (
+                    p
+                    for p in poll_templates
+                    if int(p.get("id", 0) or 0) == poll_template_id
+                ),
+                None,
+            )
+            if template is None:
+                logging.warning(
+                    "⚠️ Шаблон опроса с ID %s не найден, открытие пропущено",
+                    poll_template_id,
+                )
+                return
+            if int(template.get("enabled", 1) or 0) != 1:
+                logging.info(
+                    "⏸️ Шаблон опроса %s выключен, плановое открытие пропущено",
+                    poll_template_id,
+                )
+                return
         if poll_kind == "monthly_subscription" and get_open_monthly_game() is not None:
             logging.info("ℹ️ Месячный опрос уже открыт, повторное открытие пропущено")
             return

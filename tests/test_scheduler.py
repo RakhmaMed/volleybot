@@ -66,6 +66,30 @@ class TestCreatePollJob:
 
         assert bot_state_service.get_chat_id() == new_chat_id
 
+    async def test_create_poll_job_skips_disabled_template(self):
+        """Выключенный шаблон не должен открывать опрос даже при существующей job."""
+        bot = MagicMock()
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
+        poll_service.send_poll = AsyncMock(return_value=-1001234567890)
+
+        job = create_poll_job(
+            bot,
+            "Test message",
+            "test_poll",
+            bot_state_service,
+            poll_service,
+            poll_template_id=2,
+        )
+
+        with patch(
+            "src.scheduler.get_poll_templates",
+            return_value=[{"id": 2, "name": "test_poll", "enabled": 0}],
+        ):
+            await job()
+
+        poll_service.send_poll.assert_not_called()
+
 
 @pytest.mark.asyncio
 class TestCreateClosePollJob:
