@@ -51,7 +51,6 @@ def get_monthly_subscription_poll_params() -> (
 
     for poll in paid_polls:
         name = str(poll.get("name", ""))
-        place = str(poll.get("place", ""))
         game_hour_utc: int = cast(int, poll.get("game_hour_utc") or 0)
         game_minute_utc: int = cast(int, poll.get("game_minute_utc") or 0)
         dt_utc = datetime(

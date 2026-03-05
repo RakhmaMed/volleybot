@@ -44,6 +44,8 @@ class TestDBPolls:
                 row[1] for row in conn.execute("PRAGMA table_info(poll_subscriptions)")
             }
             assert "poll_template_id" in sub_columns
+            game_columns = {row[1] for row in conn.execute("PRAGMA table_info(games)")}
+            assert "cost_per_game_snapshot" in game_columns
 
     def test_create_and_close_game(self, temp_db):
         init_db()
@@ -240,221 +242,9 @@ class TestDBPolls:
                 )
                 conn.commit()
 
-    def test_migrates_legacy_poll_schema(self, temp_db):
-        """Legacy-схема мигрируется на v3 без потери данных."""
+    def test_init_db_fails_on_legacy_poll_templates_schema(self, temp_db):
+        """init_db падает на legacy-схеме poll_templates с monthly_cost."""
         with _connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE players (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT,
-                    fullname TEXT,
-                    ball_donate INTEGER DEFAULT 0,
-                    balance INTEGER DEFAULT 0,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE poll_templates (
-                    name TEXT PRIMARY KEY,
-                    place TEXT,
-                    message TEXT NOT NULL,
-                    open_day TEXT,
-                    open_hour_utc INTEGER,
-                    open_minute_utc INTEGER,
-                    game_day TEXT,
-                    game_hour_utc INTEGER,
-                    game_minute_utc INTEGER,
-                    cost INTEGER DEFAULT 0,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE poll_subscriptions (
-                    poll_name TEXT,
-                    user_id INTEGER,
-                    PRIMARY KEY (poll_name, user_id)
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE transactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    player_id INTEGER NOT NULL,
-                    amount INTEGER NOT NULL,
-                    description TEXT,
-                    poll_name TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE hall_payments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    poll_name TEXT NOT NULL,
-                    month TEXT NOT NULL,
-                    amount INTEGER NOT NULL,
-                    paid_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(poll_name, month)
-                )
-                """
-            )
-            conn.execute(
-                "INSERT INTO players (id, name, fullname) VALUES (1, 'user1', 'User 1')"
-            )
-            conn.execute(
-                """
-                INSERT INTO poll_templates (
-                    name, place, message, open_day, open_hour_utc, open_minute_utc,
-                    game_day, game_hour_utc, game_minute_utc, cost, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                ("Legacy Poll", "Hall", "Msg", "mon", 10, 5, "tue", 18, 30, 150, "2026-02-01 12:00:00"),
-            )
-            conn.execute(
-                "INSERT INTO poll_subscriptions (poll_name, user_id) VALUES (?, ?)",
-                ("Legacy Poll", 1),
-            )
-            conn.execute(
-                """
-                INSERT INTO transactions (player_id, amount, description, poll_name, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (1, -150, "Legacy charge", "Legacy Poll", "2026-02-10 10:00:00"),
-            )
-            conn.execute(
-                """
-                INSERT INTO hall_payments (poll_name, month, amount, paid_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                ("Legacy Poll", "2026-02", 6000, "2026-02-11 11:00:00"),
-            )
-            conn.commit()
-
-        init_db()
-
-        with _connect() as conn:
-            conn.row_factory = sqlite3.Row
-            template = conn.execute(
-                "SELECT * FROM poll_templates WHERE name = ?", ("Legacy Poll",)
-            ).fetchone()
-            assert template is not None
-            assert template["id"] is not None
-            assert template["cost_per_game"] == 0
-            assert template["enabled"] == 1
-            assert template["created_at"] == "2026-02-01 12:00:00"
-
-            subscription = conn.execute(
-                "SELECT * FROM poll_subscriptions WHERE user_id = 1"
-            ).fetchone()
-            assert subscription is not None
-            assert subscription["poll_template_id"] == template["id"]
-
-            payment = conn.execute("SELECT * FROM hall_payments").fetchone()
-            assert payment is not None
-            assert payment["poll_template_id"] == template["id"]
-
-            tx = conn.execute("SELECT * FROM transactions").fetchone()
-            assert tx is not None
-            assert tx["poll_template_id"] == template["id"]
-            assert tx["poll_name_snapshot"] == "Legacy Poll"
-
-    def test_migrates_v3_schema_to_v4_with_enabled_default(self, temp_db):
-        """Схема v3 обновляется до v4 с enabled=1 для существующих записей."""
-        with _connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE players (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT,
-                    fullname TEXT,
-                    ball_donate INTEGER DEFAULT 0,
-                    balance INTEGER DEFAULT 0,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE poll_templates (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE,
-                    place TEXT,
-                    message TEXT NOT NULL,
-                    open_day TEXT NOT NULL DEFAULT '*',
-                    open_hour_utc INTEGER NOT NULL DEFAULT 0,
-                    open_minute_utc INTEGER NOT NULL DEFAULT 0,
-                    game_day TEXT NOT NULL DEFAULT '*',
-                    game_hour_utc INTEGER NOT NULL DEFAULT 0,
-                    game_minute_utc INTEGER NOT NULL DEFAULT 0,
-                    cost INTEGER NOT NULL DEFAULT 0,
-                    monthly_cost INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE poll_subscriptions (
-                    poll_template_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    PRIMARY KEY (poll_template_id, user_id)
-                )
-                """
-            )
-            conn.execute(
-                """
-                INSERT INTO poll_templates (
-                    name, message, open_day, open_hour_utc, open_minute_utc,
-                    game_day, game_hour_utc, game_minute_utc, cost, monthly_cost
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                ("Existing Poll", "Msg", "mon", 10, 0, "tue", 18, 0, 100, 4000),
-            )
-            conn.execute("PRAGMA user_version = 3")
-            conn.commit()
-
-        init_db()
-
-        with _connect() as conn:
-            conn.row_factory = sqlite3.Row
-            columns = {
-                row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")
-            }
-            assert "enabled" in columns
-            assert "cost_per_game" in columns
-            assert "monthly_cost" not in columns
-
-            row = conn.execute(
-                "SELECT enabled, cost_per_game FROM poll_templates WHERE name = ?",
-                ("Existing Poll",),
-            ).fetchone()
-            assert row is not None
-            assert row["enabled"] == 1
-            assert row["cost_per_game"] == 1500
-
-    def test_migrates_v5_monthly_cost_to_cost_per_game(self, temp_db):
-        """Схема v5 переносит monthly_cost в cost_per_game по правилу 1500/0."""
-        with _connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE players (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT,
-                    fullname TEXT,
-                    ball_donate INTEGER DEFAULT 0,
-                    balance INTEGER DEFAULT 0,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
             conn.execute(
                 """
                 CREATE TABLE poll_templates (
@@ -478,30 +268,214 @@ class TestDBPolls:
             )
             conn.execute(
                 """
-                INSERT INTO poll_templates (
-                    name, message, game_day, cost, monthly_cost
-                ) VALUES
-                    ('Paid Hall', 'Msg', 'mon', 150, 6000),
-                    ('Free Hall', 'Msg', 'wed', 150, 0)
+                CREATE TABLE poll_subscriptions (
+                    poll_template_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    PRIMARY KEY (poll_template_id, user_id)
+                )
                 """
             )
-            conn.execute("PRAGMA user_version = 5")
+            conn.execute(
+                """
+                CREATE TABLE transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    player_id INTEGER NOT NULL,
+                    amount INTEGER NOT NULL,
+                    description TEXT,
+                    poll_template_id INTEGER,
+                    poll_name_snapshot TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE hall_payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    poll_template_id INTEGER NOT NULL,
+                    month TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    paid_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(poll_template_id, month)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE games (
+                    poll_id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    poll_template_id INTEGER,
+                    poll_name_snapshot TEXT NOT NULL,
+                    question_snapshot TEXT NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    poll_message_id INTEGER NOT NULL,
+                    info_message_id INTEGER,
+                    final_message_id INTEGER,
+                    opened_at TEXT NOT NULL,
+                    closed_at TEXT,
+                    game_date TEXT,
+                    place_snapshot TEXT,
+                    cost_snapshot INTEGER NOT NULL DEFAULT 0,
+                    cost_per_game_snapshot INTEGER NOT NULL DEFAULT 0,
+                    options_json TEXT NOT NULL DEFAULT '[]',
+                    option_poll_names_json TEXT NOT NULL DEFAULT '[]',
+                    target_month_snapshot TEXT,
+                    last_info_text TEXT NOT NULL DEFAULT '⏳ Идёт сбор голосов...',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE game_participants (
+                    game_poll_id TEXT NOT NULL,
+                    player_id INTEGER NOT NULL,
+                    roster_bucket TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL,
+                    is_subscriber INTEGER NOT NULL DEFAULT 0,
+                    charged_amount INTEGER NOT NULL DEFAULT 0,
+                    charge_source TEXT NOT NULL DEFAULT 'none',
+                    balance_before INTEGER,
+                    balance_after INTEGER,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (game_poll_id, player_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE monthly_poll_votes (
+                    game_poll_id TEXT NOT NULL,
+                    player_id INTEGER NOT NULL,
+                    option_ids_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (game_poll_id, player_id)
+                )
+                """
+            )
             conn.commit()
 
-        init_db()
+        with pytest.raises(sqlite3.DatabaseError, match="unexpected columns"):
+            init_db()
 
+    def test_init_db_fails_on_legacy_games_snapshot_column(self, temp_db):
+        """init_db падает, если games содержит monthly_cost_snapshot вместо актуального имени."""
         with _connect() as conn:
-            conn.row_factory = sqlite3.Row
-            columns = {
-                row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")
-            }
-            assert "cost_per_game" in columns
-            assert "monthly_cost" not in columns
+            conn.execute(
+                """
+                CREATE TABLE poll_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    place TEXT,
+                    message TEXT NOT NULL,
+                    open_day TEXT NOT NULL DEFAULT '*',
+                    open_hour_utc INTEGER NOT NULL DEFAULT 0,
+                    open_minute_utc INTEGER NOT NULL DEFAULT 0,
+                    game_day TEXT NOT NULL DEFAULT '*',
+                    game_hour_utc INTEGER NOT NULL DEFAULT 0,
+                    game_minute_utc INTEGER NOT NULL DEFAULT 0,
+                    cost INTEGER NOT NULL DEFAULT 0,
+                    cost_per_game INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE poll_subscriptions (
+                    poll_template_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    PRIMARY KEY (poll_template_id, user_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    player_id INTEGER NOT NULL,
+                    amount INTEGER NOT NULL,
+                    description TEXT,
+                    poll_template_id INTEGER,
+                    poll_name_snapshot TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE hall_payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    poll_template_id INTEGER NOT NULL,
+                    month TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    paid_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(poll_template_id, month)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE games (
+                    poll_id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    poll_template_id INTEGER,
+                    poll_name_snapshot TEXT NOT NULL,
+                    question_snapshot TEXT NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    poll_message_id INTEGER NOT NULL,
+                    info_message_id INTEGER,
+                    final_message_id INTEGER,
+                    opened_at TEXT NOT NULL,
+                    closed_at TEXT,
+                    game_date TEXT,
+                    place_snapshot TEXT,
+                    cost_snapshot INTEGER NOT NULL DEFAULT 0,
+                    monthly_cost_snapshot INTEGER NOT NULL DEFAULT 0,
+                    options_json TEXT NOT NULL DEFAULT '[]',
+                    option_poll_names_json TEXT NOT NULL DEFAULT '[]',
+                    target_month_snapshot TEXT,
+                    last_info_text TEXT NOT NULL DEFAULT '⏳ Идёт сбор голосов...',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE game_participants (
+                    game_poll_id TEXT NOT NULL,
+                    player_id INTEGER NOT NULL,
+                    roster_bucket TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL,
+                    is_subscriber INTEGER NOT NULL DEFAULT 0,
+                    charged_amount INTEGER NOT NULL DEFAULT 0,
+                    charge_source TEXT NOT NULL DEFAULT 'none',
+                    balance_before INTEGER,
+                    balance_after INTEGER,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (game_poll_id, player_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE monthly_poll_votes (
+                    game_poll_id TEXT NOT NULL,
+                    player_id INTEGER NOT NULL,
+                    option_ids_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (game_poll_id, player_id)
+                )
+                """
+            )
+            conn.commit()
 
-            rows = conn.execute(
-                "SELECT name, cost_per_game FROM poll_templates ORDER BY id"
-            ).fetchall()
-            assert rows[0]["name"] == "Paid Hall"
-            assert rows[0]["cost_per_game"] == 1500
-            assert rows[1]["name"] == "Free Hall"
-            assert rows[1]["cost_per_game"] == 0
+        with pytest.raises(sqlite3.DatabaseError, match="games:"):
+            init_db()

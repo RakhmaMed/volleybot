@@ -197,10 +197,9 @@ class TestMonthlyCost:
             ).fetchone()
             assert row["cost_per_game"] == 1500
 
-    def test_cost_per_game_migration(self, temp_db):
-        """Проверка, что init_db добавляет cost_per_game в существующую таблицу."""
+    def test_cost_per_game_exists_in_current_schema(self, temp_db):
+        """Проверка, что актуальная схема сразу содержит cost_per_game."""
         init_db()
-        # Столбец должен уже быть после init_db
         with _connect() as conn:
             cursor = conn.execute("PRAGMA table_info(poll_templates)")
             columns = [row[1] for row in cursor.fetchall()]

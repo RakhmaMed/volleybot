@@ -62,7 +62,7 @@ from ..utils import (
 # ── Константы бюджетного расчёта абонемента ──────────────────────────────────
 AVG_SINGLES_PER_GAME = 7  # Среднее кол-во разовых игроков за игру
 SINGLE_GAME_PRICE = 150  # Цена разового входа (руб.)
-GAMES_PER_MONTH = 4  # Legacy-константа (fallback для '*'/некорректного дня)
+GAMES_PER_MONTH = 4  # fallback для '*'/некорректного дня
 SAFETY_K = 0.7  # Коэффициент надёжности (риск неявки)
 TARGET_GROWTH = 1000  # Желаемый прирост казны в месяц (руб.)
 SAVINGS_BUFFER = 6000  # Целевая «подушка» казны (руб.)
@@ -629,7 +629,7 @@ class PollService:
             str(poll_template.get("place") or "") if poll_template is not None else ""
         )
         cost_snapshot = int(poll_template.get("cost", 0) or 0) if poll_template else 0
-        monthly_cost_snapshot = (
+        cost_per_game_snapshot = (
             int(poll_template.get("cost_per_game", 0) or 0) if poll_template else 0
         )
         create_game(
@@ -645,7 +645,7 @@ class PollService:
             opened_at=opened_at,
             place_snapshot=place_snapshot,
             cost_snapshot=cost_snapshot,
-            monthly_cost_snapshot=monthly_cost_snapshot,
+            cost_per_game_snapshot=cost_per_game_snapshot,
             target_month_snapshot=target_month_snapshot,
             options=poll_options,
             option_poll_names=option_poll_names or [],

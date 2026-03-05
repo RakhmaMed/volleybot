@@ -18,7 +18,7 @@ from .types import PollTemplate
 BOT_STATE_KEY = "bot_state"
 POLL_STATE_KEY = "poll_state"
 FUND_BALANCE_KEY = "fund_balance"
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 BACKUP_RETENTION_DAYS = 10
 
 
@@ -114,7 +114,7 @@ def cleanup_old_backups(
 
 
 def init_db() -> None:
-    """Создаёт файл базы и таблицу kv_store при необходимости."""
+    """Создаёт или строго валидирует актуальную схему БД."""
     db_path: str = _get_db_path()
     logging.debug(f"Инициализация базы данных: {db_path}")
 
@@ -124,7 +124,7 @@ def init_db() -> None:
 
     with _connect() as conn:
         _create_base_tables(conn)
-        _migrate_schema(conn)
+        _ensure_current_schema(conn)
         conn.commit()
     logging.debug(f"✅ База данных инициализирована: {db_path}")
 
@@ -154,76 +154,8 @@ def _create_base_tables(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_schema(conn: sqlite3.Connection) -> None:
-    """Пошагово обновляет схему БД до актуальной версии."""
-    user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-    if user_version == 0:
-        _bootstrap_schema(conn)
-        user_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-
-    if user_version < 2:
-        _migrate_to_v2(conn)
-        user_version = 2
-    if user_version < 3:
-        _migrate_to_v3(conn)
-        user_version = 3
-    if user_version < 4:
-        _migrate_to_v4(conn)
-        user_version = 4
-    if user_version < 5:
-        _migrate_to_v5(conn)
-        user_version = 5
-    if user_version < 6:
-        _migrate_to_v6(conn)
-        user_version = 6
-    if user_version < 7:
-        _migrate_to_v7(conn)
-        user_version = 7
-
-    if user_version != SCHEMA_VERSION:
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-
-
-def _bootstrap_schema(conn: sqlite3.Connection) -> None:
-    """Создаёт схему с нуля в актуальном виде или определяет версию legacy БД."""
-    has_poll_templates = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='poll_templates'"
-    ).fetchone()
-    if has_poll_templates:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")}
-        if "id" in columns:
-            _create_indexes(conn)
-            has_games = _table_exists(conn, "games")
-            if "cost_per_game" in columns:
-                # Если games отсутствует, нужно прогнать миграцию v5+.
-                conn.execute("PRAGMA user_version = 6" if has_games else "PRAGMA user_version = 4")
-            elif "enabled" in columns:
-                # enabled есть с v4, а таблицы games появляются в v5.
-                conn.execute("PRAGMA user_version = 5" if has_games else "PRAGMA user_version = 4")
-            else:
-                conn.execute("PRAGMA user_version = 3")
-            return
-        if "monthly_cost" in columns:
-            conn.execute("PRAGMA user_version = 2")
-            return
-        conn.execute("PRAGMA user_version = 1")
-        return
-
-    _create_schema_v4(conn)
-    conn.execute("PRAGMA user_version = 4")
-
-
-def _migrate_to_v2(conn: sqlite3.Connection) -> None:
-    """Добавляет monthly_cost в legacy-схему."""
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")}
-    if "monthly_cost" not in columns:
-        conn.execute("ALTER TABLE poll_templates ADD COLUMN monthly_cost INTEGER DEFAULT 0")
-        logging.info("✅ Миграция: добавлен столбец monthly_cost в poll_templates")
-    conn.execute("PRAGMA user_version = 2")
-
-
-def _create_schema_v4(conn: sqlite3.Connection) -> None:
-    """Создаёт актуальную схему данных опросов и финансов."""
+def _create_current_schema(conn: sqlite3.Connection) -> None:
+    """Создаёт актуальную схему бизнес-данных."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS poll_templates (
@@ -286,229 +218,6 @@ def _create_schema_v4(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    _create_indexes(conn)
-
-
-def _create_indexes(conn: sqlite3.Connection) -> None:
-    """Создаёт индексы для актуальной схемы."""
-    if _table_exists(conn, "poll_subscriptions"):
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_poll_subscriptions_user_id ON poll_subscriptions(user_id)"
-        )
-    if _table_exists(conn, "hall_payments"):
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_hall_payments_month ON hall_payments(month)"
-        )
-    if _table_exists(conn, "transactions"):
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_transactions_player_created_at
-            ON transactions(player_id, created_at DESC)
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_transactions_poll_template_id ON transactions(poll_template_id)"
-        )
-    if _table_exists(conn, "games"):
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_games_status_kind ON games(status, kind)"
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_games_template_opened_at
-            ON games(poll_template_id, opened_at DESC)
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_games_chat_opened_at
-            ON games(chat_id, opened_at DESC)
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_games_opened_at ON games(opened_at DESC)"
-        )
-    if _table_exists(conn, "game_participants"):
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_game_participants_player_created_at
-            ON game_participants(player_id, created_at DESC)
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_game_participants_game_bucket_sort
-            ON game_participants(game_poll_id, roster_bucket, sort_order)
-            """
-        )
-
-
-def _migrate_to_v3(conn: sqlite3.Connection) -> None:
-    """Перестраивает legacy-таблицы на схему с poll_template_id."""
-    conn.execute("PRAGMA foreign_keys = OFF")
-    try:
-        conn.execute(
-            """
-            CREATE TABLE poll_templates_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                place TEXT,
-                message TEXT NOT NULL,
-                open_day TEXT NOT NULL DEFAULT '*',
-                open_hour_utc INTEGER NOT NULL DEFAULT 0 CHECK (open_hour_utc BETWEEN 0 AND 23),
-                open_minute_utc INTEGER NOT NULL DEFAULT 0 CHECK (open_minute_utc BETWEEN 0 AND 59),
-                game_day TEXT NOT NULL DEFAULT '*',
-                game_hour_utc INTEGER NOT NULL DEFAULT 0 CHECK (game_hour_utc BETWEEN 0 AND 23),
-                game_minute_utc INTEGER NOT NULL DEFAULT 0 CHECK (game_minute_utc BETWEEN 0 AND 59),
-                cost INTEGER NOT NULL DEFAULT 0 CHECK (cost >= 0),
-                monthly_cost INTEGER NOT NULL DEFAULT 0 CHECK (monthly_cost >= 0),
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                CHECK (open_day IN ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', '*')),
-                CHECK (game_day IN ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', '*'))
-            )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO poll_templates_new (
-                name, place, message, open_day, open_hour_utc, open_minute_utc,
-                game_day, game_hour_utc, game_minute_utc, cost, monthly_cost,
-                created_at, updated_at
-            )
-            SELECT
-                name,
-                place,
-                message,
-                COALESCE(open_day, '*'),
-                COALESCE(open_hour_utc, 0),
-                COALESCE(open_minute_utc, 0),
-                COALESCE(game_day, '*'),
-                COALESCE(game_hour_utc, 0),
-                COALESCE(game_minute_utc, 0),
-                COALESCE(cost, 0),
-                COALESCE(monthly_cost, 0),
-                COALESCE(updated_at, CURRENT_TIMESTAMP),
-                COALESCE(updated_at, CURRENT_TIMESTAMP)
-            FROM poll_templates
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE poll_subscriptions_new (
-                poll_template_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                PRIMARY KEY (poll_template_id, user_id),
-                FOREIGN KEY (poll_template_id) REFERENCES poll_templates_new(id) ON DELETE CASCADE,
-                FOREIGN KEY (user_id) REFERENCES players(id) ON DELETE CASCADE
-            )
-            """
-        )
-        if _table_exists(conn, "poll_subscriptions"):
-            conn.execute(
-                """
-                INSERT INTO poll_subscriptions_new (poll_template_id, user_id)
-                SELECT pt.id, ps.user_id
-                FROM poll_subscriptions ps
-                JOIN poll_templates_new pt ON pt.name = ps.poll_name
-                """
-            )
-        conn.execute(
-            """
-            CREATE TABLE transactions_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                player_id INTEGER NOT NULL,
-                amount INTEGER NOT NULL,
-                description TEXT,
-                poll_template_id INTEGER,
-                poll_name_snapshot TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (player_id) REFERENCES players(id) ON DELETE CASCADE,
-                FOREIGN KEY (poll_template_id) REFERENCES poll_templates_new(id) ON DELETE SET NULL
-            )
-            """
-        )
-        if _table_exists(conn, "transactions"):
-            conn.execute(
-                """
-                INSERT INTO transactions_new (
-                    id, player_id, amount, description, poll_template_id,
-                    poll_name_snapshot, created_at
-                )
-                SELECT
-                    t.id,
-                    t.player_id,
-                    t.amount,
-                    t.description,
-                    pt.id,
-                    t.poll_name,
-                    t.created_at
-                FROM transactions t
-                LEFT JOIN poll_templates_new pt ON pt.name = t.poll_name
-                """
-            )
-        conn.execute(
-            """
-            CREATE TABLE hall_payments_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                poll_template_id INTEGER NOT NULL,
-                month TEXT NOT NULL,
-                amount INTEGER NOT NULL CHECK (amount >= 0),
-                paid_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (poll_template_id) REFERENCES poll_templates_new(id) ON DELETE CASCADE,
-                UNIQUE (poll_template_id, month)
-            )
-            """
-        )
-        if _table_exists(conn, "hall_payments"):
-            conn.execute(
-                """
-                INSERT INTO hall_payments_new (id, poll_template_id, month, amount, paid_at)
-                SELECT hp.id, pt.id, hp.month, hp.amount, hp.paid_at
-                FROM hall_payments hp
-                JOIN poll_templates_new pt ON pt.name = hp.poll_name
-                """
-            )
-
-        if _table_exists(conn, "poll_subscriptions"):
-            conn.execute("DROP TABLE poll_subscriptions")
-        if _table_exists(conn, "hall_payments"):
-            conn.execute("DROP TABLE hall_payments")
-        if _table_exists(conn, "transactions"):
-            conn.execute("DROP TABLE transactions")
-        if _table_exists(conn, "poll_templates"):
-            conn.execute("DROP TABLE poll_templates")
-
-        conn.execute("ALTER TABLE poll_templates_new RENAME TO poll_templates")
-        conn.execute("ALTER TABLE poll_subscriptions_new RENAME TO poll_subscriptions")
-        conn.execute("ALTER TABLE transactions_new RENAME TO transactions")
-        conn.execute("ALTER TABLE hall_payments_new RENAME TO hall_payments")
-
-        _create_indexes(conn)
-        conn.execute("PRAGMA user_version = 3")
-        conn.execute("PRAGMA foreign_keys = ON")
-        fk_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
-        if fk_errors:
-            raise sqlite3.IntegrityError(f"foreign_key_check failed: {fk_errors}")
-        logging.info("✅ Миграция схемы БД до версии 3 завершена")
-    except Exception:
-        conn.execute("PRAGMA foreign_keys = ON")
-        raise
-
-
-def _migrate_to_v4(conn: sqlite3.Connection) -> None:
-    """Добавляет признак включённости шаблона опроса."""
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")}
-    if "enabled" not in columns:
-        conn.execute(
-            "ALTER TABLE poll_templates ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))"
-        )
-        logging.info("✅ Миграция: добавлен столбец enabled в poll_templates")
-    conn.execute("PRAGMA user_version = 4")
-
-
-def _migrate_to_v5(conn: sqlite3.Connection) -> None:
-    """Добавляет таблицы игр и статистики."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS games (
@@ -527,7 +236,7 @@ def _migrate_to_v5(conn: sqlite3.Connection) -> None:
             game_date TEXT,
             place_snapshot TEXT,
             cost_snapshot INTEGER NOT NULL DEFAULT 0,
-            monthly_cost_snapshot INTEGER NOT NULL DEFAULT 0,
+            cost_per_game_snapshot INTEGER NOT NULL DEFAULT 0,
             options_json TEXT NOT NULL DEFAULT '[]',
             option_poll_names_json TEXT NOT NULL DEFAULT '[]',
             target_month_snapshot TEXT,
@@ -572,103 +281,182 @@ def _migrate_to_v5(conn: sqlite3.Connection) -> None:
         """
     )
     _create_indexes(conn)
-    conn.execute("PRAGMA user_version = 5")
 
 
-def _migrate_to_v6(conn: sqlite3.Connection) -> None:
-    """Переименовывает monthly_cost в cost_per_game и конвертирует legacy-данные."""
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")}
-    if "cost_per_game" in columns and "monthly_cost" not in columns:
-        conn.execute("PRAGMA user_version = 6")
+EXPECTED_BUSINESS_TABLES = {
+    "poll_templates",
+    "poll_subscriptions",
+    "transactions",
+    "hall_payments",
+    "games",
+    "game_participants",
+    "monthly_poll_votes",
+}
+
+EXPECTED_TABLE_COLUMNS: dict[str, set[str]] = {
+    "poll_templates": {
+        "id",
+        "name",
+        "place",
+        "message",
+        "open_day",
+        "open_hour_utc",
+        "open_minute_utc",
+        "game_day",
+        "game_hour_utc",
+        "game_minute_utc",
+        "cost",
+        "cost_per_game",
+        "enabled",
+        "created_at",
+        "updated_at",
+    },
+    "poll_subscriptions": {"poll_template_id", "user_id"},
+    "transactions": {
+        "id",
+        "player_id",
+        "amount",
+        "description",
+        "poll_template_id",
+        "poll_name_snapshot",
+        "created_at",
+    },
+    "hall_payments": {"id", "poll_template_id", "month", "amount", "paid_at"},
+    "games": {
+        "poll_id",
+        "kind",
+        "status",
+        "poll_template_id",
+        "poll_name_snapshot",
+        "question_snapshot",
+        "chat_id",
+        "poll_message_id",
+        "info_message_id",
+        "final_message_id",
+        "opened_at",
+        "closed_at",
+        "game_date",
+        "place_snapshot",
+        "cost_snapshot",
+        "cost_per_game_snapshot",
+        "options_json",
+        "option_poll_names_json",
+        "target_month_snapshot",
+        "last_info_text",
+        "created_at",
+        "updated_at",
+    },
+    "game_participants": {
+        "game_poll_id",
+        "player_id",
+        "roster_bucket",
+        "sort_order",
+        "is_subscriber",
+        "charged_amount",
+        "charge_source",
+        "balance_before",
+        "balance_after",
+        "created_at",
+    },
+    "monthly_poll_votes": {
+        "game_poll_id",
+        "player_id",
+        "option_ids_json",
+        "updated_at",
+    },
+}
+
+
+def _ensure_current_schema(conn: sqlite3.Connection) -> None:
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    existing_business_tables = existing_tables & EXPECTED_BUSINESS_TABLES
+    if not existing_business_tables:
+        _create_current_schema(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         return
 
-    conn.execute("PRAGMA foreign_keys = OFF")
-    try:
-        conn.execute(
-            """
-            CREATE TABLE poll_templates_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                place TEXT,
-                message TEXT NOT NULL,
-                open_day TEXT NOT NULL DEFAULT '*',
-                open_hour_utc INTEGER NOT NULL DEFAULT 0 CHECK (open_hour_utc BETWEEN 0 AND 23),
-                open_minute_utc INTEGER NOT NULL DEFAULT 0 CHECK (open_minute_utc BETWEEN 0 AND 59),
-                game_day TEXT NOT NULL DEFAULT '*',
-                game_hour_utc INTEGER NOT NULL DEFAULT 0 CHECK (game_hour_utc BETWEEN 0 AND 23),
-                game_minute_utc INTEGER NOT NULL DEFAULT 0 CHECK (game_minute_utc BETWEEN 0 AND 59),
-                cost INTEGER NOT NULL DEFAULT 0 CHECK (cost >= 0),
-                cost_per_game INTEGER NOT NULL DEFAULT 0 CHECK (cost_per_game >= 0),
-                enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                CHECK (open_day IN ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', '*')),
-                CHECK (game_day IN ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', '*'))
-            )
-            """
+    if existing_business_tables != EXPECTED_BUSINESS_TABLES:
+        missing = sorted(EXPECTED_BUSINESS_TABLES - existing_business_tables)
+        present = sorted(existing_business_tables)
+        raise sqlite3.DatabaseError(
+            "Incompatible DB schema: partial business schema detected; "
+            f"present={present}; missing={missing}"
         )
-        if "monthly_cost" in columns:
-            conn.execute(
-                """
-                INSERT INTO poll_templates_new (
-                    id, name, place, message, open_day, open_hour_utc, open_minute_utc,
-                    game_day, game_hour_utc, game_minute_utc, cost, cost_per_game,
-                    enabled, created_at, updated_at
-                )
-                SELECT
-                    id, name, place, message, open_day, open_hour_utc, open_minute_utc,
-                    game_day, game_hour_utc, game_minute_utc, cost,
-                    CASE WHEN COALESCE(monthly_cost, 0) > 0 THEN 1500 ELSE 0 END,
-                    COALESCE(enabled, 1), created_at, updated_at
-                FROM poll_templates
-                """
-            )
-        else:
-            conn.execute(
-                """
-                INSERT INTO poll_templates_new (
-                    id, name, place, message, open_day, open_hour_utc, open_minute_utc,
-                    game_day, game_hour_utc, game_minute_utc, cost, cost_per_game,
-                    enabled, created_at, updated_at
-                )
-                SELECT
-                    id, name, place, message, open_day, open_hour_utc, open_minute_utc,
-                    game_day, game_hour_utc, game_minute_utc, cost,
-                    COALESCE(cost_per_game, 0), COALESCE(enabled, 1), created_at, updated_at
-                FROM poll_templates
-                """
-            )
 
-        conn.execute("DROP TABLE poll_templates")
-        conn.execute("ALTER TABLE poll_templates_new RENAME TO poll_templates")
-        _create_indexes(conn)
-        conn.execute("PRAGMA user_version = 6")
-        conn.execute("PRAGMA foreign_keys = ON")
-        fk_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
-        if fk_errors:
-            raise sqlite3.IntegrityError(f"foreign_key_check failed: {fk_errors}")
-        logging.info("✅ Миграция: monthly_cost → cost_per_game завершена")
-    except Exception:
-        conn.execute("PRAGMA foreign_keys = ON")
-        raise
+    mismatches = _validate_schema_strict(conn)
+    if mismatches:
+        raise sqlite3.DatabaseError("Incompatible DB schema: " + "; ".join(mismatches))
+
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
-def _migrate_to_v7(conn: sqlite3.Connection) -> None:
-    """Добавляет snapshot целевого месяца для monthly_subscription."""
-    if _table_exists(conn, "games"):
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(games)")}
-        if "target_month_snapshot" not in columns:
-            conn.execute("ALTER TABLE games ADD COLUMN target_month_snapshot TEXT")
-            logging.info("✅ Миграция: добавлен столбец target_month_snapshot в games")
-    conn.execute("PRAGMA user_version = 7")
+def _validate_schema_strict(conn: sqlite3.Connection) -> list[str]:
+    mismatches: list[str] = []
+    for table_name, expected_columns in EXPECTED_TABLE_COLUMNS.items():
+        actual_columns = {
+            row[1]
+            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        missing_columns = sorted(expected_columns - actual_columns)
+        unexpected_columns = sorted(actual_columns - expected_columns)
+        if missing_columns:
+            mismatches.append(f"{table_name}: missing columns {missing_columns}")
+        if unexpected_columns:
+            mismatches.append(f"{table_name}: unexpected columns {unexpected_columns}")
+    return mismatches
 
 
-def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?", (table_name,)
-        ).fetchone()
-        is not None
+def _create_indexes(conn: sqlite3.Connection) -> None:
+    """Создаёт индексы для актуальной схемы."""
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_poll_subscriptions_user_id ON poll_subscriptions(user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_hall_payments_month ON hall_payments(month)"
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_transactions_player_created_at
+        ON transactions(player_id, created_at DESC)
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transactions_poll_template_id ON transactions(poll_template_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_games_status_kind ON games(status, kind)"
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_games_template_opened_at
+        ON games(poll_template_id, opened_at DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_games_chat_opened_at
+        ON games(chat_id, opened_at DESC)
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_games_opened_at ON games(opened_at DESC)"
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_game_participants_player_created_at
+        ON game_participants(player_id, created_at DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_game_participants_game_bucket_sort
+        ON game_participants(game_poll_id, roster_bucket, sort_order)
+        """
     )
 
 
@@ -1210,7 +998,7 @@ def create_game(
     game_date: str | None = None,
     place_snapshot: str | None = None,
     cost_snapshot: int = 0,
-    monthly_cost_snapshot: int = 0,
+    cost_per_game_snapshot: int = 0,
     target_month_snapshot: str | None = None,
     options: list[str] | None = None,
     option_poll_names: list[str | None] | None = None,
@@ -1228,7 +1016,7 @@ def create_game(
                     poll_id, kind, status, poll_template_id, poll_name_snapshot,
                     question_snapshot, chat_id, poll_message_id, info_message_id,
                     final_message_id, opened_at, game_date, place_snapshot,
-                    cost_snapshot, monthly_cost_snapshot, options_json,
+                    cost_snapshot, cost_per_game_snapshot, options_json,
                     option_poll_names_json, target_month_snapshot, last_info_text, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(poll_id) DO UPDATE SET
@@ -1245,7 +1033,7 @@ def create_game(
                     game_date = excluded.game_date,
                     place_snapshot = excluded.place_snapshot,
                     cost_snapshot = excluded.cost_snapshot,
-                    monthly_cost_snapshot = excluded.monthly_cost_snapshot,
+                    cost_per_game_snapshot = excluded.cost_per_game_snapshot,
                     options_json = excluded.options_json,
                     option_poll_names_json = excluded.option_poll_names_json,
                     target_month_snapshot = excluded.target_month_snapshot,
@@ -1267,7 +1055,7 @@ def create_game(
                     game_date,
                     place_snapshot,
                     cost_snapshot,
-                    monthly_cost_snapshot,
+                    cost_per_game_snapshot,
                     json.dumps(options or [], ensure_ascii=False),
                     json.dumps(option_poll_names or [], ensure_ascii=False),
                     target_month_snapshot,
@@ -1394,10 +1182,14 @@ def load_monthly_votes(game_poll_id: str) -> dict[int, list[int]]:
                 loaded = json.loads(option_ids_json)
             except (TypeError, ValueError):
                 loaded = []
-            result[int(player_id)] = [int(value) for value in loaded if isinstance(value, int)]
+            result[int(player_id)] = [
+                int(value) for value in loaded if isinstance(value, int)
+            ]
         return result
     except sqlite3.Error:
-        logging.exception(f"❌ Ошибка при загрузке monthly votes game_poll_id={game_poll_id}")
+        logging.exception(
+            f"❌ Ошибка при загрузке monthly votes game_poll_id={game_poll_id}"
+        )
         return {}
 
 
@@ -1479,12 +1271,16 @@ def get_open_monthly_game() -> dict[str, Any] | None:
         return None
 
 
-def save_game_participants(game_poll_id: str, participants: list[dict[str, Any]]) -> None:
+def save_game_participants(
+    game_poll_id: str, participants: list[dict[str, Any]]
+) -> None:
     """Сохраняет состав и финансовый итог игры."""
     try:
         init_db()
         with _connect() as conn:
-            conn.execute("DELETE FROM game_participants WHERE game_poll_id = ?", (game_poll_id,))
+            conn.execute(
+                "DELETE FROM game_participants WHERE game_poll_id = ?", (game_poll_id,)
+            )
             for participant in participants:
                 conn.execute(
                     """
@@ -1625,16 +1421,28 @@ def get_stats_summary(month: str | None = None) -> dict[str, Any]:
 
         return {
             "games_count": int(summary_row["games_count"] or 0) if summary_row else 0,
-            "unique_players": int(summary_row["unique_players"] or 0) if summary_row else 0,
+            "unique_players": int(summary_row["unique_players"] or 0)
+            if summary_row
+            else 0,
             "avg_main": avg_main,
             "avg_interest": avg_interest,
-            "subscription_uses": int(summary_row["subscription_uses"] or 0) if summary_row else 0,
-            "single_game_charges": int(summary_row["single_game_charges"] or 0) if summary_row else 0,
-            "single_game_sum": int(summary_row["single_game_sum"] or 0) if summary_row else 0,
+            "subscription_uses": int(summary_row["subscription_uses"] or 0)
+            if summary_row
+            else 0,
+            "single_game_charges": int(summary_row["single_game_charges"] or 0)
+            if summary_row
+            else 0,
+            "single_game_sum": int(summary_row["single_game_sum"] or 0)
+            if summary_row
+            else 0,
             "topups_sum": int(payments_row["topups_sum"] or 0) if payments_row else 0,
-            "hall_payments_sum": int(hall_row["hall_payments_sum"] or 0) if hall_row else 0,
+            "hall_payments_sum": int(hall_row["hall_payments_sum"] or 0)
+            if hall_row
+            else 0,
             "fund_balance": get_fund_balance(),
-            "monthly_polls": int(monthly_row["monthly_polls"] or 0) if monthly_row else 0,
+            "monthly_polls": int(monthly_row["monthly_polls"] or 0)
+            if monthly_row
+            else 0,
         }
     except sqlite3.Error:
         logging.exception("❌ Ошибка при получении сводной статистики")
@@ -1714,19 +1522,26 @@ def get_poll_stats(poll_template_id: int, month: str | None = None) -> dict[str,
             ).fetchall()
         return {
             "games_count": int(stats_rows["games_count"] or 0) if stats_rows else 0,
-            "unique_players": int(stats_rows["unique_players"] or 0) if stats_rows else 0,
+            "unique_players": int(stats_rows["unique_players"] or 0)
+            if stats_rows
+            else 0,
             "avg_main": (
                 sum(int(row["main_count"]) for row in main_rows) / len(main_rows)
                 if main_rows
                 else 0.0
             ),
             "avg_interest": (
-                sum(int(row["interested"]) for row in avg_interest_rows) / len(avg_interest_rows)
+                sum(int(row["interested"]) for row in avg_interest_rows)
+                / len(avg_interest_rows)
                 if avg_interest_rows
                 else 0.0
             ),
-            "subscription_uses": int(stats_rows["subscription_uses"] or 0) if stats_rows else 0,
-            "single_game_sum": int(stats_rows["single_game_sum"] or 0) if stats_rows else 0,
+            "subscription_uses": int(stats_rows["subscription_uses"] or 0)
+            if stats_rows
+            else 0,
+            "single_game_sum": int(stats_rows["single_game_sum"] or 0)
+            if stats_rows
+            else 0,
             "last_game": games[0]["closed_at"] if games else None,
             "poll_name_snapshot": games[0]["poll_name_snapshot"] if games else "",
         }
