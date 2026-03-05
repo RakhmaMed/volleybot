@@ -346,7 +346,7 @@ class TestDBPolls:
             ).fetchone()
             assert template is not None
             assert template["id"] is not None
-            assert template["monthly_cost"] == 0
+            assert template["cost_per_game"] == 0
             assert template["enabled"] == 1
             assert template["created_at"] == "2026-02-01 12:00:00"
 
@@ -429,10 +429,79 @@ class TestDBPolls:
                 row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")
             }
             assert "enabled" in columns
+            assert "cost_per_game" in columns
+            assert "monthly_cost" not in columns
 
             row = conn.execute(
-                "SELECT enabled FROM poll_templates WHERE name = ?",
+                "SELECT enabled, cost_per_game FROM poll_templates WHERE name = ?",
                 ("Existing Poll",),
             ).fetchone()
             assert row is not None
             assert row["enabled"] == 1
+            assert row["cost_per_game"] == 1500
+
+    def test_migrates_v5_monthly_cost_to_cost_per_game(self, temp_db):
+        """Схема v5 переносит monthly_cost в cost_per_game по правилу 1500/0."""
+        with _connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE players (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    fullname TEXT,
+                    ball_donate INTEGER DEFAULT 0,
+                    balance INTEGER DEFAULT 0,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE poll_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    place TEXT,
+                    message TEXT NOT NULL,
+                    open_day TEXT NOT NULL DEFAULT '*',
+                    open_hour_utc INTEGER NOT NULL DEFAULT 0,
+                    open_minute_utc INTEGER NOT NULL DEFAULT 0,
+                    game_day TEXT NOT NULL DEFAULT '*',
+                    game_hour_utc INTEGER NOT NULL DEFAULT 0,
+                    game_minute_utc INTEGER NOT NULL DEFAULT 0,
+                    cost INTEGER NOT NULL DEFAULT 0,
+                    monthly_cost INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO poll_templates (
+                    name, message, game_day, cost, monthly_cost
+                ) VALUES
+                    ('Paid Hall', 'Msg', 'mon', 150, 6000),
+                    ('Free Hall', 'Msg', 'wed', 150, 0)
+                """
+            )
+            conn.execute("PRAGMA user_version = 5")
+            conn.commit()
+
+        init_db()
+
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")
+            }
+            assert "cost_per_game" in columns
+            assert "monthly_cost" not in columns
+
+            rows = conn.execute(
+                "SELECT name, cost_per_game FROM poll_templates ORDER BY id"
+            ).fetchall()
+            assert rows[0]["name"] == "Paid Hall"
+            assert rows[0]["cost_per_game"] == 1500
+            assert rows[1]["name"] == "Free Hall"
+            assert rows[1]["cost_per_game"] == 0

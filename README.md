@@ -57,7 +57,7 @@
 | Таблица | Назначение |
 |---------|-----------|
 | `players` | Игроки: ID, имя, баланс, донат мяча |
-| `poll_templates` | Опросы: `id`, отображаемое `name`, расписание, стоимость игры (`cost`), стоимость зала в месяц (`monthly_cost`) |
+| `poll_templates` | Опросы: `id`, отображаемое `name`, расписание, стоимость игры (`cost`), стоимость аренды за игру (`cost_per_game`) |
 | `poll_subscriptions` | Подписки игроков на опросы по `poll_template_id` |
 | `transactions` | История всех финансовых операций с `poll_template_id` и `poll_name_snapshot` |
 | `hall_payments` | Отслеживание оплаты залов по месяцам по `poll_template_id` |

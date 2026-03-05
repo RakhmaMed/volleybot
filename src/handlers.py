@@ -54,6 +54,7 @@ from .scheduler import get_monthly_subscription_poll_params
 from .services import AdminService, BotStateService, PollService
 from .types import PollTemplate
 from .utils import (
+    count_games_in_month,
     escape_html,
     format_player_link,
     get_player_name,
@@ -1233,12 +1234,16 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         for hall in unpaid:
             poll_template_id = int(hall["id"])
             hall_name = str(hall.get("name", ""))
-            monthly_cost = int(hall.get("monthly_cost", 0) or 0)
+            cost_per_game = int(hall.get("cost_per_game", 0) or 0)
+            games_in_month = count_games_in_month(
+                str(hall.get("game_day", "*") or "*"), current_month
+            )
+            monthly_rent = cost_per_game * games_in_month
             place = str(hall.get("place", ""))
             label = f"{hall_name}"
             if place:
                 label += f" ({place})"
-            label += f" — {monthly_cost} ₽"
+            label += f" — {cost_per_game}×{games_in_month} = {monthly_rent} ₽"
             lines.append(f"• {escape_html(label)}")
             callback_data = f"hall_pay:{poll_template_id}:{current_month}"
             keyboard.append(
@@ -1656,24 +1661,28 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
         poll_name = str(hall["name"])
 
-        monthly_cost = int(hall.get("monthly_cost", 0) or 0)
-        if monthly_cost <= 0:
+        cost_per_game = int(hall.get("cost_per_game", 0) or 0)
+        games_in_month = count_games_in_month(
+            str(hall.get("game_day", "*") or "*"), month
+        )
+        monthly_rent = cost_per_game * games_in_month
+        if monthly_rent <= 0:
             await callback_query.answer(
                 "❌ У этого зала нулевая стоимость.", show_alert=True
             )
             return
 
         # Записываем оплату
-        if not record_hall_payment(poll_template_id, month, monthly_cost):
+        if not record_hall_payment(poll_template_id, month, monthly_rent):
             await callback_query.answer(
                 f"⚠️ Зал '{poll_name}' за {month} уже оплачен.", show_alert=True
             )
             return
 
-        update_fund_balance(-monthly_cost)
+        update_fund_balance(-monthly_rent)
         add_transaction(
             user.id,
-            -monthly_cost,
+            -monthly_rent,
             f"Оплата зала: {poll_name} ({month})",
             poll_template_id=poll_template_id,
             poll_name_snapshot=poll_name,
@@ -1689,7 +1698,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             f"✅ <b>Зал оплачен</b>\n\n"
             f"🏟 {escape_html(hall_label)}\n"
             f"📅 Месяц: {month}\n"
-            f"💸 Сумма: {monthly_cost} ₽\n"
+            f"💸 Сумма: {cost_per_game} ₽ × {games_in_month} = {monthly_rent} ₽\n"
             f"🏦 Касса: <b>{fund} ₽</b>"
         )
 
@@ -1704,7 +1713,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         await callback_query.answer()
         logging.info(
-            f"🏟 Админ @{user.username} (ID: {user.id}) оплатил зал {poll_name} за {month}: {monthly_cost}₽"
+            f"🏟 Админ @{user.username} (ID: {user.id}) оплатил зал {poll_name} за {month}: {monthly_rent}₽ "
+            f"(cost_per_game={cost_per_game}, games={games_in_month})"
         )
 
     @router.poll_answer()

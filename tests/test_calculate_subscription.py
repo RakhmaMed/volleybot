@@ -12,15 +12,30 @@ from src.services.poll_service import (
     SAFETY_K,
     SAVINGS_BUFFER,
     SINGLE_GAME_PRICE,
-    calculate_subscription,
+    calculate_subscription as _calculate_subscription,
 )
 from src.types import PollTemplate
+
+TEST_MONTH = "2026-02"
+
+
+def calculate_subscription(
+    paid_polls, votes_by_poll, target_month: str = TEST_MONTH, fund_balance: int = 0
+):
+    """Обёртка для детерминированного месяца расчёта в тестах."""
+    return _calculate_subscription(
+        paid_polls,
+        votes_by_poll,
+        target_month=target_month,
+        fund_balance=fund_balance,
+    )
 
 
 def _make_poll(
     name: str,
     cost: int = 150,
-    monthly_cost: int = 0,
+    cost_per_game: int = 0,
+    game_day: str = "tue",
 ) -> PollTemplate:
     """Фабрика для создания PollTemplate с минимальными полями."""
     return PollTemplate(
@@ -29,11 +44,11 @@ def _make_poll(
         open_day="mon",
         open_hour_utc=10,
         open_minute_utc=0,
-        game_day="tue",
+        game_day=game_day,
         game_hour_utc=18,
         game_minute_utc=0,
         cost=cost,
-        monthly_cost=monthly_cost,
+        cost_per_game=cost_per_game,
     )
 
 
@@ -56,13 +71,13 @@ class TestEmptyInputs:
 
     def test_no_votes(self):
         """Есть платные опросы, но никто не голосовал."""
-        polls = [_make_poll("Пятница", monthly_cost=6000)]
+        polls = [_make_poll("Пятница", cost_per_game=1500)]
         result = calculate_subscription(polls, {})
 
         assert len(result.hall_breakdown) == 1
         h = result.hall_breakdown[0]
         assert h.name == "Пятница"
-        assert h.monthly_cost == 6000
+        assert h.cost_per_game == 1500
         assert h.num_subs == 0
         assert h.per_person == 0
         assert result.subscriber_charges == []
@@ -71,7 +86,7 @@ class TestEmptyInputs:
 
     def test_empty_votes_set(self):
         """Запись в votes_by_poll есть, но множество пустое."""
-        polls = [_make_poll("Пятница", monthly_cost=6000)]
+        polls = [_make_poll("Пятница", cost_per_game=1500)]
         result = calculate_subscription(polls, {"Пятница": set()})
 
         assert result.hall_breakdown[0].num_subs == 0
@@ -79,15 +94,15 @@ class TestEmptyInputs:
         assert result.subscriber_charges == []
 
 
-# ── monthly_cost = 0 ────────────────────────────────────────────────────────
+# ── cost_per_game = 0 ────────────────────────────────────────────────────────
 
 
 class TestZeroMonthlyCost:
-    """Залы с нулевой или отсутствующей monthly_cost."""
+    """Залы с нулевой или отсутствующей cost_per_game."""
 
-    def test_monthly_cost_zero(self):
-        """Зал с monthly_cost=0 — per_person=0, нет списаний."""
-        polls = [_make_poll("Среда", monthly_cost=0)]
+    def test_cost_per_game_zero(self):
+        """Зал с cost_per_game=0 — per_person=0, нет списаний."""
+        polls = [_make_poll("Среда", cost_per_game=0)]
         votes = {"Среда": {1, 2, 3}}
         result = calculate_subscription(polls, votes)
 
@@ -95,8 +110,28 @@ class TestZeroMonthlyCost:
         assert result.hall_breakdown[0].per_person == 0
         assert result.subscriber_charges == []
 
-    def test_monthly_cost_missing(self):
-        """Зал без поля monthly_cost (по умолчанию 0)."""
+
+class TestDynamicMonthlyRent:
+    """Проверка динамического расчёта аренды по количеству игровых дней."""
+
+    def test_february_vs_march_for_monday(self):
+        polls = [_make_poll("Понедельник", cost_per_game=1500, game_day="mon")]
+        feb = calculate_subscription(polls, {"Понедельник": {1}}, target_month="2026-02")
+        mar = calculate_subscription(polls, {"Понедельник": {1}}, target_month="2026-03")
+
+        assert feb.hall_breakdown[0].games_in_month == 4
+        assert feb.hall_breakdown[0].monthly_rent == 6000
+        assert mar.hall_breakdown[0].games_in_month == 5
+        assert mar.hall_breakdown[0].monthly_rent == 7500
+
+    def test_wildcard_game_day_uses_default_four(self):
+        polls = [_make_poll("Тест", cost_per_game=1500, game_day="*")]
+        result = calculate_subscription(polls, {"Тест": {1}}, target_month="2026-03")
+        assert result.hall_breakdown[0].games_in_month == 4
+        assert result.hall_breakdown[0].monthly_rent == 6000
+
+    def test_cost_per_game_missing(self):
+        """Зал без поля cost_per_game (по умолчанию 0)."""
         poll: PollTemplate = PollTemplate(
             name="Среда",
             message="Бесплатная игра",
@@ -124,8 +159,8 @@ class TestPriceRange:
     def test_price_within_bounds(self):
         """Цена за 1 зал попадает в [400, 500]."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {
             "Понедельник": {1, 2, 3, 4, 5},
@@ -139,8 +174,8 @@ class TestPriceRange:
     def test_price_rounded_to_10(self):
         """Цена округлена до 10 руб."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {
             "Понедельник": {1, 2, 3},
@@ -155,8 +190,8 @@ class TestPriceRange:
     def test_price_clamped_at_min(self):
         """При большом числе подписчиков цена не опускается ниже MIN."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         # Очень много подписчиков — raw_price будет мал
         votes = {
@@ -170,8 +205,8 @@ class TestPriceRange:
     def test_price_clamped_at_max(self):
         """При малом числе подписчиков цена не поднимается выше MAX."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         # Мало подписчиков, казна пуста — raw_price будет велик
         votes = {
@@ -185,8 +220,8 @@ class TestPriceRange:
     def test_all_halls_same_per_person(self):
         """Единая цена: per_person одинаков для всех платных залов."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=5000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1250),
         ]
         votes = {
             "Понедельник": {1, 2, 3},
@@ -195,7 +230,7 @@ class TestPriceRange:
         result = calculate_subscription(polls, votes)
 
         paid_halls = [
-            h for h in result.hall_breakdown if h.monthly_cost > 0 and h.num_subs > 0
+            h for h in result.hall_breakdown if h.cost_per_game > 0 and h.num_subs > 0
         ]
         prices = {h.per_person for h in paid_halls}
         assert len(prices) == 1  # все цены одинаковые
@@ -210,8 +245,8 @@ class TestComboDiscount:
     def test_combo_cheaper_than_two_singles(self):
         """Комбо дешевле, чем два абонемента по отдельности."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {
             "Понедельник": {1, 2, 3},
@@ -225,8 +260,8 @@ class TestComboDiscount:
     def test_combo_price_is_coeff_times_single(self):
         """Комбо = price_per_hall * COMBO_DISCOUNT_COEFF, округлено до 10."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {
             "Понедельник": {1, 2},
@@ -240,8 +275,8 @@ class TestComboDiscount:
     def test_combo_subscriber_charged_combo_price(self):
         """Подписчик на оба зала платит combo_price."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {
             "Понедельник": {1, 2, 3},
@@ -264,8 +299,8 @@ class TestComboDiscount:
     def test_all_combo_subscribers(self):
         """Все подписчики на оба зала — все платят combo_price."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {
             "Понедельник": {1, 2, 3},
@@ -280,8 +315,8 @@ class TestComboDiscount:
     def test_all_single_hall_subscribers(self):
         """Нет комбо — все платят price_per_hall."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {
             "Понедельник": {1, 2},
@@ -302,8 +337,8 @@ class TestFundBalance:
 
     def _two_halls_with_votes(self):
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {
             "Понедельник": {1, 2, 3, 4, 5},
@@ -349,7 +384,7 @@ class TestSingleHall:
 
     def test_single_hall_no_combo(self):
         """Один зал — все подписчики single-hall."""
-        polls = [_make_poll("Пятница", monthly_cost=6000)]
+        polls = [_make_poll("Пятница", cost_per_game=1500)]
         votes = {"Пятница": {1, 2, 3, 4, 5}}
         result = calculate_subscription(polls, votes)
 
@@ -360,7 +395,7 @@ class TestSingleHall:
 
     def test_single_hall_price_in_range(self):
         """Один зал — цена в диапазоне [400, 500]."""
-        polls = [_make_poll("Пятница", monthly_cost=6000)]
+        polls = [_make_poll("Пятница", cost_per_game=1500)]
         votes = {"Пятница": set(range(10))}
         result = calculate_subscription(polls, votes)
 
@@ -376,8 +411,8 @@ class TestMixedHalls:
     def test_free_hall_no_charges(self):
         """Бесплатный зал не влияет на цену и не создаёт списаний."""
         polls = [
-            _make_poll("Среда", monthly_cost=0),
-            _make_poll("Пятница", monthly_cost=6000),
+            _make_poll("Среда", cost_per_game=0),
+            _make_poll("Пятница", cost_per_game=1500),
         ]
         votes = {
             "Среда": {1, 2, 10, 11},
@@ -397,8 +432,8 @@ class TestMixedHalls:
     def test_mixed_zero_and_paid(self):
         """Один зал бесплатный, другой платный — списание только за платный."""
         polls = [
-            _make_poll("Среда", monthly_cost=0),
-            _make_poll("Пятница", monthly_cost=6000),
+            _make_poll("Среда", cost_per_game=0),
+            _make_poll("Пятница", cost_per_game=1500),
         ]
         votes = {
             "Среда": {1, 2},
@@ -421,8 +456,8 @@ class TestProjectedSavings:
     def test_projected_savings_formula(self):
         """projected_savings = fund + sub_income + singles_income - total_rent."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {
             "Понедельник": {1, 2, 3, 4, 5},
@@ -432,9 +467,7 @@ class TestProjectedSavings:
         result = calculate_subscription(polls, votes, fund_balance=fund)
 
         total_sub_income = sum(c.total for c in result.subscriber_charges)
-        total_rent = sum(
-            h.monthly_cost for h in result.hall_breakdown if h.monthly_cost > 0
-        )
+        total_rent = sum(h.monthly_rent for h in result.hall_breakdown if h.monthly_rent > 0)
         expected = fund + total_sub_income + result.expected_singles_income - total_rent
 
         assert result.projected_savings == expected
@@ -442,8 +475,8 @@ class TestProjectedSavings:
     def test_expected_singles_income_formula(self):
         """Проверяем формулу дохода от разовых игроков."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {
             "Понедельник": {1},
@@ -471,9 +504,9 @@ class TestResultStructure:
     def test_hall_breakdown_order_matches_input(self):
         """hall_breakdown сохраняет порядок входных polls."""
         polls = [
-            _make_poll("Среда", monthly_cost=0),
-            _make_poll("Пятница", monthly_cost=6000),
-            _make_poll("Понедельник", monthly_cost=4000),
+            _make_poll("Среда", cost_per_game=0),
+            _make_poll("Пятница", cost_per_game=1500),
+            _make_poll("Понедельник", cost_per_game=250),
         ]
         votes = {
             "Пятница": {1},
@@ -486,7 +519,7 @@ class TestResultStructure:
 
     def test_subscriber_charges_sorted_by_user_id(self):
         """subscriber_charges отсортированы по user_id."""
-        polls = [_make_poll("Пятница", monthly_cost=6000)]
+        polls = [_make_poll("Пятница", cost_per_game=1500)]
         votes = {"Пятница": {99, 5, 42, 1}}
         result = calculate_subscription(polls, votes)
 
@@ -496,8 +529,8 @@ class TestResultStructure:
     def test_halls_in_charge_sorted_alphabetically(self):
         """Список залов в SubscriberCharge отсортирован по алфавиту."""
         polls = [
-            _make_poll("Яблоко", monthly_cost=1000),
-            _make_poll("Арбуз", monthly_cost=2000),
+            _make_poll("Яблоко", cost_per_game=250),
+            _make_poll("Арбуз", cost_per_game=500),
         ]
         votes = {
             "Яблоко": {1},
@@ -510,8 +543,8 @@ class TestResultStructure:
     def test_dataclass_fields(self):
         """Все поля SubscriptionResult заполнены."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {"Понедельник": {1}, "Четверг": {1}}
         result = calculate_subscription(polls, votes)
@@ -523,7 +556,7 @@ class TestResultStructure:
 
         h = result.hall_breakdown[0]
         assert isinstance(h.name, str)
-        assert isinstance(h.monthly_cost, int)
+        assert isinstance(h.cost_per_game, int)
         assert isinstance(h.num_subs, int)
         assert isinstance(h.per_person, int)
 
@@ -546,8 +579,8 @@ class TestRealWorldScenario:
         Цена за 1 зал должна быть 400-500₽, комбо со скидкой.
         """
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         # Комбо: {1, 2, 3}, только ПН: {4, 5}, только ЧТ: {6}
         votes = {
@@ -576,8 +609,8 @@ class TestRealWorldScenario:
         Ожидаем цену в диапазоне 400-500.
         """
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         # n_combo = 8: users 1-8 подписаны на оба зала
         # n_a = 5: users 9-13 только на ПН
@@ -605,9 +638,9 @@ class TestRealWorldScenario:
         Бесплатный зал не влияет на расчёт.
         """
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Среда", monthly_cost=0),
-            _make_poll("Четверг", monthly_cost=6000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Среда", cost_per_game=0),
+            _make_poll("Четверг", cost_per_game=1500),
         ]
         votes = {
             "Понедельник": {1, 2, 3, 4, 5},
@@ -636,7 +669,7 @@ class TestVotePollMismatch:
 
     def test_votes_for_unknown_poll(self):
         """Голоса за опрос, которого нет в paid_polls — игнорируются."""
-        polls = [_make_poll("Пятница", monthly_cost=6000)]
+        polls = [_make_poll("Пятница", cost_per_game=1500)]
         votes = {
             "Пятница": {1, 2},
             "Неизвестный": {3},
@@ -649,8 +682,8 @@ class TestVotePollMismatch:
     def test_poll_without_votes(self):
         """Платный опрос без голосов — в hall_breakdown, но без списаний."""
         polls = [
-            _make_poll("Понедельник", monthly_cost=6000),
-            _make_poll("Пятница", monthly_cost=4000),
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Пятница", cost_per_game=250),
         ]
         votes = {"Пятница": {1, 2}}
         result = calculate_subscription(polls, votes)
@@ -664,15 +697,15 @@ class TestVotePollMismatch:
             assert charge.halls == ["Пятница"]
 
 
-# ── Отрицательный monthly_cost ────────────────────────────────────────────────
+# ── Отрицательный cost_per_game ────────────────────────────────────────────────
 
 
 class TestNegativeMonthlyCost:
-    """Отрицательная monthly_cost обрабатывается как нулевая."""
+    """Отрицательная cost_per_game обрабатывается как нулевая."""
 
-    def test_negative_monthly_cost_ignored(self):
-        """Зал с отрицательной monthly_cost — per_person=0, нет списаний."""
-        polls = [_make_poll("Глюк", monthly_cost=-500)]
+    def test_negative_cost_per_game_ignored(self):
+        """Зал с отрицательной cost_per_game — per_person=0, нет списаний."""
+        polls = [_make_poll("Глюк", cost_per_game=-125)]
         votes = {"Глюк": {1, 2}}
         result = calculate_subscription(polls, votes)
 

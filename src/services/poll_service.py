@@ -42,7 +42,6 @@ from ..db import (
     load_monthly_votes,
     load_state,
     save_game_participants,
-    save_monthly_vote,
     save_poll_template,
     save_state,
     update_game_info_message,
@@ -51,12 +50,19 @@ from ..db import (
 )
 from ..poll import PollData, VoterInfo, sort_voters_by_update_id
 from ..types import HallBreakdown, PollTemplate, SubscriberCharge, SubscriptionResult
-from ..utils import escape_html, format_player_link, retry_async, save_error_dump
+from ..utils import (
+    count_games_in_month,
+    escape_html,
+    format_player_link,
+    get_next_month_str,
+    retry_async,
+    save_error_dump,
+)
 
 # ── Константы бюджетного расчёта абонемента ──────────────────────────────────
 AVG_SINGLES_PER_GAME = 7  # Среднее кол-во разовых игроков за игру
 SINGLE_GAME_PRICE = 150  # Цена разового входа (руб.)
-GAMES_PER_MONTH = 4  # Игр в месяц на один зал
+GAMES_PER_MONTH = 4  # Legacy-константа (fallback для '*'/некорректного дня)
 SAFETY_K = 0.7  # Коэффициент надёжности (риск неявки)
 TARGET_GROWTH = 1000  # Желаемый прирост казны в месяц (руб.)
 SAVINGS_BUFFER = 6000  # Целевая «подушка» казны (руб.)
@@ -69,6 +75,7 @@ DEFAULT_SUB_PRICE = 450  # Цена по умолчанию, если нет п�
 def calculate_subscription(
     paid_polls: list[PollTemplate],
     votes_by_poll: dict[str, set[int]],
+    target_month: str | None = None,
     fund_balance: int = 0,
 ) -> SubscriptionResult:
     """
@@ -81,6 +88,7 @@ def calculate_subscription(
     Args:
         paid_polls: шаблоны платных опросов (``cost > 0``).
         votes_by_poll: маппинг ``poll_name → {user_id, …}`` из голосования.
+        target_month: месяц расчёта в формате ``YYYY-MM``.
         fund_balance: текущий баланс казны (влияет на целевую сумму сбора).
 
     Returns:
@@ -88,29 +96,39 @@ def calculate_subscription(
         подписчикам.
     """
     # --- 1. Собираем данные по залам ---
+    if not target_month:
+        target_month = datetime.now().strftime("%Y-%m")
+
     hall_breakdown: list[HallBreakdown] = []
     paid_hall_names: list[str] = []
 
     for template in paid_polls:
         name = str(template.get("name", ""))
-        monthly_cost = int(template.get("monthly_cost", 0) or 0)
+        cost_per_game = int(template.get("cost_per_game", 0) or 0)
+        game_day = str(template.get("game_day", "*") or "*")
+        games_in_month = count_games_in_month(game_day, target_month, GAMES_PER_MONTH)
+        monthly_rent = cost_per_game * games_in_month
         subs_set = votes_by_poll.get(name, set())
         num_subs = len(subs_set)
 
-        if monthly_cost > 0:
+        if monthly_rent > 0:
             paid_hall_names.append(name)
 
         hall_breakdown.append(
             HallBreakdown(
                 name=name,
-                monthly_cost=monthly_cost,
+                cost_per_game=cost_per_game,
+                games_in_month=games_in_month,
+                monthly_rent=monthly_rent,
                 num_subs=num_subs,
                 per_person=0,  # заполним ниже
             )
         )
 
-    num_halls = len(paid_hall_names)
-    total_rent = sum(h.monthly_cost for h in hall_breakdown if h.monthly_cost > 0)
+    total_rent = sum(h.monthly_rent for h in hall_breakdown if h.monthly_rent > 0)
+    total_games_across_halls = sum(
+        h.games_in_month for h in hall_breakdown if h.monthly_rent > 0
+    )
 
     # --- 2. Классифицируем подписчиков: single-hall vs combo ---
     user_halls: dict[int, list[str]] = {}
@@ -125,8 +143,7 @@ def calculate_subscription(
     expected_singles_income = round(
         AVG_SINGLES_PER_GAME
         * SINGLE_GAME_PRICE
-        * GAMES_PER_MONTH
-        * num_halls
+        * total_games_across_halls
         * SAFETY_K
     )
 
@@ -158,7 +175,7 @@ def calculate_subscription(
 
     # --- 8. Заполняем per_person в hall_breakdown ---
     for h in hall_breakdown:
-        if h.monthly_cost > 0 and h.num_subs > 0:
+        if h.monthly_rent > 0 and h.num_subs > 0:
             h.per_person = price_per_hall
 
     # --- 9. Формируем списания ---
@@ -291,6 +308,11 @@ class PollService:
                         ],
                         monthly_votes=load_monthly_votes(poll_id)
                         or fallback.get("monthly_votes", {}),
+                        target_month=(
+                            str(row.get("target_month_snapshot"))
+                            if row.get("target_month_snapshot")
+                            else fallback.get("target_month")
+                        ),
                     )
                     self._poll_data[poll_id] = restored
                     self._update_tasks[poll_id] = None
@@ -586,7 +608,13 @@ class PollService:
             )
             return chat_id
 
-        opened_at = datetime.now(timezone.utc).isoformat()
+        opened_dt = datetime.now(timezone.utc)
+        opened_at = opened_dt.isoformat()
+        target_month_snapshot = (
+            get_next_month_str(opened_dt)
+            if poll_kind == "monthly_subscription"
+            else None
+        )
         poll_templates = get_poll_templates()
         poll_template = next(
             (
@@ -602,7 +630,7 @@ class PollService:
         )
         cost_snapshot = int(poll_template.get("cost", 0) or 0) if poll_template else 0
         monthly_cost_snapshot = (
-            int(poll_template.get("monthly_cost", 0) or 0) if poll_template else 0
+            int(poll_template.get("cost_per_game", 0) or 0) if poll_template else 0
         )
         create_game(
             poll_id=poll_message.poll.id,
@@ -618,6 +646,7 @@ class PollService:
             place_snapshot=place_snapshot,
             cost_snapshot=cost_snapshot,
             monthly_cost_snapshot=monthly_cost_snapshot,
+            target_month_snapshot=target_month_snapshot,
             options=poll_options,
             option_poll_names=option_poll_names or [],
         )
@@ -643,6 +672,7 @@ class PollService:
             subs=subs or [],
             options=poll_options,
             option_poll_names=option_poll_names or [],
+            target_month=target_month_snapshot,
         )
         self._update_tasks[poll_message.poll.id] = None
         self.persist_state()
@@ -1062,14 +1092,16 @@ class PollService:
 
         # --- Расчёт стоимости абонемента ---
         total_voters = len(data.monthly_votes)
-        current_month = datetime.now().strftime("%Y-%m")
+        target_month = self._resolve_target_month(data)
         fund_balance = get_fund_balance()
 
-        result = calculate_subscription(paid_polls, votes_by_poll, fund_balance)
+        result = calculate_subscription(
+            paid_polls, votes_by_poll, target_month, fund_balance
+        )
         # Касса не меняется при закрытии опроса — уменьшается только при оплате залов
 
         # Применяем списания к БД
-        charged_subscribers = self._apply_subscription_charges(result, current_month)
+        charged_subscribers = self._apply_subscription_charges(result, target_month)
 
         # --- Формируем и отправляем итоговое сообщение ---
         summary_text = self._format_hall_summary(result)
@@ -1128,7 +1160,7 @@ class PollService:
         # Отправляем подробный отчёт админу
         if ADMIN_USER_ID and charged_subscribers:
             admin_report = self._format_admin_subscription_report(
-                current_month,
+                target_month,
                 summary_text,
                 charged_subscribers,
                 fund_balance,
@@ -1166,6 +1198,19 @@ class PollService:
             closed_at=datetime.now(timezone.utc).isoformat(),
             final_message_id=final_message_id,
         )
+
+    @staticmethod
+    def _resolve_target_month(data: PollData) -> str:
+        """Определяет месяц абонемента, зафиксированный при открытии опроса."""
+        if data.target_month:
+            return data.target_month
+        if data.opened_at:
+            try:
+                opened_dt = datetime.fromisoformat(str(data.opened_at))
+                return get_next_month_str(opened_dt)
+            except ValueError:
+                pass
+        return get_next_month_str(datetime.now(timezone.utc))
 
     # ── Вспомогательные методы для абонемента ────────────────────────────────
 
@@ -1219,14 +1264,14 @@ class PollService:
         """Форматирует разбивку по залам в HTML."""
         lines: list[str] = []
         for h in result.hall_breakdown:
-            if h.monthly_cost > 0 and h.num_subs > 0:
+            if h.monthly_rent > 0 and h.num_subs > 0:
                 lines.append(
-                    f"• {escape_html(h.name)}: аренда {h.monthly_cost} ₽, "
+                    f"• {escape_html(h.name)}: {h.cost_per_game} ₽ × {h.games_in_month} = {h.monthly_rent} ₽, "
                     f"подписчиков: {h.num_subs}"
                 )
-            elif h.monthly_cost > 0:
+            elif h.monthly_rent > 0:
                 lines.append(
-                    f"• {escape_html(h.name)}: аренда {h.monthly_cost} ₽ — "
+                    f"• {escape_html(h.name)}: {h.cost_per_game} ₽ × {h.games_in_month} = {h.monthly_rent} ₽ — "
                     f"<b>нет подписчиков</b>"
                 )
         if result.price_per_hall > 0:

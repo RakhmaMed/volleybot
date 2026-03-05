@@ -8,19 +8,18 @@ from aiogram.methods import SendPoll
 
 from src.config import MAX_PLAYERS, MIN_PLAYERS
 from src.db import (
-    _connect,
     POLL_STATE_KEY,
     ensure_player,
     get_game,
     get_player_balance,
     init_db,
-    load_monthly_votes,
     load_state,
     save_poll_template,
     update_player_balance,
 )
 from src.poll import PollData, VoterInfo, sort_voters_by_update_id
 from src.services import PollService
+from src.types import SubscriptionResult
 
 
 def test_sort_voters_by_update_id_orders_updates():
@@ -128,6 +127,81 @@ class TestPollService:
         result = service.update_voters("test_id", 2, "User2", 3, False)
         assert len(result) == 1
         assert result[0].id == 1
+
+    def test_resolve_target_month_prefers_saved_value(self):
+        """Проверяет, что фиксированный target_month имеет приоритет над fallback-логикой."""
+        service = PollService()
+        data = PollData(
+            kind="monthly_subscription",
+            chat_id=1,
+            poll_msg_id=2,
+            yes_voters=[],
+            subs=[],
+            target_month="2026-04",
+        )
+        assert service._resolve_target_month(data) == "2026-04"
+
+    def test_resolve_target_month_uses_opened_at_next_month(self):
+        """Проверяет fallback: target_month вычисляется как следующий месяц от opened_at."""
+        service = PollService()
+        data = PollData(
+            kind="monthly_subscription",
+            chat_id=1,
+            poll_msg_id=2,
+            yes_voters=[],
+            subs=[],
+            opened_at="2026-01-31T23:55:00+00:00",
+        )
+        assert service._resolve_target_month(data) == "2026-02"
+
+
+@pytest.mark.asyncio
+async def test_close_monthly_subscription_uses_fixed_target_month(temp_db):
+    """
+    Проверяет, что при закрытии monthly poll используется зафиксированный target_month,
+    а не текущая дата на момент закрытия.
+    """
+    init_db()
+    service = PollService()
+    data = PollData(
+        kind="monthly_subscription",
+        chat_id=-1001234567890,
+        poll_msg_id=123,
+        info_msg_id=124,
+        yes_voters=[],
+        subs=[],
+        option_poll_names=["Пятница", None],
+        monthly_votes={101: [0]},
+        target_month="2026-02",
+    )
+
+    mock_bot = AsyncMock()
+    mock_bot.send_message = AsyncMock(return_value=MagicMock(message_id=999))
+
+    with (
+        patch("src.services.poll_service.load_monthly_votes", return_value={}),
+        patch(
+            "src.services.poll_service.get_poll_templates",
+            return_value=[
+                {"id": 1, "name": "Пятница", "cost": 150, "cost_per_game": 1500}
+            ],
+        ),
+        patch("src.services.poll_service.save_poll_template"),
+        patch("src.services.poll_service.get_fund_balance", return_value=0),
+        patch(
+            "src.services.poll_service.calculate_subscription",
+            return_value=SubscriptionResult(hall_breakdown=[], subscriber_charges=[]),
+        ) as mock_calculate,
+        patch.object(service, "_apply_subscription_charges", return_value=[]),
+        patch("src.services.poll_service.close_game"),
+    ):
+        await service._close_monthly_subscription_poll(
+            mock_bot, "monthly-test", "monthly_subscription", data
+        )
+
+    args = mock_calculate.call_args.args
+    # 3-й позиционный аргумент calculate_subscription — это target_month.
+    assert args[2] == "2026-02"
 
 
 @pytest.mark.asyncio
@@ -463,11 +537,13 @@ class TestProcessPaymentDeduction:
     async def test_free_poll_skips_deduction(self, mock_bot, temp_db):
         """Если cost=0 — списание не выполняется."""
         init_db()
-        save_poll_template({
-            "name": "Бесплатный зал",
-            "message": "Текст",
-            "cost": 0,
-        })
+        save_poll_template(
+            {
+                "name": "Бесплатный зал",
+                "message": "Текст",
+                "cost": 0,
+            }
+        )
         service = PollService()
         yes_voters = [VoterInfo(id=2, name="@user2")]
         with patch.object(
@@ -484,11 +560,13 @@ class TestProcessPaymentDeduction:
     async def test_deducts_balance_using_dict(self, mock_bot, temp_db):
         """Списывает сумму с игрока; get_player_balance возвращает dict — используется balance."""
         init_db()
-        save_poll_template({
-            "name": "Платный зал",
-            "message": "Текст",
-            "cost": 150,
-        })
+        save_poll_template(
+            {
+                "name": "Платный зал",
+                "message": "Текст",
+                "cost": 150,
+            }
+        )
         ensure_player(2, "user2")
         update_player_balance(2, 500)
         service = PollService()
@@ -512,11 +590,13 @@ class TestProcessPaymentDeduction:
     async def test_skips_subscribers(self, mock_bot, temp_db):
         """Игроки из списка подписчиков не списываются."""
         init_db()
-        save_poll_template({
-            "name": "Зал с подпиской",
-            "message": "Текст",
-            "cost": 100,
-        })
+        save_poll_template(
+            {
+                "name": "Зал с подпиской",
+                "message": "Текст",
+                "cost": 100,
+            }
+        )
         ensure_player(10, "sub_user")
         update_player_balance(10, 200)
         service = PollService()
@@ -538,11 +618,13 @@ class TestProcessPaymentDeduction:
     async def test_handles_none_from_get_player_balance(self, mock_bot, temp_db):
         """Если get_player_balance возвращает None — используется 0, исключения нет."""
         init_db()
-        save_poll_template({
-            "name": "Зал для теста None",
-            "message": "Текст",
-            "cost": 50,
-        })
+        save_poll_template(
+            {
+                "name": "Зал для теста None",
+                "message": "Текст",
+                "cost": 50,
+            }
+        )
         service = PollService()
         yes_voters = [VoterInfo(id=99, name="@new_user")]
         with patch("src.services.poll_service.get_player_balance", return_value=None):
@@ -701,9 +783,11 @@ def test_format_subscription_report_adds_payment_details():
     """Итоговый отчёт должен включать реквизиты для перевода."""
     service = PollService()
 
-    with patch("src.services.poll_service.PAYMENT_NAME", "Rakhma"), patch(
-        "src.services.poll_service.PAYMENT_BANK", "TСберk"
-    ), patch("src.services.poll_service.PAYMENT_PHONE", "+79990000000"):
+    with (
+        patch("src.services.poll_service.PAYMENT_NAME", "Rakhma"),
+        patch("src.services.poll_service.PAYMENT_BANK", "TСберk"),
+        patch("src.services.poll_service.PAYMENT_PHONE", "+79990000000"),
+    ):
         report = service._format_subscription_report(
             total_voters=1,
             summary_text="Сводка",

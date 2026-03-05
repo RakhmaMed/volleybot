@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import functools
 import hashlib
 import ipaddress
@@ -25,6 +26,56 @@ _RATE_LIMIT_CACHE: dict[int, list[float]] = defaultdict(list)
 # Настройки rate limiting
 RATE_LIMIT_WINDOW = 60  # Окно в секундах
 RATE_LIMIT_MAX_REQUESTS = 20  # Максимум запросов в окне
+DEFAULT_GAMES_PER_MONTH = 4
+WEEKDAY_TO_INDEX: dict[str, int] = {
+    "mon": 0,
+    "tue": 1,
+    "wed": 2,
+    "thu": 3,
+    "fri": 4,
+    "sat": 5,
+    "sun": 6,
+}
+
+
+def count_games_in_month(
+    game_day: str,
+    month: str,
+    default_games: int = DEFAULT_GAMES_PER_MONTH,
+) -> int:
+    """
+    Возвращает количество игровых дней в месяце для указанного дня недели.
+
+    Args:
+        game_day: День недели в формате mon..sun, '*' или произвольная строка.
+        month: Месяц в формате YYYY-MM.
+        default_games: Значение по умолчанию для '*' и некорректных данных.
+    """
+    day_key = (game_day or "").strip().lower()
+    weekday_idx = WEEKDAY_TO_INDEX.get(day_key)
+    if weekday_idx is None:
+        return default_games
+
+    try:
+        year_str, month_str = month.split("-", 1)
+        year = int(year_str)
+        month_num = int(month_str)
+        if month_num < 1 or month_num > 12:
+            return default_games
+    except (ValueError, AttributeError):
+        return default_games
+
+    month_matrix = calendar.monthcalendar(year, month_num)
+    count = sum(1 for week in month_matrix if week[weekday_idx] != 0)
+    return count if count > 0 else default_games
+
+
+def get_next_month_str(now: datetime | None = None) -> str:
+    """Возвращает следующий месяц в формате YYYY-MM."""
+    current = now or datetime.now()
+    year = current.year + (1 if current.month == 12 else 0)
+    month = 1 if current.month == 12 else current.month + 1
+    return f"{year:04d}-{month:02d}"
 
 
 def retry_async(

@@ -83,26 +83,26 @@ class TestFundBalance:
 class TestHallPayments:
     """Тесты для оплаты залов."""
 
-    def _create_paid_template(self, name: str = "Пятница", monthly_cost: int = 6000):
+    def _create_paid_template(self, name: str = "Пятница", cost_per_game: int = 1500):
         save_poll_template(
             {
                 "name": name,
                 "message": f"Игра {name}",
                 "cost": 150,
-                "monthly_cost": monthly_cost,
+                "cost_per_game": cost_per_game,
             }
         )
 
     def test_get_unpaid_halls_returns_paid_only(self, temp_db):
-        """get_unpaid_halls возвращает только залы с monthly_cost > 0."""
+        """get_unpaid_halls возвращает только залы с cost_per_game > 0."""
         init_db()
-        self._create_paid_template("Пятница", monthly_cost=6000)
+        self._create_paid_template("Пятница", cost_per_game=1500)
         save_poll_template(
             {
                 "name": "Среда",
                 "message": "Бесплатная игра",
                 "cost": 0,
-                "monthly_cost": 0,
+                "cost_per_game": 0,
             }
         )
 
@@ -113,8 +113,8 @@ class TestHallPayments:
     def test_get_unpaid_halls_excludes_paid(self, temp_db):
         """Оплаченные залы не возвращаются."""
         init_db()
-        self._create_paid_template("Пятница", monthly_cost=6000)
-        self._create_paid_template("Понедельник", monthly_cost=4000)
+        self._create_paid_template("Пятница", cost_per_game=1500)
+        self._create_paid_template("Понедельник", cost_per_game=1000)
 
         record_hall_payment(_get_poll_template_id("Пятница"), "2026-02", 6000)
 
@@ -151,21 +151,21 @@ class TestHallPayments:
     def test_all_halls_paid(self, temp_db):
         """Если все залы оплачены, get_unpaid_halls возвращает пустой список."""
         init_db()
-        self._create_paid_template("Пятница", monthly_cost=6000)
+        self._create_paid_template("Пятница", cost_per_game=1500)
         record_hall_payment(_get_poll_template_id("Пятница"), "2026-02", 6000)
 
         unpaid = get_unpaid_halls("2026-02")
         assert len(unpaid) == 0
 
 
-# ── DB-level monthly_cost tests ─────────────────────────────────────────────
+# ── DB-level cost_per_game tests ─────────────────────────────────────────────
 
 
 class TestMonthlyCost:
-    """Тесты для поля monthly_cost в poll_templates."""
+    """Тесты для поля cost_per_game в poll_templates."""
 
-    def test_monthly_cost_default_zero(self, temp_db):
-        """monthly_cost по умолчанию равен 0."""
+    def test_cost_per_game_default_1500(self, temp_db):
+        """cost_per_game по умолчанию равен 1500."""
         init_db()
         save_poll_template(
             {
@@ -176,35 +176,35 @@ class TestMonthlyCost:
         with _connect() as conn:
             conn.row_factory = __import__("sqlite3").Row
             row = conn.execute(
-                "SELECT monthly_cost FROM poll_templates WHERE name = 'Test'"
+                "SELECT cost_per_game FROM poll_templates WHERE name = 'Test'"
             ).fetchone()
-            assert row["monthly_cost"] == 0
+            assert row["cost_per_game"] == 1500
 
-    def test_monthly_cost_saved(self, temp_db):
-        """monthly_cost сохраняется корректно."""
+    def test_cost_per_game_saved(self, temp_db):
+        """cost_per_game сохраняется корректно."""
         init_db()
         save_poll_template(
             {
                 "name": "Пятница",
                 "message": "Игра",
-                "monthly_cost": 6000,
+                "cost_per_game": 1500,
             }
         )
         with _connect() as conn:
             conn.row_factory = __import__("sqlite3").Row
             row = conn.execute(
-                "SELECT monthly_cost FROM poll_templates WHERE name = 'Пятница'"
+                "SELECT cost_per_game FROM poll_templates WHERE name = 'Пятница'"
             ).fetchone()
-            assert row["monthly_cost"] == 6000
+            assert row["cost_per_game"] == 1500
 
-    def test_monthly_cost_migration(self, temp_db):
-        """Проверка, что init_db добавляет monthly_cost в существующую таблицу."""
+    def test_cost_per_game_migration(self, temp_db):
+        """Проверка, что init_db добавляет cost_per_game в существующую таблицу."""
         init_db()
         # Столбец должен уже быть после init_db
         with _connect() as conn:
             cursor = conn.execute("PRAGMA table_info(poll_templates)")
             columns = [row[1] for row in cursor.fetchall()]
-            assert "monthly_cost" in columns
+            assert "cost_per_game" in columns
 
 
 # ── DB-level transaction tests ───────────────────────────────────────────────
@@ -539,8 +539,8 @@ class TestHallPaymentHandler:
         dp = Dispatcher()
 
         mock_get_unpaid.return_value = [
-            {"id": 1, "name": "Пятница", "place": "Зал №1", "monthly_cost": 6000},
-            {"id": 2, "name": "Понедельник", "place": "Зал №2", "monthly_cost": 4000},
+            {"id": 1, "name": "Пятница", "place": "Зал №1", "cost_per_game": 1500},
+            {"id": 2, "name": "Понедельник", "place": "Зал №2", "cost_per_game": 1000},
         ]
 
         dp.workflow_data.update(
@@ -625,7 +625,7 @@ class TestHallPaymentHandler:
         dp = Dispatcher()
 
         mock_get_unpaid.return_value = [
-            {"id": 1, "name": "Пятница", "place": "Зал №1", "monthly_cost": 6000},
+            {"id": 1, "name": "Пятница", "place": "Зал №1", "cost_per_game": 1500},
         ]
 
         dp.workflow_data.update(
@@ -765,7 +765,7 @@ class TestFullPaymentFlow:
                 "name": "Пятница",
                 "message": "Игра",
                 "cost": 150,
-                "monthly_cost": 6000,
+                "cost_per_game": 1500,
             }
         )
         user_id = 100
@@ -833,7 +833,7 @@ class TestFullPaymentFlow:
                 "name": "Пятница",
                 "message": "Игра",
                 "cost": 150,
-                "monthly_cost": 6000,
+                "cost_per_game": 1500,
             }
         )
 

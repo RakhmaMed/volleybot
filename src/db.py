@@ -18,7 +18,7 @@ from .types import PollTemplate
 BOT_STATE_KEY = "bot_state"
 POLL_STATE_KEY = "poll_state"
 FUND_BALANCE_KEY = "fund_balance"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 BACKUP_RETENTION_DAYS = 10
 
 
@@ -173,6 +173,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if user_version < 5:
         _migrate_to_v5(conn)
         user_version = 5
+    if user_version < 6:
+        _migrate_to_v6(conn)
+        user_version = 6
+    if user_version < 7:
+        _migrate_to_v7(conn)
+        user_version = 7
 
     if user_version != SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -187,8 +193,13 @@ def _bootstrap_schema(conn: sqlite3.Connection) -> None:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")}
         if "id" in columns:
             _create_indexes(conn)
-            if "enabled" in columns:
-                conn.execute("PRAGMA user_version = 4")
+            has_games = _table_exists(conn, "games")
+            if "cost_per_game" in columns:
+                # Если games отсутствует, нужно прогнать миграцию v5+.
+                conn.execute("PRAGMA user_version = 6" if has_games else "PRAGMA user_version = 4")
+            elif "enabled" in columns:
+                # enabled есть с v4, а таблицы games появляются в v5.
+                conn.execute("PRAGMA user_version = 5" if has_games else "PRAGMA user_version = 4")
             else:
                 conn.execute("PRAGMA user_version = 3")
             return
@@ -227,7 +238,7 @@ def _create_schema_v4(conn: sqlite3.Connection) -> None:
             game_hour_utc INTEGER NOT NULL DEFAULT 0 CHECK (game_hour_utc BETWEEN 0 AND 23),
             game_minute_utc INTEGER NOT NULL DEFAULT 0 CHECK (game_minute_utc BETWEEN 0 AND 59),
             cost INTEGER NOT NULL DEFAULT 0 CHECK (cost >= 0),
-            monthly_cost INTEGER NOT NULL DEFAULT 0 CHECK (monthly_cost >= 0),
+            cost_per_game INTEGER NOT NULL DEFAULT 0 CHECK (cost_per_game >= 0),
             enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -519,6 +530,7 @@ def _migrate_to_v5(conn: sqlite3.Connection) -> None:
             monthly_cost_snapshot INTEGER NOT NULL DEFAULT 0,
             options_json TEXT NOT NULL DEFAULT '[]',
             option_poll_names_json TEXT NOT NULL DEFAULT '[]',
+            target_month_snapshot TEXT,
             last_info_text TEXT NOT NULL DEFAULT '⏳ Идёт сбор голосов...',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -561,6 +573,94 @@ def _migrate_to_v5(conn: sqlite3.Connection) -> None:
     )
     _create_indexes(conn)
     conn.execute("PRAGMA user_version = 5")
+
+
+def _migrate_to_v6(conn: sqlite3.Connection) -> None:
+    """Переименовывает monthly_cost в cost_per_game и конвертирует legacy-данные."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(poll_templates)")}
+    if "cost_per_game" in columns and "monthly_cost" not in columns:
+        conn.execute("PRAGMA user_version = 6")
+        return
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE poll_templates_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                place TEXT,
+                message TEXT NOT NULL,
+                open_day TEXT NOT NULL DEFAULT '*',
+                open_hour_utc INTEGER NOT NULL DEFAULT 0 CHECK (open_hour_utc BETWEEN 0 AND 23),
+                open_minute_utc INTEGER NOT NULL DEFAULT 0 CHECK (open_minute_utc BETWEEN 0 AND 59),
+                game_day TEXT NOT NULL DEFAULT '*',
+                game_hour_utc INTEGER NOT NULL DEFAULT 0 CHECK (game_hour_utc BETWEEN 0 AND 23),
+                game_minute_utc INTEGER NOT NULL DEFAULT 0 CHECK (game_minute_utc BETWEEN 0 AND 59),
+                cost INTEGER NOT NULL DEFAULT 0 CHECK (cost >= 0),
+                cost_per_game INTEGER NOT NULL DEFAULT 0 CHECK (cost_per_game >= 0),
+                enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (open_day IN ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', '*')),
+                CHECK (game_day IN ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', '*'))
+            )
+            """
+        )
+        if "monthly_cost" in columns:
+            conn.execute(
+                """
+                INSERT INTO poll_templates_new (
+                    id, name, place, message, open_day, open_hour_utc, open_minute_utc,
+                    game_day, game_hour_utc, game_minute_utc, cost, cost_per_game,
+                    enabled, created_at, updated_at
+                )
+                SELECT
+                    id, name, place, message, open_day, open_hour_utc, open_minute_utc,
+                    game_day, game_hour_utc, game_minute_utc, cost,
+                    CASE WHEN COALESCE(monthly_cost, 0) > 0 THEN 1500 ELSE 0 END,
+                    COALESCE(enabled, 1), created_at, updated_at
+                FROM poll_templates
+                """
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO poll_templates_new (
+                    id, name, place, message, open_day, open_hour_utc, open_minute_utc,
+                    game_day, game_hour_utc, game_minute_utc, cost, cost_per_game,
+                    enabled, created_at, updated_at
+                )
+                SELECT
+                    id, name, place, message, open_day, open_hour_utc, open_minute_utc,
+                    game_day, game_hour_utc, game_minute_utc, cost,
+                    COALESCE(cost_per_game, 0), COALESCE(enabled, 1), created_at, updated_at
+                FROM poll_templates
+                """
+            )
+
+        conn.execute("DROP TABLE poll_templates")
+        conn.execute("ALTER TABLE poll_templates_new RENAME TO poll_templates")
+        _create_indexes(conn)
+        conn.execute("PRAGMA user_version = 6")
+        conn.execute("PRAGMA foreign_keys = ON")
+        fk_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if fk_errors:
+            raise sqlite3.IntegrityError(f"foreign_key_check failed: {fk_errors}")
+        logging.info("✅ Миграция: monthly_cost → cost_per_game завершена")
+    except Exception:
+        conn.execute("PRAGMA foreign_keys = ON")
+        raise
+
+
+def _migrate_to_v7(conn: sqlite3.Connection) -> None:
+    """Добавляет snapshot целевого месяца для monthly_subscription."""
+    if _table_exists(conn, "games"):
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(games)")}
+        if "target_month_snapshot" not in columns:
+            conn.execute("ALTER TABLE games ADD COLUMN target_month_snapshot TEXT")
+            logging.info("✅ Миграция: добавлен столбец target_month_snapshot в games")
+    conn.execute("PRAGMA user_version = 7")
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -837,7 +937,7 @@ def save_poll_template(template: dict[str, Any]) -> None:
                 """
                 INSERT INTO poll_templates (
                     name, place, message, open_day, open_hour_utc, open_minute_utc,
-                    game_day, game_hour_utc, game_minute_utc, cost, monthly_cost, enabled
+                    game_day, game_hour_utc, game_minute_utc, cost, cost_per_game, enabled
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                     place = excluded.place,
@@ -849,7 +949,7 @@ def save_poll_template(template: dict[str, Any]) -> None:
                     game_hour_utc = excluded.game_hour_utc,
                     game_minute_utc = excluded.game_minute_utc,
                     cost = excluded.cost,
-                    monthly_cost = excluded.monthly_cost,
+                    cost_per_game = excluded.cost_per_game,
                     enabled = excluded.enabled,
                     updated_at = CURRENT_TIMESTAMP
                 """,
@@ -864,7 +964,7 @@ def save_poll_template(template: dict[str, Any]) -> None:
                     template.get("game_hour_utc", 0),
                     template.get("game_minute_utc", 0),
                     template.get("cost", 0),
-                    template.get("monthly_cost", 0),
+                    template.get("cost_per_game", 1500),
                     template.get("enabled", 1),
                 ),
             )
@@ -1010,13 +1110,13 @@ def update_fund_balance(amount: int) -> None:
 
 def get_unpaid_halls(month: str) -> list[PollTemplate]:
     """
-    Возвращает платные залы (monthly_cost > 0), ещё не оплаченные в данном месяце.
+    Возвращает платные залы (cost_per_game > 0), ещё не оплаченные в данном месяце.
 
     Args:
         month: Месяц в формате "YYYY-MM"
 
     Returns:
-        Список шаблонов опросов с monthly_cost > 0, не имеющих записи в hall_payments
+        Список шаблонов опросов с cost_per_game > 0, не имеющих записи в hall_payments
     """
     from typing import cast
 
@@ -1028,7 +1128,7 @@ def get_unpaid_halls(month: str) -> list[PollTemplate]:
                 """
                 SELECT pt.*
                 FROM poll_templates pt
-                WHERE pt.monthly_cost > 0
+                WHERE pt.cost_per_game > 0
                   AND pt.id NOT IN (
                       SELECT hp.poll_template_id FROM hall_payments hp WHERE hp.month = ?
                   )
@@ -1111,6 +1211,7 @@ def create_game(
     place_snapshot: str | None = None,
     cost_snapshot: int = 0,
     monthly_cost_snapshot: int = 0,
+    target_month_snapshot: str | None = None,
     options: list[str] | None = None,
     option_poll_names: list[str | None] | None = None,
     info_message_id: int | None = None,
@@ -1128,8 +1229,8 @@ def create_game(
                     question_snapshot, chat_id, poll_message_id, info_message_id,
                     final_message_id, opened_at, game_date, place_snapshot,
                     cost_snapshot, monthly_cost_snapshot, options_json,
-                    option_poll_names_json, last_info_text, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    option_poll_names_json, target_month_snapshot, last_info_text, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(poll_id) DO UPDATE SET
                     kind = excluded.kind,
                     status = excluded.status,
@@ -1147,6 +1248,7 @@ def create_game(
                     monthly_cost_snapshot = excluded.monthly_cost_snapshot,
                     options_json = excluded.options_json,
                     option_poll_names_json = excluded.option_poll_names_json,
+                    target_month_snapshot = excluded.target_month_snapshot,
                     last_info_text = excluded.last_info_text,
                     updated_at = CURRENT_TIMESTAMP
                 """,
@@ -1168,6 +1270,7 @@ def create_game(
                     monthly_cost_snapshot,
                     json.dumps(options or [], ensure_ascii=False),
                     json.dumps(option_poll_names or [], ensure_ascii=False),
+                    target_month_snapshot,
                     last_info_text,
                 ),
             )

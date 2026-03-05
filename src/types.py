@@ -24,7 +24,7 @@ class PollTemplate(PollTemplateRequired, total=False):
     # Опциональные поля
     place: str  # Место проведения
     cost: int  # Стоимость одной игры
-    monthly_cost: int  # Стоимость аренды зала за месяц
+    cost_per_game: int  # Стоимость аренды зала за игру
     enabled: int  # 1 = шаблон включён, 0 = выключен
     created_at: str  # Время создания
     updated_at: str  # Время последнего обновления
@@ -39,7 +39,9 @@ class HallBreakdown:
     """Расчёт стоимости одного зала."""
 
     name: str
-    monthly_cost: int
+    cost_per_game: int
+    games_in_month: int
+    monthly_rent: int
     num_subs: int
     per_person: int  # Единая цена абонемента за 1 зал (400-500 руб.), 0 если нет подписчиков
 

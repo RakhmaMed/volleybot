@@ -46,6 +46,9 @@ class PollData(BaseModel):
     monthly_votes: dict[int, list[int]] = Field(
         default_factory=dict, description="Выборы пользователей в месячном опросе"
     )
+    target_month: str | None = Field(
+        default=None, description="Целевой месяц абонемента в формате YYYY-MM"
+    )
 
     model_config = {"arbitrary_types_allowed": True, "frozen": False}
 
