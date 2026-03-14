@@ -62,6 +62,47 @@ class TestBalanceCommand:
         # Для отрицательного баланса отображаются и имя, и @username
         assert "User One (@user1): <b>-500 ₽</b>" in method.text
 
+    @patch("src.handlers.get_player_balance")
+    async def test_balance_as_regular_user_zero(
+        self, mock_get_balance, regular_user, admin_service
+    ):
+        """Пользователь с нулевым балансом видит специальный текст."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_balance.return_value = {
+            "id": regular_user.id,
+            "name": regular_user.username,
+            "fullname": regular_user.full_name,
+            "balance": 0,
+        }
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=2,
+            date=MagicMock(),
+            chat=chat,
+            from_user=regular_user,
+            text="/balance",
+        )
+
+        await dp.feed_update(bot, Update(update_id=2, message=message))
+
+        mock_get_balance.assert_called_once_with(regular_user.id)
+        assert bot.called
+        method = bot.call_args.args[0]
+        assert method.text == "Чётко-чётко. Долгов нет 🤝"
+
 
 @pytest.mark.asyncio
 class TestPayCommand:

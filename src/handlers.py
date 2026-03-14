@@ -541,7 +541,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             if player:
                 balance = player["balance"]
                 if balance == 0:
-                    text = "💰 Ваш баланс: <b>0 ₽</b>. Всё в порядке!"
+                    text = "Чётко-чётко. Долгов нет 🤝"
                 elif balance < 0:
                     text = f"💰 Ваш баланс: <b>{balance} ₽</b>. Пожалуйста, пополните."
                 else:
