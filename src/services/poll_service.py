@@ -946,6 +946,18 @@ class PollService:
         # Добавляем легенду
         final_text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
 
+        # Добавляем реквизиты для перевода
+        payment_lines = [
+            line for line in (
+                escape_html(PAYMENT_NAME),
+                escape_html(PAYMENT_BANK),
+                escape_html(PAYMENT_PHONE),
+            ) if line
+        ]
+        if payment_lines:
+            final_text += "\n\n<b>Реквизиты для перевода:</b>\n"
+            final_text += "\n".join(payment_lines)
+
         # Обработка списания средств для платных залов
         charge_rows = await self._process_payment_deduction(
             bot, poll_name, yes_voters, data.subs

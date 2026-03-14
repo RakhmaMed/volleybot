@@ -759,6 +759,38 @@ class TestHtmlEscapingInPollTexts:
         assert "⭐️ — оплативший за месяц" in text
         assert "🏐 — донат на мяч" in text
 
+    async def test_close_poll_includes_payment_details(self, mock_bot, temp_db):
+        """Финальный текст опроса должен содержать реквизиты для перевода."""
+        service = PollService()
+        poll_id = "test_close_poll_payment_details_id"
+        service._poll_data[poll_id] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=123,
+            info_msg_id=124,
+            yes_voters=[VoterInfo(id=1, name="User")],
+            last_message_text="",
+            subs=[],
+        )
+        service._update_tasks[poll_id] = None
+
+        mock_bot.stop_poll = AsyncMock()
+        mock_bot.send_message = AsyncMock()
+        mock_bot.delete_message = AsyncMock()
+
+        with (
+            patch("src.services.poll_service.PAYMENT_NAME", "Rakhma"),
+            patch("src.services.poll_service.PAYMENT_BANK", "TСберk"),
+            patch("src.services.poll_service.PAYMENT_PHONE", "+79990000000"),
+        ):
+            await service.close_poll(mock_bot, poll_id)
+
+        mock_bot.send_message.assert_called_once()
+        text = mock_bot.send_message.call_args.kwargs["text"]
+        assert "Реквизиты для перевода" in text
+        assert "Rakhma" in text
+        assert "TСберk" in text
+        assert "+79990000000" in text
+
 
 def test_format_subscription_report_sorts_by_name():
     """Итоговый отчёт должен сортировать список оплат по имени."""
