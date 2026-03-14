@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from asyncio import Task
 from datetime import datetime, timezone
-import json
 from typing import Any
 
 from aiogram import Bot
@@ -30,8 +30,8 @@ from ..config import (
 from ..db import (
     POLL_STATE_KEY,
     add_transaction,
-    create_backup,
     close_game,
+    create_backup,
     create_game,
     ensure_player,
     get_fund_balance,
@@ -141,10 +141,7 @@ def calculate_subscription(
 
     # --- 3. Прогноз дохода с разовых игроков ---
     expected_singles_income = round(
-        AVG_SINGLES_PER_GAME
-        * SINGLE_GAME_PRICE
-        * total_games_across_halls
-        * SAFETY_K
+        AVG_SINGLES_PER_GAME * SINGLE_GAME_PRICE * total_games_across_halls * SAFETY_K
     )
 
     # --- 4. Корректировка целевой суммы по состоянию казны ---
@@ -262,7 +259,9 @@ class PollService:
         failed = 0
         stored_games = {row["poll_id"]: row for row in get_open_games()}
         templates_by_id = {
-            int(template["id"]): template for template in get_poll_templates() if "id" in template
+            int(template["id"]): template
+            for template in get_poll_templates()
+            if "id" in template
         }
         if stored_games:
             for poll_id, row in stored_games.items():
@@ -326,9 +325,7 @@ class PollService:
             if successful > 0:
                 logging.info(f"✅ Восстановлено опросов из games: {successful}")
             if failed > 0:
-                logging.warning(
-                    f"⚠️ Не удалось восстановить опросов из games: {failed}"
-                )
+                logging.warning(f"⚠️ Не удалось восстановить опросов из games: {failed}")
             return
 
         for poll_id, data in stored.items():
@@ -751,7 +748,7 @@ class PollService:
             )
 
         # Добавляем легенду
-        text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
+        text += "\n\n⭐️ — абонемент\n🏐 — донат на мяч"
 
         info_msg_id = data.info_msg_id
         if info_msg_id is None:
@@ -944,15 +941,17 @@ class PollService:
             final_text += "\n\n⚠️ <b>Превышен лимит игроков!</b>"
 
         # Добавляем легенду
-        final_text += "\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
+        final_text += "\n\n⭐️ — абонемент\n🏐 — донат на мяч"
 
         # Добавляем реквизиты для перевода
         payment_lines = [
-            line for line in (
+            line
+            for line in (
                 escape_html(PAYMENT_NAME),
                 escape_html(PAYMENT_BANK),
                 escape_html(PAYMENT_PHONE),
-            ) if line
+            )
+            if line
         ]
         if payment_lines:
             final_text += "\n\n<b>Реквизиты для перевода:</b>\n"
@@ -1049,7 +1048,9 @@ class PollService:
                     "player_id": voter.id,
                     "roster_bucket": bucket,
                     "sort_order": index + 1,
-                    "is_subscriber": bool(charge.get("is_subscriber", voter.id in data.subs)),
+                    "is_subscriber": bool(
+                        charge.get("is_subscriber", voter.id in data.subs)
+                    ),
                     "charged_amount": int(charge.get("charged_amount", 0) or 0),
                     "charge_source": str(charge.get("charge_source", "none")),
                     "balance_before": charge.get("balance_before"),
@@ -1329,17 +1330,17 @@ class PollService:
                     },
                     user_id=sub.get("user_id"),
                 )
-                text += (
-                    f"{i}. {player_link} - {amount_due} ₽\n"
-                )
+                text += f"{i}. {player_link} - {amount_due} ₽\n"
         text += f"\n🏦 Касса: <b>{fund_balance} ₽</b>"
         text += f"\n💸 Ожидаемая сумма к оплате: <b>{total_due} ₽</b>"
         payment_lines = [
-            line for line in (
+            line
+            for line in (
                 escape_html(PAYMENT_NAME),
                 escape_html(PAYMENT_BANK),
                 escape_html(PAYMENT_PHONE),
-            ) if line
+            )
+            if line
         ]
         if payment_lines:
             text += "\n\n<b>Реквизиты для перевода:</b>\n"
@@ -1355,7 +1356,10 @@ class PollService:
         result: SubscriptionResult | None = None,
     ) -> str:
         """Форматирует подробный отчёт для администратора."""
-        total_due = sum(max(int(sub["amount"]) - int(sub["old_balance"]), 0) for sub in charged_subscribers)
+        total_due = sum(
+            max(int(sub["amount"]) - int(sub["old_balance"]), 0)
+            for sub in charged_subscribers
+        )
         text = (
             "📊 <b>Отчёт по абонементам</b>\n\n"
             f"📅 Месяц: {month}\n\n"

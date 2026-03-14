@@ -420,7 +420,7 @@ class TestUpdatePlayersList:
         """Тест пропуска обновления при неизменном тексте."""
         service = PollService()
         poll_id = "test_poll_id"
-        text = "⏳ Идёт сбор голосов...\n\n⭐️ — оплативший за месяц\n🏐 — донат на мяч"
+        text = "⏳ Идёт сбор голосов...\n\n⭐️ — абонемент\n🏐 — донат на мяч"
         service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
@@ -731,7 +731,7 @@ class TestHtmlEscapingInPollTexts:
 
         mock_bot.edit_message_text.assert_called_once()
         text = mock_bot.edit_message_text.call_args.kwargs["text"]
-        assert "⭐️ — оплативший за месяц" in text
+        assert "⭐️ — абонемент" in text
         assert "🏐 — донат на мяч" in text
 
     async def test_close_poll_includes_legend(self, mock_bot, temp_db):
@@ -756,7 +756,7 @@ class TestHtmlEscapingInPollTexts:
 
         mock_bot.send_message.assert_called_once()
         text = mock_bot.send_message.call_args.kwargs["text"]
-        assert "⭐️ — оплативший за месяц" in text
+        assert "⭐️ — абонемент" in text
         assert "🏐 — донат на мяч" in text
 
     async def test_close_poll_includes_payment_details(self, mock_bot, temp_db):
@@ -811,7 +811,7 @@ class TestHtmlEscapingInPollTexts:
 
         with (
             patch("src.services.poll_service.PAYMENT_NAME", "<Rakhma&Co>"),
-            patch("src.services.poll_service.PAYMENT_BANK", "\"Best<Bank>\""),
+            patch("src.services.poll_service.PAYMENT_BANK", '"Best<Bank>"'),
             patch("src.services.poll_service.PAYMENT_PHONE", "+7<999>&000"),
         ):
             await service.close_poll(mock_bot, poll_id)
@@ -819,10 +819,10 @@ class TestHtmlEscapingInPollTexts:
         mock_bot.send_message.assert_called_once()
         text = mock_bot.send_message.call_args.kwargs["text"]
         assert "&lt;Rakhma&amp;Co&gt;" in text
-        assert "\"Best&lt;Bank&gt;\"" in text
+        assert '"Best&lt;Bank&gt;"' in text
         assert "+7&lt;999&gt;&amp;000" in text
         assert "<Rakhma&Co>" not in text
-        assert "\"Best<Bank>\"" not in text
+        assert '"Best<Bank>"' not in text
         assert "+7<999>&000" not in text
 
 
