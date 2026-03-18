@@ -222,6 +222,38 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         )
         return result is not None
 
+    async def safe_answer_callback(
+        callback_query: CallbackQuery,
+        *,
+        action_name: str,
+        **kwargs,
+    ) -> bool:
+        result = await call_with_network_retry(
+            lambda: callback_query.answer(**kwargs),
+            action_name=action_name,
+            exceptions=(TelegramNetworkError, asyncio.TimeoutError, OSError),
+            logger=logging.getLogger(__name__),
+        )
+        return result is not None
+
+    async def safe_edit_message_text(
+        message: Message | InaccessibleMessage,
+        text: str,
+        *,
+        action_name: str,
+        **kwargs,
+    ) -> bool:
+        if isinstance(message, InaccessibleMessage):
+            return False
+
+        result = await call_with_network_retry(
+            lambda: message.edit_text(text, **kwargs),
+            action_name=action_name,
+            exceptions=(TelegramNetworkError, asyncio.TimeoutError, OSError),
+            logger=logging.getLogger(__name__),
+        )
+        return result is not None
+
     @router.message(Command("losiento"))
     async def losiento_handler(message: Message) -> None:
         """Отправляет видео 'lo siento' по очереди из списка."""
@@ -1585,14 +1617,20 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         """Обработка выбора игрока из списка для просмотра информации."""
         user = callback_query.from_user
         if user is None:
-            await callback_query.answer(
-                "❌ Ошибка: нет информации о пользователе", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка: нет информации о пользователе",
+                show_alert=True,
+                action_name="answer player_select missing user",
             )
             return
 
         if callback_query.message is None:
-            await callback_query.answer(
-                "❌ Ошибка: сообщение не найдено", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка: сообщение не найдено",
+                show_alert=True,
+                action_name="answer player_select missing message",
             )
             return
 
@@ -1601,34 +1639,56 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             bot, user, callback_query.message.chat.id
         )
         if not is_admin:
-            await callback_query.answer(
-                "❌ Нет прав для этого действия.", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Нет прав для этого действия.",
+                show_alert=True,
+                action_name="answer player_select forbidden",
             )
             return
 
         if callback_query.data is None:
-            await callback_query.answer("❌ Ошибка данных.", show_alert=True)
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка данных.",
+                show_alert=True,
+                action_name="answer player_select missing data",
+            )
             return
 
         parts = callback_query.data.split(":", 1)
         if len(parts) != 2 or not parts[1].isdigit():
-            await callback_query.answer("❌ Ошибка формата.", show_alert=True)
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка формата.",
+                show_alert=True,
+                action_name="answer player_select invalid format",
+            )
             return
 
         player_id = int(parts[1])
         p = get_player_info(player_id)
         if not p:
-            await callback_query.answer("❌ Игрок не найден.", show_alert=True)
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Игрок не найден.",
+                show_alert=True,
+                action_name="answer player_select player missing",
+            )
             return
 
         text = _format_player_detail(p)
-        if not isinstance(callback_query.message, InaccessibleMessage):
-            await callback_query.message.edit_text(
-                text,
-                parse_mode="HTML",
-                link_preview_options=LinkPreviewOptions(is_disabled=True),
-            )
-        await callback_query.answer()
+        await safe_edit_message_text(
+            callback_query.message,
+            text,
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="edit player_select result",
+        )
+        await safe_answer_callback(
+            callback_query,
+            action_name="answer player_select success",
+        )
 
     async def _process_balance_select(
         callback_query: CallbackQuery, update_fund: bool
@@ -1637,15 +1697,21 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         user = callback_query.from_user
         if user is None:
             logging.error("❌ callback_query.from_user is None")
-            await callback_query.answer(
-                "❌ Ошибка: нет информации о пользователе", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка: нет информации о пользователе",
+                show_alert=True,
+                action_name="answer balance_select missing user",
             )
             return
 
         if callback_query.message is None:
             logging.error("❌ callback_query.message is None")
-            await callback_query.answer(
-                "❌ Ошибка: сообщение не найдено", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка: сообщение не найдено",
+                show_alert=True,
+                action_name="answer balance_select missing message",
             )
             return
 
@@ -1655,26 +1721,44 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         )
 
         if not is_admin:
-            await callback_query.answer(
-                "❌ У вас нет прав для этого действия.", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ У вас нет прав для этого действия.",
+                show_alert=True,
+                action_name="answer balance_select forbidden",
             )
             return
 
         # Парсим callback_data: pay_select:player_id:amount
         if callback_query.data is None:
-            await callback_query.answer("❌ Ошибка данных.", show_alert=True)
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка данных.",
+                show_alert=True,
+                action_name="answer balance_select missing data",
+            )
             return
 
         data_parts = callback_query.data.split(":")
         if len(data_parts) != 3:
-            await callback_query.answer("❌ Ошибка данных.", show_alert=True)
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка данных.",
+                show_alert=True,
+                action_name="answer balance_select invalid data",
+            )
             return
 
         try:
             target_user_id = int(data_parts[1])
             amount = int(data_parts[2])
         except ValueError:
-            await callback_query.answer("❌ Ошибка формата данных.", show_alert=True)
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка формата данных.",
+                show_alert=True,
+                action_name="answer balance_select invalid format",
+            )
             return
 
         if update_player_balance(target_user_id, amount):
@@ -1707,24 +1791,29 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     f"<i>Касса не изменена.</i>"
                 )
 
-            if callback_query.message and not isinstance(
-                callback_query.message, InaccessibleMessage
-            ):
-                await callback_query.message.edit_text(
-                    result_text,
-                    parse_mode="HTML",
-                    link_preview_options=LinkPreviewOptions(is_disabled=True),
-                )
+            await safe_edit_message_text(
+                callback_query.message,
+                result_text,
+                parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+                action_name="edit balance_select result",
+            )
 
-            await callback_query.answer()
+            await safe_answer_callback(
+                callback_query,
+                action_name="answer balance_select success",
+            )
             action = "изменил" if update_fund else "восстановил"
             logging.info(
                 f"💰 Админ @{user.username} (ID: {user.id}) {action} баланс через меню: "
                 f"ID={target_user_id}, сумма={amount}"
             )
         else:
-            await callback_query.answer(
-                "❌ Не удалось обновить баланс.", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Не удалось обновить баланс.",
+                show_alert=True,
+                action_name="answer balance_select update failure",
             )
 
     @router.callback_query(lambda c: c.data and c.data.startswith("pay_select:"))
@@ -1742,14 +1831,20 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         """Обработка выбора зала для оплаты."""
         user = callback_query.from_user
         if user is None:
-            await callback_query.answer(
-                "❌ Ошибка: нет информации о пользователе", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка: нет информации о пользователе",
+                show_alert=True,
+                action_name="answer hall_pay missing user",
             )
             return
 
         if callback_query.message is None:
-            await callback_query.answer(
-                "❌ Ошибка: сообщение не найдено", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка: сообщение не найдено",
+                show_alert=True,
+                action_name="answer hall_pay missing message",
             )
             return
 
@@ -1759,26 +1854,42 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         )
 
         if not is_admin:
-            await callback_query.answer(
-                "❌ У вас нет прав для этого действия.", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ У вас нет прав для этого действия.",
+                show_alert=True,
+                action_name="answer hall_pay forbidden",
             )
             return
 
         if callback_query.data is None:
-            await callback_query.answer("❌ Ошибка данных.", show_alert=True)
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка данных.",
+                show_alert=True,
+                action_name="answer hall_pay missing data",
+            )
             return
 
         # Парсим callback_data: hall_pay:{poll_template_id}:{month}
         parts = callback_query.data.split(":", 2)
         if len(parts) != 3:
-            await callback_query.answer("❌ Ошибка формата данных.", show_alert=True)
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка формата данных.",
+                show_alert=True,
+                action_name="answer hall_pay invalid format",
+            )
             return
 
         try:
             poll_template_id = int(parts[1])
         except ValueError:
-            await callback_query.answer(
-                "❌ Ошибка идентификатора зала.", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка идентификатора зала.",
+                show_alert=True,
+                action_name="answer hall_pay invalid hall id",
             )
             return
         month = parts[2]
@@ -1787,7 +1898,12 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         poll_templates = get_poll_templates()
         hall = next((p for p in poll_templates if p["id"] == poll_template_id), None)
         if not hall:
-            await callback_query.answer("❌ Зал не найден.", show_alert=True)
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Зал не найден.",
+                show_alert=True,
+                action_name="answer hall_pay hall missing",
+            )
             return
         poll_name = str(hall["name"])
 
@@ -1797,15 +1913,21 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         )
         monthly_rent = cost_per_game * games_in_month
         if monthly_rent <= 0:
-            await callback_query.answer(
-                "❌ У этого зала нулевая стоимость.", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text="❌ У этого зала нулевая стоимость.",
+                show_alert=True,
+                action_name="answer hall_pay zero cost",
             )
             return
 
         # Записываем оплату
         if not record_hall_payment(poll_template_id, month, monthly_rent):
-            await callback_query.answer(
-                f"⚠️ Зал '{poll_name}' за {month} уже оплачен.", show_alert=True
+            await safe_answer_callback(
+                callback_query,
+                text=f"⚠️ Зал '{poll_name}' за {month} уже оплачен.",
+                show_alert=True,
+                action_name="answer hall_pay already paid",
             )
             return
 
@@ -1832,16 +1954,18 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             f"🏦 Касса: <b>{fund} ₽</b>"
         )
 
-        if callback_query.message and not isinstance(
-            callback_query.message, InaccessibleMessage
-        ):
-            await callback_query.message.edit_text(
-                result_text,
-                parse_mode="HTML",
-                link_preview_options=LinkPreviewOptions(is_disabled=True),
-            )
+        await safe_edit_message_text(
+            callback_query.message,
+            result_text,
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="edit hall_pay result",
+        )
 
-        await callback_query.answer()
+        await safe_answer_callback(
+            callback_query,
+            action_name="answer hall_pay success",
+        )
         logging.info(
             f"🏟 Админ @{user.username} (ID: {user.id}) оплатил зал {poll_name} за {month}: {monthly_rent}₽ "
             f"(cost_per_game={cost_per_game}, games={games_in_month})"

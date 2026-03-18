@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiogram import Bot
 from aiogram.exceptions import TelegramMigrateToChat
 from aiogram.methods import SendPoll
 
@@ -105,6 +106,28 @@ class TestPollService:
 
         assert not service.has_active_polls()
         assert service._update_tasks == {}
+
+    @pytest.mark.asyncio
+    @patch("src.utils.asyncio.sleep", new_callable=AsyncMock)
+    async def test_safe_send_message_retries_on_network_error(self, mock_sleep):
+        """Фоновая отправка сообщения должна ретраиться после сетевого сбоя."""
+        service = PollService()
+        bot = AsyncMock(spec=Bot)
+        bot.send_message = AsyncMock(
+            side_effect=[OSError("temporary network issue"), MagicMock(message_id=42)]
+        )
+
+        message = await service._safe_send_message(
+            bot,
+            chat_id=123,
+            text="test",
+            action_name="test background send",
+        )
+
+        assert message is not None
+        assert message.message_id == 42
+        assert bot.send_message.await_count == 2
+        mock_sleep.assert_awaited_once()
 
     def test_poll_service_update_voters(self):
         """Тест обновления списка голосующих."""

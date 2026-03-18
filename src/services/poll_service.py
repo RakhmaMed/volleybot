@@ -51,6 +51,7 @@ from ..db import (
 from ..poll import PollData, VoterInfo, sort_voters_by_update_id
 from ..types import HallBreakdown, PollTemplate, SubscriberCharge, SubscriptionResult
 from ..utils import (
+    call_with_network_retry,
     count_games_in_month,
     escape_html,
     format_player_link,
@@ -211,6 +212,25 @@ class PollService:
         """Инициализация сервиса опросов."""
         self._poll_data: dict[str, PollData] = {}
         self._update_tasks: dict[str, Task[None] | None] = {}
+
+    async def _safe_send_message(
+        self,
+        bot: Bot,
+        *,
+        action_name: str,
+        **kwargs,
+    ) -> Any | None:
+        return await call_with_network_retry(
+            lambda: bot.send_message(**kwargs),
+            action_name=action_name,
+            tries=3,
+            delay=2.0,
+            backoff=2.0,
+            max_delay=8.0,
+            timeout=15.0,
+            exceptions=(TelegramNetworkError, asyncio.TimeoutError, OSError),
+            logger=logging.getLogger(__name__),
+        )
 
     def get_poll_data(self, poll_id: str) -> PollData | None:
         """Получить данные опроса по ID."""
@@ -480,18 +500,13 @@ class PollService:
                     f"Группа была мигрирована в супергруппу.\n"
                     f"Новый ID чата: `{new_chat_id}`"
                 )
-
-                @retry_async(
-                    (TelegramNetworkError, asyncio.TimeoutError, OSError),
-                    tries=2,
-                    delay=1,
+                await self._safe_send_message(
+                    bot,
+                    chat_id=new_chat_id,
+                    text=error_msg,
+                    parse_mode="Markdown",
+                    action_name="notify migration",
                 )
-                async def notify_migration():
-                    await bot.send_message(
-                        chat_id=new_chat_id, text=error_msg, parse_mode="Markdown"
-                    )
-
-                await notify_migration()
                 logging.debug(
                     f"✅ Уведомление о миграции отправлено в новый чат {new_chat_id}"
                 )
@@ -525,18 +540,13 @@ class PollService:
                     f'❌ *Ошибка при создании опроса "{poll_name}"*\n\n'
                     f"Не удалось создать опрос. Пожалуйста, проверьте логи и файл дампа для подробностей."
                 )
-
-                @retry_async(
-                    (TelegramNetworkError, asyncio.TimeoutError, OSError),
-                    tries=2,
-                    delay=1,
+                await self._safe_send_message(
+                    bot,
+                    chat_id=chat_id,
+                    text=error_msg,
+                    parse_mode="Markdown",
+                    action_name="notify poll creation error",
                 )
-                async def notify_error():
-                    await bot.send_message(
-                        chat_id=chat_id, text=error_msg, parse_mode="Markdown"
-                    )
-
-                await notify_error()
                 logging.debug("✅ Уведомление об ошибке отправлено в чат")
             except (
                 TelegramAPIError,
@@ -555,15 +565,14 @@ class PollService:
         try:
             logging.debug("Отправка информационного сообщения...")
 
-            @retry_async((TelegramNetworkError, asyncio.TimeoutError, OSError))
-            async def send_info_with_retry():
-                return await bot.send_message(
-                    chat_id=chat_id, text="⏳ Идёт сбор голосов..."
-                )
-
-            info_message = await send_info_with_retry()
+            info_message = await self._safe_send_message(
+                bot,
+                chat_id=chat_id,
+                text="⏳ Идёт сбор голосов...",
+                action_name="send poll info message",
+            )
             logging.debug(
-                f"✅ Информационное сообщение отправлено, message_id={info_message.message_id}"
+                f"✅ Информационное сообщение отправлено, message_id={info_message.message_id if info_message else 'unknown'}"
             )
         except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
             logging.exception(
@@ -970,20 +979,19 @@ class PollService:
                 f"Отправка финального списка новым сообщением для опроса '{poll_name}'..."
             )
 
-            @retry_async(
-                (TelegramNetworkError, asyncio.TimeoutError, OSError),
-                tries=3,
-                delay=2,
+            final_message = await self._safe_send_message(
+                bot,
+                chat_id=data.chat_id,
+                reply_to_message_id=data.poll_msg_id,
+                text=final_text,
+                parse_mode="HTML",
+                action_name="send final poll roster",
             )
-            async def send_final_with_retry():
-                return await bot.send_message(
-                    chat_id=data.chat_id,
-                    reply_to_message_id=data.poll_msg_id,
-                    text=final_text,
-                    parse_mode="HTML",
+            if final_message is None:
+                raise TelegramNetworkError(
+                    method="sendMessage",
+                    message="final poll roster send failed",
                 )
-
-            final_message = await send_final_with_retry()
             final_message_id = final_message.message_id
             data.final_message_id = final_message_id
             main_count = min(len(yes_voters), MAX_PLAYERS)
@@ -1128,33 +1136,35 @@ class PollService:
 
         final_message_id: int | None = None
         try:
-
-            @retry_async(
-                (TelegramNetworkError, asyncio.TimeoutError, OSError),
-                tries=3,
-                delay=2,
-            )
-            async def send_final_with_retry():
-                try:
-                    return await bot.send_message(
-                        chat_id=data.chat_id,
-                        reply_to_message_id=data.poll_msg_id,
-                        text=final_text,
-                        parse_mode="HTML",
-                    )
-                except TelegramBadRequest as e:
-                    if "message to be replied not found" in e.message:
-                        logging.warning(
-                            "⚠️ Сообщение для ответа не найдено, отправляем новым сообщением"
-                        )
-                        return await bot.send_message(
-                            chat_id=data.chat_id,
-                            text=final_text,
-                            parse_mode="HTML",
-                        )
+            try:
+                final_message = await self._safe_send_message(
+                    bot,
+                    chat_id=data.chat_id,
+                    reply_to_message_id=data.poll_msg_id,
+                    text=final_text,
+                    parse_mode="HTML",
+                    action_name="send monthly final report with reply",
+                )
+            except TelegramBadRequest as e:
+                if "message to be replied not found" not in e.message:
                     raise
 
-            final_message = await send_final_with_retry()
+                logging.warning(
+                    "⚠️ Сообщение для ответа не найдено, отправляем новым сообщением"
+                )
+                final_message = await self._safe_send_message(
+                    bot,
+                    chat_id=data.chat_id,
+                    text=final_text,
+                    parse_mode="HTML",
+                    action_name="send monthly final report without reply",
+                )
+
+            if final_message is None:
+                raise TelegramNetworkError(
+                    method="sendMessage",
+                    message="monthly final report send failed",
+                )
             final_message_id = final_message.message_id
             data.final_message_id = final_message_id
             logging.info(
@@ -1181,21 +1191,14 @@ class PollService:
             )
 
             try:
-
-                @retry_async(
-                    (TelegramNetworkError, asyncio.TimeoutError, OSError),
-                    tries=3,
-                    delay=2,
-                )
-                async def send_admin_report():
-                    if ADMIN_USER_ID is not None:
-                        await bot.send_message(
-                            chat_id=ADMIN_USER_ID,
-                            text=admin_report,
-                            parse_mode="HTML",
-                        )
-
-                await send_admin_report()
+                if ADMIN_USER_ID is not None:
+                    await self._safe_send_message(
+                        bot,
+                        chat_id=ADMIN_USER_ID,
+                        text=admin_report,
+                        parse_mode="HTML",
+                        action_name="send monthly admin report",
+                    )
                 logging.info("✅ Отчёт по абонементам отправлен админу")
             except (
                 TelegramAPIError,
@@ -1564,16 +1567,14 @@ class PollService:
         try:
             logging.debug(f"Отправка сводки о списании админу (ID: {ADMIN_USER_ID})...")
 
-            @retry_async(
-                (TelegramNetworkError, asyncio.TimeoutError, OSError), tries=3, delay=2
-            )
-            async def send_report_with_retry():
-                if ADMIN_USER_ID is not None:
-                    await bot.send_message(
-                        chat_id=ADMIN_USER_ID, text=report, parse_mode="HTML"
-                    )
-
-            await send_report_with_retry()
+            if ADMIN_USER_ID is not None:
+                await self._safe_send_message(
+                    bot,
+                    chat_id=ADMIN_USER_ID,
+                    text=report,
+                    parse_mode="HTML",
+                    action_name="send charge report to admin",
+                )
             logging.info("✅ Сводка о списании отправлена админу")
         except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
             logging.exception(

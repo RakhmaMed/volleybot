@@ -741,6 +741,65 @@ class TestPlayerCallback:
         assert "500 ₽" in text
         assert "Донат" in text and "да" in text
 
+    @patch("src.utils.asyncio.sleep", new_callable=AsyncMock)
+    @patch("src.handlers.get_player_info")
+    async def test_process_player_select_retries_callback_answer_on_network_error(
+        self, mock_get_info, mock_sleep, admin_user, admin_service
+    ):
+        """Callback answer должен ретраиться и не ронять update при сетевой ошибке."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_info.return_value = {
+            "id": 1,
+            "name": "alim",
+            "fullname": "Alim B.",
+            "ball_donate": True,
+            "balance": 500,
+        }
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(),
+                "poll_service": MagicMock(),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        orig_message = Message(
+            message_id=10,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="Выберите игрока:",
+        )
+        callback_query = CallbackQuery(
+            id="1",
+            from_user=admin_user,
+            chat_instance="1",
+            message=orig_message,
+            data="player_select:1",
+        )
+
+        mock_edit_text = AsyncMock()
+        mock_answer = AsyncMock(side_effect=[OSError("network"), True])
+
+        with (
+            patch.object(Message, "edit_text", mock_edit_text),
+            patch.object(CallbackQuery, "answer", mock_answer),
+        ):
+            await dp.feed_update(
+                bot, Update(update_id=10, callback_query=callback_query)
+            )
+
+        mock_get_info.assert_called_once_with(1)
+        mock_edit_text.assert_called_once()
+        assert mock_answer.await_count == 2
+        mock_sleep.assert_awaited_once()
+
 
 @pytest.mark.asyncio
 class TestPollIntegration:
