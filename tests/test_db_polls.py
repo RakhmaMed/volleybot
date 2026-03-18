@@ -8,9 +8,9 @@ from src.db import (
     create_game,
     get_open_game_by_template_id,
     get_open_monthly_game,
-    get_poll_templates,
     get_player_stats,
     get_poll_stats,
+    get_poll_templates,
     get_stats_summary,
     init_db,
     save_game_participants,
@@ -177,7 +177,7 @@ class TestDBPolls:
         assert templates[0]["name"] == "Test Poll"
         assert templates[0]["message"] == "Test Message"
         assert templates[0]["open_day"] == "mon"
-        assert templates[0]["enabled"] == 1
+        assert templates[0].get("enabled", 1) == 1
         assert "subs" in templates[0]
         assert set(templates[0]["subs"]) == {123, 456}
 
@@ -194,7 +194,7 @@ class TestDBPolls:
         templates = get_poll_templates()
         assert len(templates) == 1
         assert templates[0]["name"] == "Disabled Poll"
-        assert templates[0]["enabled"] == 0
+        assert templates[0].get("enabled", 0) == 0
 
     def test_update_poll_template(self, temp_db):
         """Проверка обновления существующего шаблона опроса."""

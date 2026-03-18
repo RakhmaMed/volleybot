@@ -466,7 +466,11 @@ class PollService:
 
         logging.info(f"📋 Создание опроса '{poll_name}' в чате {chat_id}")
         logging.debug(f"  Вопрос: {question}")
-        poll_options = options if options is not None else list(POLL_OPTIONS)
+        import typing
+
+        from aiogram.types import InputPollOption
+
+        poll_options: list[str] = options if options is not None else list(POLL_OPTIONS)
         logging.debug(f"  Опции: {poll_options}")
         logging.debug(f"  Подписчиков: {len(subs) if subs else 0}")
 
@@ -477,7 +481,7 @@ class PollService:
                 return await bot.send_poll(
                     chat_id=chat_id,
                     question=question,
-                    options=poll_options,
+                    options=typing.cast(list[InputPollOption | str], poll_options),
                     is_anonymous=False,
                     allows_multiple_answers=allows_multiple_answers,
                 )
@@ -988,8 +992,10 @@ class PollService:
                 action_name="send final poll roster",
             )
             if final_message is None:
+                from aiogram.methods import SendMessage
+
                 raise TelegramNetworkError(
-                    method="sendMessage",
+                    method=SendMessage(chat_id=data.chat_id, text=final_text),
                     message="final poll roster send failed",
                 )
             final_message_id = final_message.message_id
@@ -1161,8 +1167,10 @@ class PollService:
                 )
 
             if final_message is None:
+                from aiogram.methods import SendMessage
+
                 raise TelegramNetworkError(
-                    method="sendMessage",
+                    method=SendMessage(chat_id=data.chat_id, text=final_text),
                     message="monthly final report send failed",
                 )
             final_message_id = final_message.message_id

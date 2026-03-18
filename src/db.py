@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sqlite3
+import typing
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -716,7 +717,7 @@ def get_poll_templates() -> list[PollTemplate]:
         return []
 
 
-def save_poll_template(template: dict[str, Any]) -> None:
+def save_poll_template(template: typing.Mapping[str, typing.Any]) -> None:
     """Сохраняет или обновляет шаблон опроса и его подписчиков."""
     try:
         init_db()

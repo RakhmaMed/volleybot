@@ -12,6 +12,8 @@ from src.services.poll_service import (
     SAFETY_K,
     SAVINGS_BUFFER,
     SINGLE_GAME_PRICE,
+)
+from src.services.poll_service import (
     calculate_subscription as _calculate_subscription,
 )
 from src.types import PollTemplate
@@ -39,6 +41,7 @@ def _make_poll(
 ) -> PollTemplate:
     """Фабрика для создания PollTemplate с минимальными полями."""
     return PollTemplate(
+        id=1,
         name=name,
         message=f"Игра {name}",
         open_day="mon",
@@ -116,8 +119,12 @@ class TestDynamicMonthlyRent:
 
     def test_february_vs_march_for_monday(self):
         polls = [_make_poll("Понедельник", cost_per_game=1500, game_day="mon")]
-        feb = calculate_subscription(polls, {"Понедельник": {1}}, target_month="2026-02")
-        mar = calculate_subscription(polls, {"Понедельник": {1}}, target_month="2026-03")
+        feb = calculate_subscription(
+            polls, {"Понедельник": {1}}, target_month="2026-02"
+        )
+        mar = calculate_subscription(
+            polls, {"Понедельник": {1}}, target_month="2026-03"
+        )
 
         assert feb.hall_breakdown[0].games_in_month == 4
         assert feb.hall_breakdown[0].monthly_rent == 6000
@@ -133,6 +140,7 @@ class TestDynamicMonthlyRent:
     def test_cost_per_game_missing(self):
         """Зал без поля cost_per_game (по умолчанию 0)."""
         poll: PollTemplate = PollTemplate(
+            id=2,
             name="Среда",
             message="Бесплатная игра",
             open_day="wed",
@@ -467,7 +475,9 @@ class TestProjectedSavings:
         result = calculate_subscription(polls, votes, fund_balance=fund)
 
         total_sub_income = sum(c.total for c in result.subscriber_charges)
-        total_rent = sum(h.monthly_rent for h in result.hall_breakdown if h.monthly_rent > 0)
+        total_rent = sum(
+            h.monthly_rent for h in result.hall_breakdown if h.monthly_rent > 0
+        )
         expected = fund + total_sub_income + result.expected_singles_income - total_rent
 
         assert result.projected_savings == expected
