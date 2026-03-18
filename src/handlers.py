@@ -54,6 +54,7 @@ from .scheduler import get_monthly_subscription_poll_params
 from .services import AdminService, BotStateService, PollService
 from .types import PollTemplate
 from .utils import (
+    call_with_network_retry,
     count_games_in_month,
     escape_html,
     format_player_link,
@@ -205,6 +206,21 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
     # Создаём роутер для обработчиков
     router: Router = Router()
+
+    async def safe_reply(
+        message: Message,
+        text: str,
+        *,
+        action_name: str,
+        **kwargs,
+    ) -> bool:
+        result = await call_with_network_retry(
+            lambda: message.reply(text, **kwargs),
+            action_name=action_name,
+            exceptions=(TelegramNetworkError, asyncio.TimeoutError, OSError),
+            logger=logging.getLogger(__name__),
+        )
+        return result is not None
 
     @router.message(Command("losiento"))
     async def losiento_handler(message: Message) -> None:
@@ -586,7 +602,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         poll_templates = get_poll_templates()
         if not poll_templates:
-            await message.reply("📅 Шаблоны опросов не найдены.")
+            await safe_reply(
+                message,
+                "📅 Шаблоны опросов не найдены.",
+                action_name="reply to /subs empty templates",
+            )
             return
 
         players = get_all_players()
@@ -746,11 +766,18 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         _format_poll_reference_line(candidate)
                         for candidate in partial_matches
                     )
-                    await message.reply("\n".join(lines), parse_mode="HTML")
+                    await safe_reply(
+                        message,
+                        "\n".join(lines),
+                        parse_mode="HTML",
+                        action_name="reply to /stats poll ambiguity",
+                    )
                     return
-                await message.reply(
+                await safe_reply(
+                    message,
                     f"❌ Опрос не найден: <code>{escape_html(identifier)}</code>",
                     parse_mode="HTML",
+                    action_name="reply to /stats poll not found",
                 )
                 return
             stats = get_poll_stats(int(template["id"]), month)
@@ -781,19 +808,23 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 else:
                     players = find_player_by_name(identifier)
                     if not players:
-                        await message.reply(
+                        await safe_reply(
+                            message,
                             f"❌ Игрок не найден: <code>{escape_html(identifier)}</code>",
                             parse_mode="HTML",
+                            action_name="reply to /stats player not found",
                         )
                         return
                     if len(players) > 1:
                         matches = "\n".join(
                             f"• {format_player_link(player)}" for player in players[:10]
                         )
-                        await message.reply(
+                        await safe_reply(
+                            message,
                             "❌ Найдено несколько игроков. Уточните запрос:\n"
                             f"{matches}",
                             parse_mode="HTML",
+                            action_name="reply to /stats player ambiguity",
                         )
                         return
                     target_user_id = int(players[0]["id"])
@@ -827,10 +858,12 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 "<code>/stats player ID|@username [YYYY-MM]</code>"
             )
 
-        await message.reply(
+        await safe_reply(
+            message,
             text,
             parse_mode="HTML",
             link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="reply to /stats",
         )
 
     async def _set_poll_enabled(message: Message, enabled: bool) -> None:
@@ -858,7 +891,12 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             lines.extend(
                 _format_poll_reference_line(template) for template in poll_templates
             )
-            await message.reply("\n".join(lines), parse_mode="HTML")
+            await safe_reply(
+                message,
+                "\n".join(lines),
+                parse_mode="HTML",
+                action_name="reply to poll toggle usage",
+            )
             return
 
         template, partial_matches = _find_poll_template(identifier)
@@ -872,11 +910,18 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     _format_poll_reference_line(candidate)
                     for candidate in partial_matches
                 )
-                await message.reply("\n".join(lines), parse_mode="HTML")
+                await safe_reply(
+                    message,
+                    "\n".join(lines),
+                    parse_mode="HTML",
+                    action_name="reply to poll toggle ambiguity",
+                )
                 return
-            await message.reply(
+            await safe_reply(
+                message,
                 f"❌ Опрос не найден: <code>{escape_html(identifier)}</code>",
                 parse_mode="HTML",
+                action_name="reply to poll toggle not found",
             )
             return
 
@@ -885,9 +930,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         desired_status = "активен" if enabled else "⏸️ выключен"
 
         if current_enabled == enabled:
-            await message.reply(
+            await safe_reply(
+                message,
                 f"ℹ️ Опрос <b>{escape_html(poll_name)}</b> (ID: {template.get('id')}) уже {desired_status}.",
                 parse_mode="HTML",
+                action_name="reply to poll toggle unchanged",
             )
             return
 
@@ -902,7 +949,12 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 "Изменение повлияет на следующие плановые открытия после перезапуска или пересоздания расписания."
             )
 
-        await message.reply("\n".join(result_lines), parse_mode="HTML")
+        await safe_reply(
+            message,
+            "\n".join(result_lines),
+            parse_mode="HTML",
+            action_name="reply to poll toggle success",
+        )
 
     @router.message(Command("poll_off"))
     async def poll_off_handler(message: Message) -> None:
@@ -928,12 +980,18 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         params = get_monthly_subscription_poll_params()
         if params is None:
-            await message.reply(
-                "❌ Нет платных залов. Добавьте опросы с cost > 0 в БД."
+            await safe_reply(
+                message,
+                "❌ Нет платных залов. Добавьте опросы с cost > 0 в БД.",
+                action_name="reply to /open_monthly missing halls",
             )
             return
         if get_open_monthly_game() is not None:
-            await message.reply("ℹ️ Месячный опрос уже открыт.")
+            await safe_reply(
+                message,
+                "ℹ️ Месячный опрос уже открыт.",
+                action_name="reply to /open_monthly already open",
+            )
             return
 
         bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
@@ -957,8 +1015,10 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         if new_chat_id != chat_id:
             bot_state_service.set_chat_id(new_chat_id)
 
-        await message.reply(
-            "✅ Месячный опрос открыт. Проголосуйте, затем используйте /close_monthly для закрытия."
+        await safe_reply(
+            message,
+            "✅ Месячный опрос открыт. Проголосуйте, затем используйте /close_monthly для закрытия.",
+            action_name="reply to /open_monthly success",
         )
 
     @router.message(Command("close_monthly"))
@@ -976,13 +1036,19 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         poll_service: PollService = dp.workflow_data["poll_service"]
         monthly_game = get_open_monthly_game()
         if monthly_game is None:
-            await message.reply(
-                "❌ Нет активного опроса. Сначала откройте месячный опрос: /open_monthly"
+            await safe_reply(
+                message,
+                "❌ Нет активного опроса. Сначала откройте месячный опрос: /open_monthly",
+                action_name="reply to /close_monthly missing poll",
             )
             return
 
         await poll_service.close_poll(bot, str(monthly_game["poll_id"]))
-        await message.reply("✅ Месячный опрос закрыт. Расчёт абонемента выполнен.")
+        await safe_reply(
+            message,
+            "✅ Месячный опрос закрыт. Расчёт абонемента выполнен.",
+            action_name="reply to /close_monthly success",
+        )
 
     @router.message(Command("webhookinfo"))
     async def webhookinfo_handler(message: Message) -> None:
@@ -1020,12 +1086,20 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             else:
                 info_text += "\n✅ All update types allowed"
 
-            await message.reply(info_text)
+            await safe_reply(
+                message,
+                info_text,
+                action_name="reply to /webhookinfo",
+            )
             logging.info(
                 f"🔍 Webhook info запрошен админом @{user.username} (ID: {user.id})"
             )
         except Exception as e:
-            await message.reply(f"❌ Ошибка получения webhook info: {e}")
+            await safe_reply(
+                message,
+                f"❌ Ошибка получения webhook info: {e}",
+                action_name="reply to /webhookinfo error",
+            )
             logging.error(f"❌ Ошибка при получении webhook info: {e}")
 
     async def _resolve_target(
@@ -1058,15 +1132,19 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 try:
                     amount = int(args[1])
                 except ValueError:
-                    await message.reply(
+                    await safe_reply(
+                        message,
                         "❌ Ошибка: сумма должна быть числом.\nПример: <code>/pay 500</code>",
                         parse_mode="HTML",
+                        action_name="reply to direct amount parse error",
                     )
                     return None
             else:
-                await message.reply(
+                await safe_reply(
+                    message,
                     "❌ Укажите сумму.\nПример: <code>/pay 500</code> (в ответ на сообщение)",
                     parse_mode="HTML",
+                    action_name="reply to missing amount",
                 )
                 return None
         # 2. Если указаны аргументы (Имя/ID/@username Сумма)
@@ -1086,8 +1164,10 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                             or f"ID: {target_user_id}"
                         )
                     else:
-                        await message.reply(
-                            f"❌ Игрок с ID {target_user_id} не найден."
+                        await safe_reply(
+                            message,
+                            f"❌ Игрок с ID {target_user_id} не найден.",
+                            action_name="reply to missing player by id",
                         )
                         return None
                 else:
@@ -1095,7 +1175,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     clean_query = search_query.lstrip("@")
                     players = find_player_by_name(clean_query)
                     if not players:
-                        await message.reply(f"❌ Игрок '{search_query}' не найден.")
+                        await safe_reply(
+                            message,
+                            f"❌ Игрок '{search_query}' не найден.",
+                            action_name="reply to missing player by name",
+                        )
                         return None
                     if len(players) > 1:
                         keyboard = []
@@ -1121,11 +1205,13 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
                         # Формируем список с гиперссылками
                         players_list = "\n".join([f"• {link}" for link in player_links])
-                        await message.reply(
+                        await safe_reply(
+                            message,
                             f"❓ Найдено несколько игроков ({len(players)}). Выберите нужного:\n\n{players_list}",
                             reply_markup=reply_markup,
                             parse_mode="HTML",
                             link_preview_options=LinkPreviewOptions(is_disabled=True),
+                            action_name="reply to ambiguous player search",
                         )
                         return None
 
@@ -1136,9 +1222,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         or f"ID: {target_user_id}"
                     )
             except ValueError:
-                await message.reply(
+                await safe_reply(
+                    message,
                     "❌ Ошибка: сумма должна быть числом в конце команды.\nПример: <code>/pay Иван 500</code>",
                     parse_mode="HTML",
+                    action_name="reply to trailing amount parse error",
                 )
                 return None
         else:
@@ -1177,7 +1265,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         target_user_id, amount, target_name = result
 
         if target_user_id is None or amount == 0:
-            await message.reply(
+            await safe_reply(
+                message,
                 "ℹ️ <b>Управление балансом:</b>\n\n"
                 "1. Ответьте на сообщение игрока: <code>/pay 500</code>\n"
                 "2. Поиск по имени: <code>/pay Иван 500</code>\n"
@@ -1186,6 +1275,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 "5. Оплата зала: <code>/pay Оплата зала</code>\n\n"
                 "<i>Сумма может быть отрицательной для списания.</i>",
                 parse_mode="HTML",
+                action_name="reply to /pay usage",
             )
             return
 
@@ -1213,8 +1303,10 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             except TelegramNetworkError:
                 pass
         else:
-            await message.reply(
-                "❌ Не удалось обновить баланс. Убедитесь, что игрок взаимодействовал с ботом ранее."
+            await safe_reply(
+                message,
+                "❌ Не удалось обновить баланс. Убедитесь, что игрок взаимодействовал с ботом ранее.",
+                action_name="reply to /pay update failure",
             )
 
     async def _handle_hall_payment(message: Message, user: User) -> None:
@@ -1223,9 +1315,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         unpaid = get_unpaid_halls(current_month)
 
         if not unpaid:
-            await message.reply(
+            await safe_reply(
+                message,
                 "✅ Все залы за этот месяц оплачены.",
                 parse_mode="HTML",
+                action_name="reply to hall payment no unpaid halls",
             )
             return
 
@@ -1255,11 +1349,13 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         lines.append("\nВыберите зал для оплаты:")
 
         reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-        await message.reply(
+        await safe_reply(
+            message,
             "\n".join(lines),
             reply_markup=reply_markup,
             parse_mode="HTML",
             link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="reply to hall payment selection",
         )
 
     @router.message(Command("restore"))
@@ -1286,7 +1382,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         target_user_id, amount, target_name = result
 
         if target_user_id is None or amount == 0:
-            await message.reply(
+            await safe_reply(
+                message,
                 "ℹ️ <b>Восстановление баланса</b> (касса не меняется):\n\n"
                 "1. Ответьте на сообщение игрока: <code>/restore 150</code>\n"
                 "2. Поиск по имени: <code>/restore Иван 150</code>\n"
@@ -1294,6 +1391,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 "4. По ID игрока: <code>/restore 12345678 150</code>\n\n"
                 "<i>Используйте для игроков, которые проголосовали, но не пришли.</i>",
                 parse_mode="HTML",
+                action_name="reply to /restore usage",
             )
             return
 
@@ -1321,8 +1419,10 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             except TelegramNetworkError:
                 pass
         else:
-            await message.reply(
-                "❌ Не удалось обновить баланс. Убедитесь, что игрок взаимодействовал с ботом ранее."
+            await safe_reply(
+                message,
+                "❌ Не удалось обновить баланс. Убедитесь, что игрок взаимодействовал с ботом ранее.",
+                action_name="reply to /restore update failure",
             )
 
     @router.message(Command("player"))
@@ -1354,13 +1454,19 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             p = get_player_info(target_user.id)
             if p:
                 text = _format_player_detail(p)
-                await message.reply(
+                await safe_reply(
+                    message,
                     text,
                     parse_mode="HTML",
                     link_preview_options=LinkPreviewOptions(is_disabled=True),
+                    action_name="reply to /player by reply",
                 )
             else:
-                await message.reply("❌ Не удалось получить данные игрока.")
+                await safe_reply(
+                    message,
+                    "❌ Не удалось получить данные игрока.",
+                    action_name="reply to /player missing data",
+                )
             return
 
         # 2. Есть аргумент — поиск одного игрока по имени, @username или ID
@@ -1373,31 +1479,47 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 p = get_player_info(pid)
                 if p:
                     text = _format_player_detail(p)
-                    await message.reply(
+                    await safe_reply(
+                        message,
                         text,
                         parse_mode="HTML",
                         link_preview_options=LinkPreviewOptions(is_disabled=True),
+                        action_name="reply to /player by id",
                     )
                 else:
-                    await message.reply(f"❌ Игрок с ID {pid} не найден.")
+                    await safe_reply(
+                        message,
+                        f"❌ Игрок с ID {pid} не найден.",
+                        action_name="reply to /player missing id",
+                    )
                 return
             else:
                 clean_query = search_query.lstrip("@")
                 players = find_player_by_name(clean_query)
                 if not players:
-                    await message.reply(f"❌ Игрок '{search_query}' не найден.")
+                    await safe_reply(
+                        message,
+                        f"❌ Игрок '{search_query}' не найден.",
+                        action_name="reply to /player missing name",
+                    )
                     return
                 if len(players) == 1:
                     p = get_player_info(players[0]["id"])
                     if p:
                         text = _format_player_detail(p)
-                        await message.reply(
+                        await safe_reply(
+                            message,
                             text,
                             parse_mode="HTML",
                             link_preview_options=LinkPreviewOptions(is_disabled=True),
+                            action_name="reply to /player single match",
                         )
                     else:
-                        await message.reply("❌ Не удалось получить данные игрока.")
+                        await safe_reply(
+                            message,
+                            "❌ Не удалось получить данные игрока.",
+                            action_name="reply to /player single missing data",
+                        )
                     return
                 # Несколько совпадений — клавиатура выбора
                 keyboard = []
@@ -1419,18 +1541,24 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     player_links.append(format_player_link(p))
                 reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
                 players_list = "\n".join([f"• {link}" for link in player_links])
-                await message.reply(
+                await safe_reply(
+                    message,
                     f"❓ Найдено несколько игроков ({len(players)}). Выберите:\n\n{players_list}",
                     reply_markup=reply_markup,
                     parse_mode="HTML",
                     link_preview_options=LinkPreviewOptions(is_disabled=True),
+                    action_name="reply to /player ambiguity",
                 )
                 return
 
         # 3. Без аргументов — список всех игроков (кратко)
         all_players = get_all_players()
         if not all_players:
-            await message.reply("📋 В базе пока нет игроков.")
+            await safe_reply(
+                message,
+                "📋 В базе пока нет игроков.",
+                action_name="reply to /player empty list",
+            )
             return
 
         lines = ["👥 <b>Игроки</b> ({}) — кратко:\n".format(len(all_players))]
@@ -1444,10 +1572,12 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             text = (
                 "\n".join(lines[:1] + lines[1:81]) + "\n\n… и ещё (показаны первые 80)."
             )
-        await message.reply(
+        await safe_reply(
+            message,
             text,
             parse_mode="HTML",
             link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="reply to /player list",
         )
 
     @router.callback_query(lambda c: c.data and c.data.startswith("player_select:"))

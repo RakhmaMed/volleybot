@@ -327,7 +327,11 @@ def run_webhook() -> None:
     app: web.Application = web.Application(middlewares=[security_middleware])
 
     # Настраиваем webhook handler
-    webhook_handler: SimpleRequestHandler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_handler: SimpleRequestHandler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+        handle_in_background=True,
+    )
     webhook_handler.register(app, path=effective_webhook_path)
 
     logging.info(f"🔐 Webhook path: {effective_webhook_path}")

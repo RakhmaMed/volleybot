@@ -118,10 +118,25 @@ class AdminService:
 
         async with self._cache_lock:
             admin_ids = await self._fetch_admins(bot, target_chat_id)
-            self._admin_cache[target_chat_id] = admin_ids
-            self._cache_updated_at[target_chat_id] = time.time()
-
-            logging.info(f"🔄 Кэш администраторов обновлён для чата {target_chat_id}")
+            if admin_ids:
+                self._admin_cache[target_chat_id] = admin_ids
+                self._cache_updated_at[target_chat_id] = time.time()
+                logging.info(
+                    f"🔄 Кэш администраторов обновлён для чата {target_chat_id}"
+                )
+            elif target_chat_id in self._admin_cache:
+                self._cache_updated_at[target_chat_id] = time.time()
+                logging.warning(
+                    "⚠️ Не удалось обновить список админов для чата %s. "
+                    "Используем предыдущий кэш (%s пользователей).",
+                    target_chat_id,
+                    len(self._admin_cache[target_chat_id]),
+                )
+            else:
+                logging.warning(
+                    "⚠️ Не удалось загрузить администраторов для чата %s, кэш пуст.",
+                    target_chat_id,
+                )
 
     async def is_admin(self, bot: Bot, user: User, chat_id: int | None = None) -> bool:
         """

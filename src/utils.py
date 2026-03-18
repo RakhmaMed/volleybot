@@ -15,7 +15,7 @@ import traceback
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from aiogram.types import User
 
@@ -128,6 +128,48 @@ def retry_async(
         return wrapper
 
     return decorator
+
+
+async def call_with_network_retry(
+    operation: Callable[[], Awaitable[Any]],
+    *,
+    action_name: str,
+    tries: int = 3,
+    delay: float = 1.0,
+    backoff: float = 2.0,
+    max_delay: float = 8.0,
+    timeout: float = 15.0,
+    exceptions: type[Exception] | tuple[type[Exception], ...] = (
+        asyncio.TimeoutError,
+        OSError,
+    ),
+    logger: logging.Logger | None = None,
+) -> Any | None:
+    """
+    Выполняет сетевой вызов с ограничением по времени и мягкими ретраями.
+
+    Возвращает результат операции или None, если все попытки исчерпаны.
+    Исключение не пробрасывается наружу, чтобы обработчики могли переживать
+    временные проблемы с Telegram API.
+    """
+
+    @retry_async(
+        exceptions,
+        tries=tries,
+        delay=delay,
+        backoff=backoff,
+        max_delay=max_delay,
+        logger=logger,
+    )
+    async def _wrapped() -> Any:
+        return await asyncio.wait_for(operation(), timeout=timeout)
+
+    try:
+        return await _wrapped()
+    except exceptions as exc:
+        target_logger = logger or logging.getLogger(__name__)
+        target_logger.warning("⚠️ Не удалось выполнить %s: %s", action_name, exc)
+        return None
 
 
 def save_error_dump(
