@@ -802,6 +802,151 @@ class TestPlayerCallback:
 
 
 @pytest.mark.asyncio
+class TestBallDonateCommand:
+    """Тесты для команды /ball_donate."""
+
+    @patch("src.handlers.get_player_info")
+    @patch("src.handlers.toggle_player_ball_donate")
+    @patch("src.handlers.ensure_player")
+    async def test_ball_donate_reply_toggles_player(
+        self,
+        mock_ensure,
+        mock_toggle,
+        mock_get_info,
+        admin_user,
+        regular_user,
+        admin_service,
+    ):
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_toggle.return_value = True
+        mock_get_info.return_value = {
+            "id": regular_user.id,
+            "name": "regular_user",
+            "fullname": "Regular User",
+            "ball_donate": True,
+            "balance": 100,
+        }
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(),
+                "poll_service": MagicMock(),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        reply_message = Message(
+            message_id=20,
+            date=MagicMock(),
+            chat=chat,
+            from_user=regular_user,
+            text="hello",
+        )
+        message = Message(
+            message_id=21,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="/ball_donate",
+            reply_to_message=reply_message,
+        )
+
+        await dp.feed_update(bot, Update(update_id=21, message=message))
+
+        mock_ensure.assert_called_once()
+        mock_toggle.assert_called_once_with(regular_user.id)
+        mock_get_info.assert_called_once_with(regular_user.id)
+        method = bot.call_args.args[0]
+        assert "Regular User" in method.text or "regular_user" in method.text
+        assert "донат мяча включён" in method.text.lower()
+        assert "Донат: <b>да</b>" in method.text
+
+    @patch("src.handlers.get_player_info")
+    @patch("src.handlers.toggle_player_ball_donate")
+    @patch("src.handlers.find_player_by_name")
+    async def test_ball_donate_by_name_toggles_player(
+        self, mock_find, mock_toggle, mock_get_info, admin_user, admin_service
+    ):
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_find.return_value = [
+            {"id": 777, "name": "pete", "fullname": "Peter", "balance": 0},
+        ]
+        mock_toggle.return_value = False
+        mock_get_info.return_value = {
+            "id": 777,
+            "name": "pete",
+            "fullname": "Peter",
+            "ball_donate": False,
+            "balance": 0,
+        }
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(),
+                "poll_service": MagicMock(),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=22,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="/ball_donate Peter",
+        )
+
+        await dp.feed_update(bot, Update(update_id=22, message=message))
+
+        mock_find.assert_called_once_with("Peter")
+        mock_toggle.assert_called_once_with(777)
+        mock_get_info.assert_called_once_with(777)
+        method = bot.call_args.args[0]
+        assert "Peter" in method.text
+        assert "донат мяча выключен" in method.text.lower()
+        assert "Донат: <b>нет</b>" in method.text
+
+    async def test_ball_donate_regular_user_ignored(
+        self, regular_user, admin_service
+    ):
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(),
+                "poll_service": MagicMock(),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=23,
+            date=MagicMock(),
+            chat=chat,
+            from_user=regular_user,
+            text="/ball_donate",
+        )
+
+        await dp.feed_update(bot, Update(update_id=23, message=message))
+
+        assert not bot.called
+
+
+@pytest.mark.asyncio
 class TestPollIntegration:
     """Тест интеграции регистрации игрока при голосовании."""
 

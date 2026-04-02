@@ -631,6 +631,35 @@ def update_player_balance(user_id: int, amount: int) -> bool:
         return False
 
 
+def toggle_player_ball_donate(user_id: int) -> bool | None:
+    """Переключает флаг ball_donate игрока и возвращает новое значение."""
+    try:
+        with _connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE players
+                SET ball_donate = CASE
+                    WHEN COALESCE(ball_donate, 0) = 0 THEN 1
+                    ELSE 0
+                END
+                WHERE id = ?
+                """,
+                (user_id,),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return None
+
+            row = conn.execute(
+                "SELECT ball_donate FROM players WHERE id = ?", (user_id,)
+            ).fetchone()
+            conn.commit()
+            return bool(row[0]) if row is not None else None
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при переключении ball_donate игрока {user_id}")
+        return None
+
+
 def find_player_by_name(query: str) -> list[dict[str, Any]]:
     """Ищет игроков по части имени или fullname."""
     try:

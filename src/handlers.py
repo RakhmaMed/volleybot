@@ -47,6 +47,7 @@ from .db import (
     save_monthly_vote,
     save_poll_template,
     save_state,
+    toggle_player_ball_donate,
     update_fund_balance,
     update_player_balance,
 )
@@ -105,6 +106,9 @@ async def setup_bot_commands(bot: Bot) -> None:
             command="close_monthly", description="Тест: закрыть опрос абонемента"
         ),
         BotCommand(command="player", description="Подробная информация об игроках"),
+        BotCommand(
+            command="ball_donate", description="Переключить донат мяча у игрока"
+        ),
         BotCommand(command="poll_off", description="Выключить опрос из расписания"),
         BotCommand(command="poll_on", description="Включить опрос в расписание"),
         BotCommand(command="start", description="Включить бота"),
@@ -438,6 +442,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "/restore [имя] [сумма] — найти игрока и восстановить баланс\n"
             "/player — список всех игроков с подробной информацией\n"
             "/player [имя] — информация об одном игроке (по имени, @username или ID)\n"
+            "/ball_donate — переключить донат мяча у игрока (reply)\n"
+            "/ball_donate [имя] — переключить донат мяча по имени, @username или ID\n"
             "/poll_off [id|name] — выключить опрос из расписания\n"
             "/poll_on [id|name] — включить опрос в расписание\n"
             "/start — включить бота\n"
@@ -1610,6 +1616,99 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             parse_mode="HTML",
             link_preview_options=LinkPreviewOptions(is_disabled=True),
             action_name="reply to /player list",
+        )
+
+    @router.message(Command("ball_donate"))
+    async def ball_donate_handler(message: Message) -> None:
+        """Переключает флаг доната мяча у игрока (только для администратора)."""
+        user = message.from_user
+        if user is None:
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
+        if not is_admin:
+            return
+
+        if message.text is None:
+            return
+
+        args = message.text.split(maxsplit=1)
+        target_user_id: int | None = None
+
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target_user = message.reply_to_message.from_user
+            ensure_player(
+                user_id=target_user.id,
+                name=target_user.username,
+                fullname=target_user.full_name,
+            )
+            target_user_id = target_user.id
+        elif len(args) >= 2:
+            search_query = args[1].strip()
+            if not search_query:
+                target_user_id = None
+            elif search_query.isdigit():
+                target_user_id = int(search_query)
+            else:
+                clean_query = search_query.lstrip("@")
+                players = find_player_by_name(clean_query)
+                if not players:
+                    await safe_reply(
+                        message,
+                        f"❌ Игрок '{escape_html(search_query)}' не найден.",
+                        parse_mode="HTML",
+                        action_name="reply to /ball_donate missing player",
+                    )
+                    return
+                if len(players) > 1:
+                    matches = "\n".join(
+                        f"• {format_player_link(player)}" for player in players[:10]
+                    )
+                    await safe_reply(
+                        message,
+                        "❌ Найдено несколько игроков. Уточните запрос:\n"
+                        f"{matches}",
+                        parse_mode="HTML",
+                        link_preview_options=LinkPreviewOptions(is_disabled=True),
+                        action_name="reply to /ball_donate ambiguity",
+                    )
+                    return
+                target_user_id = int(players[0]["id"])
+
+        if target_user_id is None:
+            await safe_reply(
+                message,
+                "ℹ️ <b>Переключение доната мяча</b>:\n\n"
+                "1. Ответьте на сообщение игрока: <code>/ball_donate</code>\n"
+                "2. Поиск по имени: <code>/ball_donate Иван</code>\n"
+                "3. По @username: <code>/ball_donate @username</code>\n"
+                "4. По ID игрока: <code>/ball_donate 12345678</code>",
+                parse_mode="HTML",
+                action_name="reply to /ball_donate usage",
+            )
+            return
+
+        new_status = toggle_player_ball_donate(target_user_id)
+        if new_status is None:
+            await safe_reply(
+                message,
+                "❌ Не удалось изменить донат мяча. Убедитесь, что игрок есть в базе.",
+                action_name="reply to /ball_donate toggle failure",
+            )
+            return
+
+        player = get_player_info(target_user_id)
+        player_link = format_player_link(player, target_user_id)
+        status_text = "включён" if new_status else "выключен"
+        ball_text = "да" if new_status else "нет"
+        await safe_reply(
+            message,
+            f"✅ Для игрока {player_link} донат мяча {status_text}.\n"
+            f"🏐 Донат: <b>{ball_text}</b>",
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="reply to /ball_donate success",
         )
 
     @router.callback_query(lambda c: c.data and c.data.startswith("player_select:"))

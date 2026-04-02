@@ -6,6 +6,7 @@ from src.db import (
     get_all_players,
     get_player_info,
     init_db,
+    toggle_player_ball_donate,
 )
 from src.utils import get_player_name
 
@@ -249,6 +250,49 @@ class TestGetPlayerInfo:
         """get_player_info возвращает None для несуществующего игрока."""
         init_db()
         assert get_player_info(99999) is None
+
+
+class TestTogglePlayerBallDonate:
+    """Тесты для toggle_player_ball_donate."""
+
+    def test_toggle_player_ball_donate_switches_false_to_true(self, temp_db):
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname, ball_donate) VALUES (?, ?, ?, ?)",
+                (55, "toggle_user", "Toggle User", 0),
+            )
+            conn.commit()
+
+        result = toggle_player_ball_donate(55)
+
+        assert result is True
+        info = get_player_info(55)
+        assert info is not None
+        assert info["ball_donate"] is True
+
+    def test_toggle_player_ball_donate_switches_true_to_false(self, temp_db):
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname, ball_donate) VALUES (?, ?, ?, ?)",
+                (56, "toggle_user_2", "Toggle User 2", 1),
+            )
+            conn.commit()
+
+        result = toggle_player_ball_donate(56)
+
+        assert result is False
+        info = get_player_info(56)
+        assert info is not None
+        assert info["ball_donate"] is False
+
+    def test_toggle_player_ball_donate_returns_none_for_missing_player(self, temp_db):
+        init_db()
+
+        result = toggle_player_ball_donate(99999)
+
+        assert result is None
 
 
 class TestGetPlayerNameFromDB:
