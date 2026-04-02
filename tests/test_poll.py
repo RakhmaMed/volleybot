@@ -1005,6 +1005,39 @@ class TestHtmlEscapingInPollTexts:
         assert "⭐️ — абонемент" in text
         assert "🏐 — донат на мяч" in text
 
+    async def test_update_players_list_refreshes_stale_subscription_badges(
+        self, mock_bot, temp_db
+    ):
+        """Список игроков должен пересобирать звёзды по актуальным subs, а не по старому тексту."""
+        init_db()
+        ensure_player(1, "wrong_sub", "Wrong Sub")
+        ensure_player(2, "right_sub", "Right Sub")
+
+        service = PollService()
+        poll_id = "test_stale_sub_badges"
+        service._poll_data[poll_id] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=123,
+            info_msg_id=124,
+            yes_voters=[
+                VoterInfo(id=1, name="⭐️ Wrong Sub (@wrong_sub)", update_id=1),
+                VoterInfo(id=2, name="Right Sub (@right_sub)", update_id=2),
+            ],
+            last_message_text="",
+            subs=[2],
+        )
+        service._update_tasks[poll_id] = None
+
+        mock_bot.edit_message_text = AsyncMock()
+
+        with patch("src.services.poll_service.asyncio.sleep", new_callable=AsyncMock):
+            await service._update_players_list(mock_bot, poll_id)
+
+        text = mock_bot.edit_message_text.call_args.kwargs["text"]
+        assert "1) ⭐️ Right Sub (@right_sub)" in text
+        assert "2) Wrong Sub (@wrong_sub)" in text
+        assert "⭐️ Wrong Sub (@wrong_sub)" not in text
+
     async def test_close_poll_includes_legend(self, mock_bot, temp_db):
         """Финальный текст опроса должен содержать легенду эмодзи."""
         service = PollService()
@@ -1029,6 +1062,40 @@ class TestHtmlEscapingInPollTexts:
         text = mock_bot.send_message.call_args.kwargs["text"]
         assert "⭐️ — абонемент" in text
         assert "🏐 — донат на мяч" in text
+
+    async def test_close_poll_refreshes_stale_subscription_badges(
+        self, mock_bot, temp_db
+    ):
+        """Финальный список должен пересобирать звёзды по актуальному subs."""
+        init_db()
+        ensure_player(1, "wrong_sub", "Wrong Sub")
+        ensure_player(2, "right_sub", "Right Sub")
+
+        service = PollService()
+        poll_id = "test_close_poll_stale_sub_badges"
+        service._poll_data[poll_id] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=123,
+            info_msg_id=124,
+            yes_voters=[
+                VoterInfo(id=1, name="⭐️ Wrong Sub (@wrong_sub)", update_id=1),
+                VoterInfo(id=2, name="Right Sub (@right_sub)", update_id=2),
+            ],
+            last_message_text="",
+            subs=[2],
+        )
+        service._update_tasks[poll_id] = None
+
+        mock_bot.stop_poll = AsyncMock()
+        mock_bot.send_message = AsyncMock()
+        mock_bot.delete_message = AsyncMock()
+
+        await service.close_poll(mock_bot, poll_id)
+
+        text = mock_bot.send_message.call_args.kwargs["text"]
+        assert "1) ⭐️ Right Sub (@right_sub)" in text
+        assert "2) Wrong Sub (@wrong_sub)" in text
+        assert "⭐️ Wrong Sub (@wrong_sub)" not in text
 
     async def test_close_poll_includes_payment_details(self, mock_bot, temp_db):
         """Финальный текст опроса должен содержать реквизиты для перевода."""

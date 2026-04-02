@@ -41,6 +41,7 @@ from ..db import (
     get_open_games,
     get_open_monthly_game,
     get_player_balance,
+    get_player_info,
     get_poll_templates,
     load_monthly_votes,
     load_state,
@@ -550,6 +551,69 @@ class PollService:
         )
         logging.debug("Создана новая задача отложенного обновления (10 сек)")
 
+    @staticmethod
+    def _strip_voter_status_prefix(name: str) -> str:
+        """Убирает статусные эмодзи из начала уже отформатированного имени."""
+        cleaned = name.lstrip()
+        changed = True
+        while changed:
+            changed = False
+            for prefix in ("⭐️", "⭐", "🏐"):
+                if cleaned.startswith(prefix):
+                    cleaned = cleaned[len(prefix) :].lstrip()
+                    changed = True
+        return cleaned or name
+
+    @classmethod
+    def _render_voter_name(cls, voter: VoterInfo, subs: list[int]) -> str:
+        """Пересобирает отображаемое имя голосующего по актуальным данным БД."""
+        player = get_player_info(voter.id)
+        fallback_name = cls._strip_voter_status_prefix(voter.name)
+
+        username = ""
+        display_name = fallback_name
+        ball_donate = False
+        if player:
+            username = str(player.get("name") or "").replace("@", "").strip()
+            fullname = str(player.get("fullname") or "").strip()
+            ball_donate = bool(player.get("ball_donate"))
+            if fullname:
+                display_name = fullname
+            elif username:
+                display_name = f"@{username}"
+
+        emojis = ""
+        if voter.id in subs:
+            emojis += "⭐️"
+        if ball_donate:
+            emojis += "🏐"
+        if emojis:
+            display_name = f"{emojis} {display_name}"
+
+        if not username:
+            return display_name
+
+        username_mention = f"@{username}"
+        if display_name == username_mention or display_name.endswith(
+            f" {username_mention}"
+        ):
+            return display_name
+        return f"{display_name} ({username_mention})"
+
+    @classmethod
+    def _refresh_voter_names(
+        cls, voters: list[VoterInfo], subs: list[int]
+    ) -> list[VoterInfo]:
+        """Возвращает список голосующих с актуальными именами и статусами."""
+        return [
+            VoterInfo(
+                id=voter.id,
+                name=cls._render_voter_name(voter, subs),
+                update_id=voter.update_id,
+            )
+            for voter in voters
+        ]
+
     def update_voters(
         self,
         poll_id: str,
@@ -839,6 +903,7 @@ class PollService:
         yes_voters: list[VoterInfo] = sort_voters_by_update_id(
             data.yes_voters, data.subs
         )
+        yes_voters = self._refresh_voter_names(yes_voters, data.subs)
         data.yes_voters = yes_voters
 
         # Формируем текст (HTML-разметка)
@@ -1022,7 +1087,9 @@ class PollService:
             return
 
         # Формируем финальный список
-        yes_voters: list[VoterInfo] = data.yes_voters
+        yes_voters: list[VoterInfo] = sort_voters_by_update_id(data.yes_voters, data.subs)
+        yes_voters = self._refresh_voter_names(yes_voters, data.subs)
+        data.yes_voters = yes_voters
 
         final_text: str
         if len(yes_voters) == 0:
