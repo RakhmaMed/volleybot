@@ -8,6 +8,7 @@ import logging
 from asyncio import Task
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.exceptions import (
@@ -36,7 +37,9 @@ from ..db import (
     ensure_player,
     get_fund_balance,
     get_game,
+    get_open_game_by_template_id,
     get_open_games,
+    get_open_monthly_game,
     get_player_balance,
     get_poll_templates,
     load_monthly_votes,
@@ -49,7 +52,13 @@ from ..db import (
     update_player_balance,
 )
 from ..poll import PollData, VoterInfo, sort_voters_by_update_id
-from ..types import HallBreakdown, PollTemplate, SubscriberCharge, SubscriptionResult
+from ..types import (
+    HallBreakdown,
+    PollCreationSpec,
+    PollTemplate,
+    SubscriberCharge,
+    SubscriptionResult,
+)
 from ..utils import (
     call_with_network_retry,
     count_games_in_month,
@@ -255,6 +264,139 @@ class PollService:
         poll_id = list(self._poll_data.keys())[0]
         return poll_id, self._poll_data[poll_id]
 
+    @staticmethod
+    def _format_monthly_option(
+        template: PollTemplate,
+        *,
+        utc_tz: ZoneInfo,
+        moscow_tz: ZoneInfo,
+    ) -> str:
+        """Форматирует подпись опции месячного опроса."""
+        name = str(template.get("name", ""))
+        game_hour_utc = int(template.get("game_hour_utc", 0) or 0)
+        game_minute_utc = int(template.get("game_minute_utc", 0) or 0)
+        dt_utc = datetime(2000, 1, 1, game_hour_utc, game_minute_utc, tzinfo=utc_tz)
+        dt_moscow = dt_utc.astimezone(moscow_tz)
+        return f"{name} — {dt_moscow.strftime('%H:%M')} МСК"
+
+    def build_regular_poll_spec(
+        self, poll_template_id: int
+    ) -> PollCreationSpec | None:
+        """Собирает spec обычного опроса из актуальных данных БД."""
+        poll_templates = get_poll_templates()
+        template = next(
+            (
+                p
+                for p in poll_templates
+                if int(p.get("id", 0) or 0) == poll_template_id
+            ),
+            None,
+        )
+        if template is None:
+            logging.warning(
+                "⚠️ Шаблон опроса с ID %s не найден, открытие пропущено",
+                poll_template_id,
+            )
+            return None
+        if int(template.get("enabled", 1) or 0) != 1:
+            logging.info(
+                "⏸️ Шаблон опроса %s выключен, плановое открытие пропущено",
+                poll_template_id,
+            )
+            return None
+
+        return PollCreationSpec(
+            kind="regular",
+            poll_name=str(template.get("name") or ""),
+            question=str(template.get("message") or ""),
+            options=tuple(POLL_OPTIONS),
+            allows_multiple_answers=False,
+            subs=tuple(int(user_id) for user_id in template.get("subs", []) or []),
+            option_poll_names=(),
+            poll_template_id=poll_template_id,
+            place_snapshot=str(template.get("place") or ""),
+            cost_snapshot=int(template.get("cost", 0) or 0),
+            cost_per_game_snapshot=int(template.get("cost_per_game", 0) or 0),
+            target_month_snapshot=None,
+        )
+
+    def build_monthly_subscription_poll_spec(self) -> PollCreationSpec | None:
+        """Собирает spec месячного опроса из актуальных данных БД."""
+        poll_templates = get_poll_templates()
+        paid_polls = [
+            p
+            for p in poll_templates
+            if int(p.get("cost", 0) or 0) > 0 and int(p.get("enabled", 1) or 0) == 1
+        ]
+        if not paid_polls:
+            return None
+
+        utc_tz = ZoneInfo("UTC")
+        moscow_tz = ZoneInfo("Europe/Moscow")
+        options = tuple(
+            self._format_monthly_option(poll, utc_tz=utc_tz, moscow_tz=moscow_tz)
+            for poll in paid_polls
+        ) + ("Смотреть результат",)
+        option_poll_names = tuple(str(poll.get("name") or "") for poll in paid_polls) + (
+            None,
+        )
+        target_month_snapshot = get_next_month_str(datetime.now(timezone.utc))
+
+        return PollCreationSpec(
+            kind="monthly_subscription",
+            poll_name="monthly_subscription",
+            question=(
+                "Абонемент на следующий месяц.\n"
+                "Выберите игры для подписки. Можно выбрать несколько вариантов."
+            ),
+            options=options,
+            allows_multiple_answers=True,
+            subs=(),
+            option_poll_names=option_poll_names,
+            poll_template_id=None,
+            place_snapshot="",
+            cost_snapshot=0,
+            cost_per_game_snapshot=0,
+            target_month_snapshot=target_month_snapshot,
+        )
+
+    async def open_regular_poll(
+        self,
+        bot: Bot,
+        chat_id: int,
+        poll_template_id: int,
+        bot_enabled: bool,
+    ) -> int:
+        """Открывает обычный опрос по шаблону из БД."""
+        if get_open_game_by_template_id(poll_template_id) is not None:
+            logging.info(
+                "ℹ️ Опрос для шаблона %s уже открыт, повторное открытие пропущено",
+                poll_template_id,
+            )
+            return chat_id
+
+        spec = self.build_regular_poll_spec(poll_template_id)
+        if spec is None:
+            return chat_id
+        return await self.send_poll_spec(bot, chat_id, spec, bot_enabled)
+
+    async def open_monthly_subscription_poll(
+        self,
+        bot: Bot,
+        chat_id: int,
+        bot_enabled: bool,
+    ) -> int:
+        """Открывает месячный опрос по актуальным данным БД."""
+        if get_open_monthly_game() is not None:
+            logging.info("ℹ️ Месячный опрос уже открыт, повторное открытие пропущено")
+            return chat_id
+
+        spec = self.build_monthly_subscription_poll_spec()
+        if spec is None:
+            logging.info("ℹ️ Платные опросы не найдены, открытие месячного опроса пропущено")
+            return chat_id
+        return await self.send_poll_spec(bot, chat_id, spec, bot_enabled)
+
     def persist_state(self) -> None:
         """Сохранить состояние опросов в базу данных."""
         serializable: dict[str, dict] = {}
@@ -432,34 +574,28 @@ class PollService:
         data.yes_voters = sorted_yes_voters
         return sorted_yes_voters
 
-    async def send_poll(
+    async def send_poll_spec(
         self,
         bot: Bot,
         chat_id: int,
-        question: str,
-        poll_name: str,
+        spec: PollCreationSpec,
         bot_enabled: bool,
-        subs: list[int] | None = None,
-        options: list[str] | None = None,
-        allows_multiple_answers: bool = False,
-        poll_kind: str = "regular",
-        option_poll_names: list[str | None] | None = None,
-        poll_template_id: int | None = None,
     ) -> int:
         """
-        Отправка опроса в чат.
+        Отправка готового spec опроса в чат.
 
         Args:
             bot: Экземпляр бота
             chat_id: ID чата для отправки
-            question: Текст вопроса опроса
-            poll_name: Название опроса для логирования
+            spec: Готовый payload и снапшоты опроса
             bot_enabled: Флаг включения бота
-            subs: Список ID подписчиков
 
         Returns:
             Новый chat_id (может измениться при миграции группы)
         """
+        poll_name = spec.poll_name
+        question = spec.question
+
         if not bot_enabled:
             logging.info(f"⏸️ Бот выключен, опрос '{poll_name}' не создан")
             return chat_id
@@ -470,9 +606,9 @@ class PollService:
 
         from aiogram.types import InputPollOption
 
-        poll_options: list[str] = options if options is not None else list(POLL_OPTIONS)
+        poll_options = list(spec.options)
         logging.debug(f"  Опции: {poll_options}")
-        logging.debug(f"  Подписчиков: {len(subs) if subs else 0}")
+        logging.debug(f"  Подписчиков: {len(spec.subs)}")
 
         try:
 
@@ -483,7 +619,7 @@ class PollService:
                     question=question,
                     options=typing.cast(list[InputPollOption | str], poll_options),
                     is_anonymous=False,
-                    allows_multiple_answers=allows_multiple_answers,
+                    allows_multiple_answers=spec.allows_multiple_answers,
                 )
 
             poll_message = await send_poll_with_retry()
@@ -620,45 +756,23 @@ class PollService:
 
         opened_dt = datetime.now(timezone.utc)
         opened_at = opened_dt.isoformat()
-        target_month_snapshot = (
-            get_next_month_str(opened_dt)
-            if poll_kind == "monthly_subscription"
-            else None
-        )
-        poll_templates = get_poll_templates()
-        poll_template = next(
-            (
-                template
-                for template in poll_templates
-                if poll_template_id is not None
-                and int(template.get("id", 0) or 0) == poll_template_id
-            ),
-            None,
-        )
-        place_snapshot = (
-            str(poll_template.get("place") or "") if poll_template is not None else ""
-        )
-        cost_snapshot = int(poll_template.get("cost", 0) or 0) if poll_template else 0
-        cost_per_game_snapshot = (
-            int(poll_template.get("cost_per_game", 0) or 0) if poll_template else 0
-        )
         create_game(
             poll_id=poll_message.poll.id,
-            kind=poll_kind,
+            kind=spec.kind,
             status="open",
-            poll_template_id=poll_template_id,
+            poll_template_id=spec.poll_template_id,
             poll_name_snapshot=poll_name,
             question_snapshot=question,
             chat_id=chat_id,
             poll_message_id=poll_message.message_id,
             info_message_id=info_message.message_id if info_message else None,
             opened_at=opened_at,
-            place_snapshot=place_snapshot,
-            cost_snapshot=cost_snapshot,
-            cost_per_game_snapshot=cost_per_game_snapshot,
-            target_month_snapshot=target_month_snapshot,
+            place_snapshot=spec.place_snapshot,
+            cost_snapshot=spec.cost_snapshot,
+            cost_per_game_snapshot=spec.cost_per_game_snapshot,
+            target_month_snapshot=spec.target_month_snapshot,
             options=poll_options,
-            option_poll_names=option_poll_names or [],
+            option_poll_names=list(spec.option_poll_names),
         )
         update_game_info_message(
             poll_message.poll.id,
@@ -667,9 +781,9 @@ class PollService:
         )
 
         self._poll_data[poll_message.poll.id] = PollData(
-            kind=poll_kind,
+            kind=spec.kind,
             status="open",
-            poll_template_id=poll_template_id,
+            poll_template_id=spec.poll_template_id,
             poll_name_snapshot=poll_name,
             question_snapshot=question,
             opened_at=opened_at,
@@ -679,10 +793,10 @@ class PollService:
             final_message_id=None,
             yes_voters=[],
             last_message_text="⏳ Идёт сбор голосов...",
-            subs=subs or [],
+            subs=list(spec.subs),
             options=poll_options,
-            option_poll_names=option_poll_names or [],
-            target_month=target_month_snapshot,
+            option_poll_names=list(spec.option_poll_names),
+            target_month=spec.target_month_snapshot,
         )
         self._update_tasks[poll_message.poll.id] = None
         self.persist_state()

@@ -9,7 +9,6 @@ from src.db import init_db
 from src.scheduler import (
     create_close_poll_job,
     create_poll_job,
-    get_monthly_subscription_poll_params,
     setup_scheduler,
 )
 from src.services import BotStateService, PollService
@@ -19,29 +18,29 @@ from src.services import BotStateService, PollService
 class TestCreatePollJob:
     """Тесты для функции create_poll_job."""
 
-    async def test_create_poll_job_calls_send_poll(self):
+    async def test_create_poll_job_calls_open_regular_poll(self):
         """Тест создания задачи отправки опроса."""
         bot = MagicMock()
         bot_state_service = BotStateService(default_chat_id=-1001234567890)
         poll_service = PollService()
 
-        # Мокаем метод send_poll
-        poll_service.send_poll = AsyncMock(return_value=-1001234567890)
+        poll_service.open_regular_poll = AsyncMock(return_value=-1001234567890)
 
         job = create_poll_job(
             bot,
-            "Test message",
-            "test_poll",
             bot_state_service,
             poll_service,
+            poll_template_id=7,
         )
 
         await job()
 
-        poll_service.send_poll.assert_called_once()
-        assert poll_service.send_poll.call_args[0][1] == -1001234567890
-        assert poll_service.send_poll.call_args[0][2] == "Test message"
-        assert poll_service.send_poll.call_args[0][3] == "test_poll"
+        poll_service.open_regular_poll.assert_called_once_with(
+            bot,
+            -1001234567890,
+            7,
+            True,
+        )
 
     async def test_create_poll_job_updates_chat_id_on_migration(self):
         """Тест обновления chat_id при миграции группы."""
@@ -51,44 +50,42 @@ class TestCreatePollJob:
         bot_state_service = BotStateService(default_chat_id=-1001234567890)
         poll_service = PollService()
 
-        # Мокаем метод send_poll для возврата нового chat_id
-        poll_service.send_poll = AsyncMock(return_value=new_chat_id)
+        poll_service.open_regular_poll = AsyncMock(return_value=new_chat_id)
 
         job = create_poll_job(
             bot,
-            "Test message",
-            "test_poll",
             bot_state_service,
             poll_service,
+            poll_template_id=7,
         )
 
         await job()
 
         assert bot_state_service.get_chat_id() == new_chat_id
 
-    async def test_create_poll_job_skips_disabled_template(self):
-        """Выключенный шаблон не должен открывать опрос даже при существующей job."""
+    async def test_create_monthly_poll_job_calls_service(self):
+        """Месячный poll job должен использовать тот же сервисный путь открытия."""
         bot = MagicMock()
         bot_state_service = BotStateService(default_chat_id=-1001234567890)
         poll_service = PollService()
-        poll_service.send_poll = AsyncMock(return_value=-1001234567890)
+        poll_service.open_monthly_subscription_poll = AsyncMock(
+            return_value=-1001234567890
+        )
 
         job = create_poll_job(
             bot,
-            "Test message",
-            "test_poll",
             bot_state_service,
             poll_service,
-            poll_template_id=2,
+            monthly=True,
         )
 
-        with patch(
-            "src.scheduler.get_poll_templates",
-            return_value=[{"id": 2, "name": "test_poll", "enabled": 0}],
-        ):
-            await job()
+        await job()
 
-        poll_service.send_poll.assert_not_called()
+        poll_service.open_monthly_subscription_poll.assert_called_once_with(
+            bot,
+            -1001234567890,
+            True,
+        )
 
 
 @pytest.mark.asyncio
@@ -283,124 +280,3 @@ class TestSetupScheduler:
             assert "normal (закрытие)" in jobs
             assert "midnight_crossover (закрытие)" in jobs
             assert "week_crossover (закрытие)" in jobs
-
-
-class TestMonthlySubscriptionScheduler:
-    """Тесты фильтрации платных выключенных опросов."""
-
-    def test_monthly_params_use_updated_question_and_option_labels(self):
-        """Месячный опрос использует новый текст вопроса и короткие подписи игр."""
-        test_polls = [
-            {
-                "name": "Понедельник в Академии",
-                "place": "Академия",
-                "game_hour_utc": 15,
-                "game_minute_utc": 30,
-                "cost": 100,
-                "enabled": 1,
-            },
-            {
-                "name": "Пятница в Академии",
-                "place": "Академия",
-                "game_hour_utc": 16,
-                "game_minute_utc": 0,
-                "cost": 200,
-                "enabled": 1,
-            },
-        ]
-
-        with patch("src.scheduler.get_poll_templates", return_value=test_polls):
-            params = get_monthly_subscription_poll_params()
-
-        assert params is not None
-        question, options, option_poll_names = params
-        assert question == (
-            "Абонемент на следующий месяц.\n"
-            "Выберите игры для подписки. Можно выбрать несколько вариантов."
-        )
-        assert options == [
-            "Понедельник в Академии — 18:30 МСК",
-            "Пятница в Академии — 19:00 МСК",
-            "Смотреть результат",
-        ]
-        assert option_poll_names == [
-            "Понедельник в Академии",
-            "Пятница в Академии",
-            None,
-        ]
-
-    def test_monthly_params_include_only_enabled_paid_polls(self):
-        """Параметры месячного опроса включают только enabled платные шаблоны."""
-        test_polls = [
-            {
-                "name": "Enabled Paid",
-                "place": "Hall A",
-                "game_hour_utc": 18,
-                "game_minute_utc": 0,
-                "cost": 100,
-                "enabled": 1,
-            },
-            {
-                "name": "Disabled Paid",
-                "place": "Hall B",
-                "game_hour_utc": 19,
-                "game_minute_utc": 0,
-                "cost": 150,
-                "enabled": 0,
-            },
-            {
-                "name": "Enabled Free",
-                "place": "Hall C",
-                "game_hour_utc": 20,
-                "game_minute_utc": 0,
-                "cost": 0,
-                "enabled": 1,
-            },
-        ]
-
-        with patch("src.scheduler.get_poll_templates", return_value=test_polls):
-            params = get_monthly_subscription_poll_params()
-
-        assert params is not None
-        _, options, option_poll_names = params
-        assert any("Enabled Paid" in option for option in options)
-        assert all("Disabled Paid" not in option for option in options)
-        assert option_poll_names == ["Enabled Paid", None]
-
-    def test_monthly_params_use_capitalized_result_option(self):
-        """Последняя опция месячного опроса начинается с заглавной буквы."""
-        test_polls = [
-            {
-                "name": "Enabled Paid",
-                "place": "Hall A",
-                "game_hour_utc": 18,
-                "game_minute_utc": 0,
-                "cost": 100,
-                "enabled": 1,
-            }
-        ]
-
-        with patch("src.scheduler.get_poll_templates", return_value=test_polls):
-            params = get_monthly_subscription_poll_params()
-
-        assert params is not None
-        _, options, _ = params
-        assert options[-1] == "Смотреть результат"
-
-    def test_monthly_params_return_none_when_all_paid_polls_disabled(self):
-        """Если все платные опросы выключены, месячный опрос не строится."""
-        test_polls = [
-            {
-                "name": "Disabled Paid",
-                "place": "Hall B",
-                "game_hour_utc": 19,
-                "game_minute_utc": 0,
-                "cost": 150,
-                "enabled": 0,
-            }
-        ]
-
-        with patch("src.scheduler.get_poll_templates", return_value=test_polls):
-            params = get_monthly_subscription_poll_params()
-
-        assert params is None

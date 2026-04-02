@@ -801,6 +801,45 @@ class TestPollAnswerHandler:
 
 @pytest.mark.asyncio
 class TestMonthlyAndStatsHandlers:
+    async def test_open_monthly_uses_poll_service_open_method(
+        self, admin_user, admin_service, temp_db
+    ):
+        init_db()
+
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        poll_service = PollService()
+        poll_service.build_monthly_subscription_poll_spec = MagicMock(
+            return_value=MagicMock()
+        )
+        poll_service.open_monthly_subscription_poll = AsyncMock(
+            return_value=-1001234567890
+        )
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": poll_service,
+            }
+        )
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=1,
+            date=datetime.now(),
+            chat=chat,
+            from_user=admin_user,
+            text="/open_monthly",
+        )
+        await dp.feed_update(bot, Update(update_id=1, message=message))
+
+        poll_service.open_monthly_subscription_poll.assert_called_once_with(
+            bot,
+            -1001234567890,
+            True,
+        )
+
     async def test_close_monthly_uses_open_monthly_game(
         self, admin_user, admin_service, temp_db
     ):

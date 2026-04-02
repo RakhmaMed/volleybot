@@ -31,6 +31,24 @@ class PollTemplate(PollTemplateRequired, total=False):
     subs: list[int]  # Список user_id подписчиков (добавляется в get_poll_templates)
 
 
+@dataclass(frozen=True)
+class PollCreationSpec:
+    """Готовый payload и снапшоты для создания опроса."""
+
+    kind: str
+    poll_name: str
+    question: str
+    options: tuple[str, ...] = ()
+    allows_multiple_answers: bool = False
+    subs: tuple[int, ...] = ()
+    option_poll_names: tuple[str | None, ...] = ()
+    poll_template_id: int | None = None
+    place_snapshot: str = ""
+    cost_snapshot: int = 0
+    cost_per_game_snapshot: int = 0
+    target_month_snapshot: str | None = None
+
+
 # ── Результаты расчёта абонемента ────────────────────────────────────────────
 
 

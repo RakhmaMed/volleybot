@@ -24,130 +24,46 @@ from .services import BotStateService, PollService
 from .types import PollTemplate
 
 
-def get_monthly_subscription_poll_params() -> (
-    tuple[str, list[str], list[str | None]] | None
-):
-    """
-    Формирует параметры опроса «Абонемент на следующий месяц».
-
-    Returns:
-        (вопрос, список опций, option_poll_names) или None, если нет платных залов.
-    """
-    from typing import cast
-
-    poll_templates = get_poll_templates()
-    paid_polls = [
-        p for p in poll_templates
-        if int(cast(int, p.get("cost") or 0)) > 0
-        and int(cast(int, p.get("enabled", 1) or 0)) == 1
-    ]
-    if not paid_polls:
-        return None
-
-    utc_tz = ZoneInfo("UTC")
-    moscow_tz = ZoneInfo("Europe/Moscow")
-    options: list[str] = []
-    option_poll_names: list[str | None] = []
-
-    for poll in paid_polls:
-        name = str(poll.get("name", ""))
-        game_hour_utc: int = cast(int, poll.get("game_hour_utc") or 0)
-        game_minute_utc: int = cast(int, poll.get("game_minute_utc") or 0)
-        dt_utc = datetime(
-            2000, 1, 1, game_hour_utc, game_minute_utc, tzinfo=utc_tz
-        )
-        dt_moscow = dt_utc.astimezone(moscow_tz)
-        time_moscow = dt_moscow.strftime("%H:%M")
-        options.append(f"{name} — {time_moscow} МСК")
-        option_poll_names.append(name)
-
-    options.append("Смотреть результат")
-    option_poll_names.append(None)
-
-    question = (
-        "Абонемент на следующий месяц.\n"
-        "Выберите игры для подписки. Можно выбрать несколько вариантов."
-    )
-    return (question, options, option_poll_names)
-
-
 def create_poll_job(
     bot: Bot,
-    message: str,
-    poll_name: str,
     bot_state_service: BotStateService,
     poll_service: PollService,
-    subs: list[int] | None = None,
-    options: list[str] | None = None,
-    allows_multiple_answers: bool = False,
-    poll_kind: str = "regular",
-    option_poll_names: list[str | None] | None = None,
     poll_template_id: int | None = None,
+    *,
+    monthly: bool = False,
 ) -> Callable[[], Awaitable[None]]:
     """
     Создаёт асинхронную задачу для отправки опроса.
 
     Args:
         bot: Экземпляр бота
-        message: Текст опроса
-        poll_name: Название опроса
         bot_state_service: Сервис состояния бота
         poll_service: Сервис опросов
-        subs: Список ID подписчиков
 
     Returns:
         Асинхронная функция-задача для планировщика
     """
 
     async def job() -> None:
-        if poll_kind == "regular" and poll_template_id is not None:
-            poll_templates = get_poll_templates()
-            template = next(
-                (
-                    p
-                    for p in poll_templates
-                    if int(p.get("id", 0) or 0) == poll_template_id
-                ),
-                None,
-            )
-            if template is None:
-                logging.warning(
-                    "⚠️ Шаблон опроса с ID %s не найден, открытие пропущено",
-                    poll_template_id,
-                )
-                return
-            if int(template.get("enabled", 1) or 0) != 1:
-                logging.info(
-                    "⏸️ Шаблон опроса %s выключен, плановое открытие пропущено",
-                    poll_template_id,
-                )
-                return
-        if poll_kind == "monthly_subscription" and get_open_monthly_game() is not None:
-            logging.info("ℹ️ Месячный опрос уже открыт, повторное открытие пропущено")
-            return
-        if (
-            poll_kind == "regular"
-            and poll_template_id is not None
-            and get_open_game_by_template_id(poll_template_id) is not None
-        ):
-            logging.info(
-                f"ℹ️ Опрос для шаблона {poll_template_id} уже открыт, повторное открытие пропущено"
-            )
-            return
         chat_id: int = bot_state_service.get_chat_id()
-        new_chat_id: int = await poll_service.send_poll(
-            bot,
-            chat_id,
-            message,
-            poll_name,
-            bot_state_service.is_enabled(),
-            subs,
-            options,
-            allows_multiple_answers,
-            poll_kind,
-            option_poll_names,
-            poll_template_id,
-        )
+        if monthly:
+            new_chat_id = await poll_service.open_monthly_subscription_poll(
+                bot,
+                chat_id,
+                bot_state_service.is_enabled(),
+            )
+        else:
+            if poll_template_id is None:
+                logging.warning(
+                    "⚠️ poll_template_id не задан для regular poll job, открытие пропущено"
+                )
+                return
+            new_chat_id = await poll_service.open_regular_poll(
+                bot,
+                chat_id,
+                poll_template_id,
+                bot_state_service.is_enabled(),
+            )
         if new_chat_id != chat_id:
             bot_state_service.set_chat_id(new_chat_id)
 
@@ -268,7 +184,6 @@ def setup_scheduler(
 
     for idx, poll_config in enumerate(enabled_poll_templates):
         poll_name: str = poll_config["name"]
-        message: str = poll_config["message"]
 
         # Время открытия опроса
         open_day: str = poll_config.get("open_day", "*")
@@ -292,16 +207,10 @@ def setup_scheduler(
         if open_day != "*":
             open_trigger_kwargs["day_of_week"] = open_day
 
-        # Получаем список подписчиков для этого опроса
-        subs: list[int] = poll_config.get("subs", [])
-
         poll_job: Callable[[], Awaitable[None]] = create_poll_job(
             bot,
-            message,
-            poll_name,
             bot_state_service,
             poll_service,
-            subs,
             poll_template_id=int(poll_config.get("id", 0) or 0) or None,
         )
 
@@ -321,9 +230,6 @@ def setup_scheduler(
             logging.info(
                 f"  📅 ОТКРЫТИЕ: {open_day.upper()} {open_hour_utc:02d}:{open_minute_utc:02d} UTC - {poll_name}"
             )
-
-        if subs:
-            logging.debug(f"     Подписчиков для '{poll_name}': {len(subs)}")
 
         # === Задача закрытия опроса ===
         close_job_id: str = f"poll_close_{idx}"
@@ -393,17 +299,14 @@ def _schedule_monthly_subscription_poll(
     """
     Планирует ежемесячный опрос на абонемент для платных игр.
     """
-    from typing import cast
-
-    params = get_monthly_subscription_poll_params()
-    if params is None:
+    paid_polls = [
+        p
+        for p in poll_templates
+        if int(p.get("cost", 0) or 0) > 0 and int(p.get("enabled", 1) or 0) == 1
+    ]
+    if not paid_polls:
         logging.info("ℹ️ Платные опросы не найдены, месячный опрос не запланирован")
         return
-
-    _question, _options, _option_poll_names = params
-    paid_polls = [
-        p for p in poll_templates if int(cast(int, p.get("cost") or 0)) > 0
-    ]
 
     moscow_tz = ZoneInfo("Europe/Moscow")
     utc_tz = ZoneInfo("UTC")
@@ -436,8 +339,8 @@ def _schedule_monthly_subscription_poll(
         last_game: datetime | None = None
         for poll in paid_polls:
             game_day = str(poll.get("game_day", "*"))
-            game_hour_utc: int = cast(int, poll.get("game_hour_utc") or 0)
-            game_minute_utc: int = cast(int, poll.get("game_minute_utc") or 0)
+            game_hour_utc = int(poll.get("game_hour_utc", 0) or 0)
+            game_minute_utc = int(poll.get("game_minute_utc", 0) or 0)
             current_date = utc_start.date()
             while current_date <= end_date:
                 if game_day == "*" or day_map.get(game_day) == current_date.weekday():
@@ -482,13 +385,10 @@ def _schedule_monthly_subscription_poll(
     def to_utc(dt_moscow: datetime) -> datetime:
         return dt_moscow.astimezone(utc_tz)
 
-    poll_question, paid_poll_options, option_poll_names = _question, _options, _option_poll_names
-
     open_job_id = "monthly_subs_open"
     clear_job_id = "monthly_subs_clear"
     reminder_job_id = "monthly_subs_reminder"
     close_job_id = "monthly_subs_close"
-    poll_name = "monthly_subscription"
 
     def clear_job():
         return clear_paid_poll_subscriptions()
@@ -503,15 +403,9 @@ def _schedule_monthly_subscription_poll(
 
     poll_job = create_poll_job(
         bot,
-        poll_question,
-        poll_name,
         bot_state_service,
         poll_service,
-        subs=[],
-        options=paid_poll_options,
-        allows_multiple_answers=True,
-        poll_kind="monthly_subscription",
-        option_poll_names=option_poll_names,
+        monthly=True,
     )
     scheduler.add_job(
         poll_job,

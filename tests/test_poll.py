@@ -1,5 +1,6 @@
 """Тесты для модуля poll и PollService."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,7 +21,7 @@ from src.db import (
 )
 from src.poll import PollData, VoterInfo, sort_voters_by_update_id
 from src.services import PollService
-from src.types import SubscriptionResult
+from src.types import PollCreationSpec, SubscriptionResult
 
 
 def test_sort_voters_by_update_id_orders_updates():
@@ -177,6 +178,96 @@ class TestPollService:
         )
         assert service._resolve_target_month(data) == "2026-02"
 
+    def test_build_regular_poll_spec_uses_current_db_values(self, temp_db):
+        """Spec обычного опроса должен собираться из актуальных данных шаблона."""
+        init_db()
+        ensure_player(10, "user10")
+        ensure_player(20, "user20")
+        save_poll_template(
+            {
+                "name": "Пятница",
+                "message": "Играем в пятницу?",
+                "place": "Академия",
+                "cost": 150,
+                "cost_per_game": 1800,
+                "subs": [10, 20],
+                "enabled": 1,
+            }
+        )
+
+        service = PollService()
+        spec = service.build_regular_poll_spec(1)
+
+        assert spec is not None
+        assert spec.kind == "regular"
+        assert spec.poll_name == "Пятница"
+        assert spec.question == "Играем в пятницу?"
+        assert spec.subs == (10, 20)
+        assert spec.place_snapshot == "Академия"
+        assert spec.cost_snapshot == 150
+        assert spec.cost_per_game_snapshot == 1800
+        assert spec.poll_template_id == 1
+
+    def test_build_monthly_subscription_poll_spec_filters_paid_enabled_polls(self):
+        """Spec месячного опроса должен включать только enabled платные залы."""
+        service = PollService()
+
+        with patch(
+            "src.services.poll_service.get_poll_templates",
+            return_value=[
+                {
+                    "name": "Понедельник",
+                    "game_hour_utc": 15,
+                    "game_minute_utc": 30,
+                    "cost": 100,
+                    "enabled": 1,
+                },
+                {
+                    "name": "Выключенный",
+                    "game_hour_utc": 16,
+                    "game_minute_utc": 0,
+                    "cost": 100,
+                    "enabled": 0,
+                },
+                {
+                    "name": "Бесплатный",
+                    "game_hour_utc": 17,
+                    "game_minute_utc": 0,
+                    "cost": 0,
+                    "enabled": 1,
+                },
+            ],
+        ), patch("src.services.poll_service.get_next_month_str", return_value="2026-05"):
+            spec = service.build_monthly_subscription_poll_spec()
+
+        assert spec is not None
+        assert spec.kind == "monthly_subscription"
+        assert spec.question == (
+            "Абонемент на следующий месяц.\n"
+            "Выберите игры для подписки. Можно выбрать несколько вариантов."
+        )
+        assert spec.options == ("Понедельник — 18:30 МСК", "Смотреть результат")
+        assert spec.option_poll_names == ("Понедельник", None)
+        assert spec.target_month_snapshot == "2026-05"
+
+    def test_build_monthly_subscription_poll_spec_returns_none_without_paid_polls(self):
+        """Если нет enabled платных залов, monthly spec не строится."""
+        service = PollService()
+
+        with patch(
+            "src.services.poll_service.get_poll_templates",
+            return_value=[
+                {
+                    "name": "Бесплатный",
+                    "game_hour_utc": 17,
+                    "game_minute_utc": 0,
+                    "cost": 0,
+                    "enabled": 1,
+                }
+            ],
+        ):
+            assert service.build_monthly_subscription_poll_spec() is None
+
 
 @pytest.mark.asyncio
 async def test_close_monthly_subscription_uses_fixed_target_month(temp_db):
@@ -228,26 +319,45 @@ async def test_close_monthly_subscription_uses_fixed_target_month(temp_db):
 
 
 @pytest.mark.asyncio
-class TestSendPoll:
-    """Тесты для функции send_poll."""
+class TestSendPollSpec:
+    """Тесты для функции send_poll_spec."""
 
-    async def test_send_poll_when_bot_disabled(self, mock_bot):
-        """Тест отправки опроса при выключенном боте."""
+    @staticmethod
+    def _regular_spec() -> PollCreationSpec:
+        return PollCreationSpec(
+            kind="regular",
+            poll_name="test_poll",
+            question="Test question",
+            options=("Да", "Нет"),
+            allows_multiple_answers=False,
+            subs=(11, 22),
+            option_poll_names=(),
+            poll_template_id=1,
+            place_snapshot="Academy",
+            cost_snapshot=150,
+            cost_per_game_snapshot=1800,
+            target_month_snapshot=None,
+        )
+
+    async def test_send_poll_spec_when_bot_disabled(self, mock_bot):
+        """Тест отправки spec при выключенном боте."""
         service = PollService()
-        result = await service.send_poll(
+
+        result = await service.send_poll_spec(
             mock_bot,
             chat_id=-1001234567890,
-            question="Test question",
-            poll_name="test_poll",
+            spec=self._regular_spec(),
             bot_enabled=False,
         )
 
         assert result == -1001234567890
         mock_bot.send_poll.assert_not_called()
 
-    async def test_send_poll_success(self, mock_bot, temp_db):
-        """Тест успешной отправки опроса."""
+    async def test_send_poll_spec_success(self, mock_bot, temp_db):
+        """Тест успешной отправки spec опроса."""
         service = PollService()
+        init_db()
+        save_poll_template({"name": "Template", "message": "Template question"})
 
         mock_poll_message = MagicMock()
         mock_poll_message.poll.id = "test_poll_id"
@@ -256,11 +366,11 @@ class TestSendPoll:
         mock_bot.send_message = AsyncMock(return_value=MagicMock(message_id=124))
         mock_bot.pin_chat_message = AsyncMock()
 
-        result = await service.send_poll(
+        spec = self._regular_spec()
+        result = await service.send_poll_spec(
             mock_bot,
             chat_id=-1001234567890,
-            question="Test question",
-            poll_name="test_poll",
+            spec=spec,
             bot_enabled=True,
         )
 
@@ -272,17 +382,22 @@ class TestSendPoll:
         poll_data = service.get_poll_data("test_poll_id")
         assert poll_data is not None
         assert poll_data.yes_voters == []
+        assert poll_data.subs == [11, 22]
         game = get_game("test_poll_id")
         assert game is not None
         assert game["poll_message_id"] == 123
         assert game["info_message_id"] == 124
+        assert game["poll_template_id"] == 1
+        assert game["place_snapshot"] == "Academy"
+        assert game["cost_snapshot"] == 150
+        assert game["cost_per_game_snapshot"] == 1800
+        assert json.loads(game["options_json"]) == ["Да", "Нет"]
 
-    async def test_send_poll_handles_migration(self, mock_bot, temp_db):
+    async def test_send_poll_spec_handles_migration(self, mock_bot, temp_db):
         """Тест обработки миграции группы в супергруппу."""
         service = PollService()
 
         new_chat_id = -1009876543210
-        # Создаём мок исключения с нужным атрибутом
         migration_error = TelegramMigrateToChat(
             method=SendPoll(
                 chat_id=-1001234567890,
@@ -296,19 +411,18 @@ class TestSendPoll:
         mock_bot.send_poll = AsyncMock(side_effect=migration_error)
         mock_bot.send_message = AsyncMock()
 
-        result = await service.send_poll(
+        result = await service.send_poll_spec(
             mock_bot,
             chat_id=-1001234567890,
-            question="Test question",
-            poll_name="test_poll",
+            spec=self._regular_spec(),
             bot_enabled=True,
         )
 
         assert result == new_chat_id
         mock_bot.send_message.assert_called_once()
 
-    async def test_send_poll_handles_general_error(self, mock_bot, temp_db):
-        """Тест обработки общей ошибки при отправке опроса."""
+    async def test_send_poll_spec_handles_general_error(self, mock_bot, temp_db):
+        """Тест обработки общей ошибки при отправке spec."""
         from aiogram.exceptions import TelegramAPIError
 
         service = PollService()
@@ -319,17 +433,58 @@ class TestSendPoll:
         mock_bot.send_message = AsyncMock()
 
         with patch("src.services.poll_service.save_error_dump") as mock_save:
-            result = await service.send_poll(
+            result = await service.send_poll_spec(
                 mock_bot,
                 chat_id=-1001234567890,
-                question="Test question",
-                poll_name="test_poll",
+                spec=self._regular_spec(),
                 bot_enabled=True,
             )
 
             assert result == -1001234567890
             mock_save.assert_called_once()
             mock_bot.send_message.assert_called_once()
+
+    async def test_open_regular_poll_uses_fresh_subscriptions(self, mock_bot, temp_db):
+        """open_regular_poll должен брать subs из БД в момент открытия."""
+        init_db()
+        ensure_player(1, "user1")
+        ensure_player(2, "user2")
+        ensure_player(3, "user3")
+        save_poll_template(
+            {
+                "name": "Пятница",
+                "message": "Старый текст",
+                "subs": [1],
+                "enabled": 1,
+            }
+        )
+        save_poll_template(
+            {
+                "name": "Пятница",
+                "message": "Новый текст",
+                "subs": [2, 3],
+                "enabled": 1,
+            }
+        )
+
+        service = PollService()
+        with patch.object(
+            service,
+            "send_poll_spec",
+            AsyncMock(return_value=-1001234567890),
+        ) as mock_send:
+            result = await service.open_regular_poll(
+                mock_bot,
+                -1001234567890,
+                1,
+                True,
+            )
+
+        assert result == -1001234567890
+        spec = mock_send.await_args.args[2]
+        assert isinstance(spec, PollCreationSpec)
+        assert spec.question == "Новый текст"
+        assert spec.subs == (2, 3)
 
 
 @pytest.mark.asyncio

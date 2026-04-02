@@ -51,7 +51,6 @@ from .db import (
     update_fund_balance,
     update_player_balance,
 )
-from .scheduler import get_monthly_subscription_poll_params
 from .services import AdminService, BotStateService, PollService
 from .types import PollTemplate
 from .utils import (
@@ -1016,8 +1015,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         if not is_admin:
             return
 
-        params = get_monthly_subscription_poll_params()
-        if params is None:
+        poll_service: PollService = dp.workflow_data["poll_service"]
+        if poll_service.build_monthly_subscription_poll_spec() is None:
             await safe_reply(
                 message,
                 "❌ Нет платных залов. Добавьте опросы с cost > 0 в БД.",
@@ -1033,22 +1032,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
-        poll_service: PollService = dp.workflow_data["poll_service"]
         chat_id = bot_state_service.get_chat_id()
-        question, options, option_poll_names = params
-
-        new_chat_id = await poll_service.send_poll(
+        new_chat_id = await poll_service.open_monthly_subscription_poll(
             bot,
             chat_id,
-            question,
-            "monthly_subscription",
             bot_state_service.is_enabled(),
-            subs=[],
-            options=options,
-            allows_multiple_answers=True,
-            poll_kind="monthly_subscription",
-            option_poll_names=option_poll_names,
-            poll_template_id=None,
         )
         if new_chat_id != chat_id:
             bot_state_service.set_chat_id(new_chat_id)
