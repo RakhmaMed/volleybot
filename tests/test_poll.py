@@ -11,11 +11,13 @@ from aiogram.methods import SendPoll
 from src.config import MAX_PLAYERS, MIN_PLAYERS
 from src.db import (
     POLL_STATE_KEY,
+    create_game,
     ensure_player,
     get_game,
     get_player_balance,
     init_db,
     load_state,
+    save_state,
     save_poll_template,
     update_player_balance,
 )
@@ -854,6 +856,97 @@ def test_persist_poll_state_roundtrip():
     assert len(yes_voters) > 0
     assert yes_voters[0].id == 7
     assert yes_voters[0].name == "@user7"
+
+
+def test_load_persisted_state_prefers_db_subs_for_regular_games():
+    """При восстановлении regular poll должен брать актуальные subs из БД."""
+    init_db()
+    ensure_player(10, "old_sub")
+    ensure_player(20, "fresh_sub")
+    save_poll_template(
+        {
+            "name": "Пятница",
+            "message": "Играем?",
+            "subs": [20],
+            "enabled": 1,
+        }
+    )
+    create_game(
+        poll_id="poll123",
+        kind="regular",
+        status="open",
+        poll_template_id=1,
+        poll_name_snapshot="Пятница",
+        question_snapshot="Играем?",
+        chat_id=1,
+        poll_message_id=2,
+        info_message_id=3,
+        opened_at="2026-04-02T16:00:00+00:00",
+    )
+    save_state(
+        POLL_STATE_KEY,
+        {
+            "poll123": {
+                "kind": "regular",
+                "status": "open",
+                "poll_template_id": 1,
+                "poll_name_snapshot": "Пятница",
+                "question_snapshot": "Играем?",
+                "chat_id": 1,
+                "poll_msg_id": 2,
+                "info_msg_id": 3,
+                "yes_voters": [],
+                "last_message_text": "cached",
+                "subs": [10],
+            }
+        },
+    )
+
+    service = PollService()
+    service.load_persisted_state()
+
+    restored = service.get_poll_data("poll123")
+    assert restored is not None
+    assert restored.subs == [20]
+
+
+def test_refresh_restored_regular_polls_schedules_only_regular_with_info_msg():
+    """После рестарта перерисовка должна планироваться только для regular poll с info-msg."""
+    service = PollService()
+    service._poll_data["regular"] = PollData(
+        kind="regular",
+        chat_id=1,
+        poll_msg_id=2,
+        info_msg_id=3,
+        yes_voters=[],
+        subs=[],
+    )
+    service._poll_data["monthly"] = PollData(
+        kind="monthly_subscription",
+        chat_id=1,
+        poll_msg_id=2,
+        info_msg_id=3,
+        yes_voters=[],
+        subs=[],
+    )
+    service._poll_data["no_info"] = PollData(
+        kind="regular",
+        chat_id=1,
+        poll_msg_id=2,
+        info_msg_id=None,
+        yes_voters=[],
+        subs=[],
+    )
+
+    with (
+        patch.object(service, "cancel_update_task") as cancel_mock,
+        patch.object(service, "create_update_task") as create_mock,
+    ):
+        service.refresh_restored_regular_polls(MagicMock(spec=Bot))
+
+    cancel_mock.assert_called_once_with("regular")
+    create_mock.assert_called_once()
+    assert create_mock.call_args.args[0] == "regular"
 
 
 @pytest.mark.asyncio

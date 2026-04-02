@@ -439,8 +439,15 @@ class PollService:
                         template_subs = list(
                             templates_by_id[int(template_id)].get("subs", [])
                         )
+                    poll_kind = str(row.get("kind") or "regular")
+                    restored_subs = list(fallback.get("subs", template_subs))
+                    if poll_kind == "regular":
+                        # TEMP: после рестарта regular poll должен доверять БД, а не stale
+                        # списку подписчиков из poll_state. Это точечная синхронизация, пока
+                        # не придумаем более чистую стратегию хранения/восстановления subs.
+                        restored_subs = template_subs
                     restored = PollData(
-                        kind=str(row.get("kind") or "regular"),
+                        kind=poll_kind,
                         status=str(row.get("status") or "open"),
                         poll_template_id=row.get("poll_template_id"),
                         poll_name_snapshot=str(row.get("poll_name_snapshot") or ""),
@@ -461,7 +468,7 @@ class PollService:
                                 row.get("last_info_text") or "⏳ Идёт сбор голосов...",
                             )
                         ),
-                        subs=list(fallback.get("subs", template_subs)),
+                        subs=restored_subs,
                         options=[str(value) for value in options],
                         option_poll_names=[
                             str(value) if value is not None else None
@@ -508,6 +515,14 @@ class PollService:
             logging.info(f"✅ Восстановлено опросов: {successful}")
         if failed > 0:
             logging.warning(f"⚠️ Не удалось восстановить опросов: {failed}")
+
+    def refresh_restored_regular_polls(self, bot: Bot) -> None:
+        """Планирует обновление UI для восстановленных regular poll."""
+        for poll_id, data in self._poll_data.items():
+            if data.kind != "regular" or data.info_msg_id is None:
+                continue
+            self.cancel_update_task(poll_id)
+            self.create_update_task(poll_id, bot)
 
     def clear_all_polls(self) -> None:
         """Очистить все опросы."""

@@ -63,6 +63,7 @@ async def on_startup(
 
     # Загружаем список игроков один раз при старте
     poll_service.load_persisted_state()
+    poll_service.refresh_restored_regular_polls(bot)
     logging.debug(
         f"Активных опросов после восстановления: {len(poll_service.get_all_polls())}"
     )
