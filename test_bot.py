@@ -3,7 +3,7 @@
 Скрипт для локального тестирования бота.
 
 Использование:
-    python test_bot.py
+    uv run python test_bot.py
 
 Особенности:
 - Работает с временной БД (не трогает основную БД)
@@ -71,7 +71,7 @@ def _seed_test_data() -> None:
         "game_hour_utc": 15,
         "game_minute_utc": 14,
         "cost": 150,
-        "monthly_cost": 6000,
+        "cost_per_game": 1500,
         "subs": [1001, 1003],
     })
     save_poll_template({
@@ -85,7 +85,7 @@ def _seed_test_data() -> None:
         "game_hour_utc": 19,
         "game_minute_utc": 0,
         "cost": 0,
-        "monthly_cost": 0,
+        "cost_per_game": 0,
         "subs": [],
     })
     save_poll_template({
@@ -93,16 +93,19 @@ def _seed_test_data() -> None:
         "place": "Зал №2 (тест)",
         "message": "🧪 Пятница — тестовый опрос",
         "open_day": "*",
-        "open_hour_utc": 10,
-        "open_minute_utc": 0,
+        "open_hour_utc": 19,
+        "open_minute_utc": 48,
         "game_day": "*",
         "game_hour_utc": 20,
-        "game_minute_utc": 0,
+        "game_minute_utc": 20,
         "cost": 150,
-        "monthly_cost": 4500,
+        "cost_per_game": 1125,
         "subs": [1002, 1003],
     })
-    logger.info("✅ Создано 3 тестовых опроса (Понедельник 6000₽, Среда бесплатно, Пятница 4500₽)")
+    logger.info(
+        "✅ Создано 3 тестовых опроса "
+        "(Понедельник 1500₽×4=6000₽, Среда бесплатно, Пятница 1125₽×4=4500₽)"
+    )
 
     # ── Касса ────────────────────────────────────────────────────────────
     update_fund_balance(2500)
@@ -112,11 +115,12 @@ def _seed_test_data() -> None:
     logger.info("   🧾 Шаблоны опросов в тестовой БД:")
     for template in get_poll_templates():
         logger.info(
-            "      id=%s | %s | cost=%s₽ | monthly_cost=%s₽ | subs=%s",
+            "      id=%s | %s | cost=%s₽ | cost_per_game=%s₽ | monthly≈%s₽ | subs=%s",
             template["id"],
             template["name"],
             template.get("cost", 0),
-            template.get("monthly_cost", 0),
+            template.get("cost_per_game", 0),
+            int(template.get("cost_per_game", 0) or 0) * 4,
             template.get("subs", []),
         )
 
@@ -215,7 +219,10 @@ async def main():
         logger.info("     /close_monthly — Закрыть опрос и выполнить расчёт")
         logger.info("")
         logger.info("  🧪 Тестовые данные:")
-        logger.info("     Залы: Понедельник (150₽ / 6000₽), Среда (бесплатно), Пятница (150₽ / 4500₽)")
+        logger.info(
+            "     Залы: Понедельник (150₽, аренда 1500₽×4≈6000₽), "
+            "Среда (бесплатно), Пятница (150₽, аренда 1125₽×4≈4500₽)"
+        )
         logger.info("     Игроки: Алиса (-300₽), Борис (-150₽), Карина (0₽)")
         logger.info("     Подписки: Понедельник → Алиса, Карина; Пятница → Борис, Карина")
         logger.info("     Касса: 2500₽")
