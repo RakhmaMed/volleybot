@@ -32,3 +32,8 @@ htmlcov/
 .coverage
 
 local_scripts
+
+#AI
+.codex
+.rules
+.claude
