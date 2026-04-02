@@ -15,6 +15,33 @@ NC='\033[0m' # No Color
 CONTAINER_NAME="volleybot"
 IMAGE_NAME="volleybot:latest"
 PORT="127.0.0.1:8443:8443"
+DEFAULT_REMOTE_DB_PATH="/app/data/volleybot.db"
+
+# Определяем Fly app: приоритет у переменной окружения FLY_APP, затем fly.toml
+get_fly_app() {
+    if [ -n "${FLY_APP:-}" ]; then
+        echo "$FLY_APP"
+        return
+    fi
+
+    if [ -f "fly.toml" ]; then
+        local parsed_app
+        parsed_app=$(sed -n "s/^app[[:space:]]*=[[:space:]]*['\"]\([^'\"]*\)['\"]/\1/p" fly.toml | head -n 1)
+        if [ -n "$parsed_app" ]; then
+            echo "$parsed_app"
+            return
+        fi
+    fi
+
+    echo "volleybot"
+}
+
+require_flyctl() {
+    if ! command -v fly >/dev/null 2>&1; then
+        echo -e "${RED}❌ flyctl не найден. Установите flyctl: https://fly.io/docs/flyctl/install/${NC}"
+        exit 1
+    fi
+}
 
 # Подбираем совместимый Python (<=3.13), чтобы зависимости имели готовые колёса
 find_compatible_python() {
@@ -69,6 +96,10 @@ show_help() {
     echo -e "  ${GREEN}restart${NC}              Перезапустить контейнер"
     echo -e "  ${GREEN}status${NC}               Показать статус контейнера"
     echo -e "  ${GREEN}clean${NC}                Удалить контейнер и образ"
+    echo -e "  ${GREEN}db-pull${NC} [локальный-путь] [удалённый-путь]"
+    echo -e "                         Скопировать БД с Fly.io на локальный компьютер"
+    echo -e "  ${GREEN}db-push${NC} [локальный-путь] [удалённый-путь]"
+    echo -e "                         Загрузить локальную БД на Fly.io"
     echo -e "  ${GREEN}help${NC}                 Показать эту справку"
     echo ""
     echo -e "${YELLOW}Опции для test:${NC}"
@@ -84,7 +115,72 @@ show_help() {
     echo "  ./manage.sh build"
     echo "  ./manage.sh deploy"
     echo "  ./manage.sh logs"
+    echo "  ./manage.sh db-pull"
+    echo "  ./manage.sh db-push"
     echo ""
+}
+
+# Скопировать БД из Fly.io на локальный компьютер
+pull_db_from_fly() {
+    require_flyctl
+
+    local app_name remote_path local_path backup_path
+    app_name=$(get_fly_app)
+    local_path="${1:-data/volleybot.db}"
+    remote_path="${2:-$DEFAULT_REMOTE_DB_PATH}"
+
+    mkdir -p "$(dirname "$local_path")"
+
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${CYAN}  Скачивание БД с Fly.io${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${GRAY}App: ${app_name}${NC}"
+    echo -e "${GRAY}Remote: ${remote_path}${NC}"
+    echo -e "${GRAY}Local: ${local_path}${NC}"
+    echo ""
+
+    if [ -f "$local_path" ]; then
+        backup_path="${local_path}.$(date +%Y%m%d_%H%M%S).bak"
+        cp "$local_path" "$backup_path"
+        echo -e "${YELLOW}Сделан локальный бэкап: ${backup_path}${NC}"
+    fi
+
+    FLY_NO_UPDATE_CHECK=1 fly ssh sftp get "$remote_path" "$local_path" -a "$app_name"
+
+    echo ""
+    echo -e "${GREEN}✓ БД скачана в ${local_path}${NC}"
+}
+
+# Загрузить локальную БД на Fly.io
+push_db_to_fly() {
+    require_flyctl
+
+    local app_name remote_path local_path remote_backup_path
+    app_name=$(get_fly_app)
+    local_path="${1:-data/volleybot.db}"
+    remote_path="${2:-$DEFAULT_REMOTE_DB_PATH}"
+
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${CYAN}  Загрузка БД на Fly.io${NC}"
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${GRAY}App: ${app_name}${NC}"
+    echo -e "${GRAY}Local: ${local_path}${NC}"
+    echo -e "${GRAY}Remote: ${remote_path}${NC}"
+    echo ""
+
+    if [ ! -f "$local_path" ]; then
+        echo -e "${RED}❌ Локальный файл БД не найден: ${local_path}${NC}"
+        exit 1
+    fi
+
+    remote_backup_path="${remote_path}.$(date +%Y%m%d_%H%M%S).bak"
+    fly ssh console -a "$app_name" -C "sh -lc 'if [ -f \"$remote_path\" ]; then cp \"$remote_path\" \"$remote_backup_path\" && rm -f \"$remote_path\"; fi'"
+    echo -e "${YELLOW}Резервная копия на сервере (если файл существовал): ${remote_backup_path}${NC}"
+
+    FLY_NO_UPDATE_CHECK=1 fly ssh sftp put "$local_path" "$remote_path" -a "$app_name"
+
+    echo ""
+    echo -e "${GREEN}✓ БД загружена на Fly.io: ${remote_path}${NC}"
 }
 
 # Настройка тестового окружения
@@ -481,6 +577,14 @@ case "${1:-help}" in
         ;;
     clean)
         clean_docker
+        ;;
+    db-pull)
+        shift
+        pull_db_from_fly "$@"
+        ;;
+    db-push)
+        shift
+        push_db_to_fly "$@"
         ;;
     help|--help|-h)
         show_help

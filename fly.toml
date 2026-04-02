@@ -1,0 +1,37 @@
+# fly.toml app configuration file generated for volleybot on 2026-03-20T01:33:06+03:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'volleybot'
+primary_region = 'arn'
+
+[build]
+
+# Обычные переменные окружения (несекретные)
+[env]
+  WEBHOOK_HOST = "https://volleybot.fly.dev"
+  WEBHOOK_PATH = "/volley_webhook"
+  TRUST_PROXY = "true"
+  MIN_PLAYERS = "12"
+  MAX_PLAYERS = "18"
+  RESERVE_PLAYERS = "3"
+  SCHEDULER_TIMEZONE = "Europe/Moscow"
+
+[http_service]
+  internal_port = 8443
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpus = 1
+  memory_mb = 1024
+
+# Подключение тома для базы данных SQLite
+[mounts]
+  source = "volleybot_data"
+  destination = "/app/data"
