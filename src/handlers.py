@@ -555,6 +555,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 pass
             return
 
+        transfer_details_note = "\n\nℹ️ Реквизиты для перевода — в описании группы."
+
         if is_admin:
             # Администратор видит кассу и всех с ненулевым балансом
             fund = get_fund_balance()
@@ -591,6 +593,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         else:
                             debtor_ref = format_player_link(p)
                         text += f"🔴 {debtor_ref}: <b>{balance} ₽</b>\n"
+            text += transfer_details_note
         else:
             # Обычный пользователь видит только свой баланс
             player = get_player_balance(user.id)
@@ -602,8 +605,13 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     text = f"💰 Ваш баланс: <b>{balance} ₽</b>. Пожалуйста, пополните."
                 else:
                     text = f"💰 Ваш баланс: <b>{balance} ₽</b>. Спасибо за предоплату!"
+                text += transfer_details_note
             else:
-                text = "💰 Информация о вашем балансе не найдена. Обратитесь к администратору."
+                text = (
+                    "💰 Информация о вашем балансе не найдена. "
+                    "Обратитесь к администратору."
+                    f"{transfer_details_note}"
+                )
 
         try:
             await message.reply(

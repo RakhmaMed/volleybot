@@ -21,8 +21,15 @@ from src.services import BotStateService, PollService
 class TestBalanceCommand:
     """Тесты для команды /balance."""
 
+    @patch("src.handlers.get_fund_balance", return_value=0)
     @patch("src.handlers.get_players_with_balance")
-    async def test_balance_as_admin(self, mock_get_players, admin_user, admin_service):
+    async def test_balance_as_admin(
+        self,
+        mock_get_players,
+        mock_get_fund,
+        admin_user,
+        admin_service,
+    ):
         """Тест команды /balance от администратора."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -62,6 +69,7 @@ class TestBalanceCommand:
         assert '<a href="https://t.me/user2">User Two</a>: <b>100 ₽</b>' in method.text
         # Для отрицательного баланса отображаются и имя, и @username
         assert "User One (@user1): <b>-500 ₽</b>" in method.text
+        assert "Реквизиты для перевода" in method.text
 
     @patch("src.handlers.get_player_balance")
     async def test_balance_as_regular_user_zero(
@@ -103,7 +111,10 @@ class TestBalanceCommand:
         mock_get_balance.assert_called_once_with(regular_user.id)
         assert bot.called
         method = bot.call_args.args[0]
-        assert method.text == "Чётко-чётко. Долгов нет 🤝"
+        assert method.text == (
+            "Чётко-чётко. Долгов нет 🤝\n\n"
+            "ℹ️ Реквизиты для перевода — в описании группы."
+        )
 
 
 @pytest.mark.asyncio
