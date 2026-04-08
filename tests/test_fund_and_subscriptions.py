@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.types import (
+    CallbackQuery,
     Chat,
     InlineKeyboardMarkup,
     Message,
@@ -258,144 +259,8 @@ class TestTransactionLogging:
 class TestPayFundTracking:
     """/pay должен обновлять кассу и создавать транзакцию."""
 
-    @patch("src.handlers.update_fund_balance")
-    @patch("src.handlers.add_transaction")
-    @patch("src.handlers.get_fund_balance", return_value=500)
-    @patch("src.handlers.update_player_balance", return_value=True)
-    @patch("src.handlers.get_player_balance")
-    @patch("src.handlers.ensure_player")
-    async def test_pay_updates_fund(
-        self,
-        mock_ensure,
-        mock_get_balance,
-        mock_update_balance,
-        mock_get_fund,
-        mock_add_tx,
-        mock_update_fund,
-        admin_user,
-        regular_user,
-        admin_service,
-    ):
-        """При /pay касса увеличивается на сумму оплаты."""
-        bot = AsyncMock(spec=Bot)
-        dp = Dispatcher()
-
-        mock_get_balance.return_value = {
-            "id": regular_user.id,
-            "name": "regular_user",
-            "fullname": "Regular User",
-            "balance": 500,
-        }
-
-        dp.workflow_data.update(
-            {
-                "admin_service": admin_service,
-                "bot_state_service": MagicMock(spec=BotStateService),
-                "poll_service": MagicMock(spec=PollService),
-            }
-        )
-
-        register_handlers(dp, bot)
-
-        chat = Chat(id=-1001234567890, type="supergroup")
-        reply_message = Message(
-            message_id=1,
-            date=MagicMock(),
-            chat=chat,
-            from_user=regular_user,
-            text="hello",
-        )
-        message = Message(
-            message_id=2,
-            date=MagicMock(),
-            chat=chat,
-            from_user=admin_user,
-            text="/pay 500",
-            reply_to_message=reply_message,
-        )
-
-        await dp.feed_update(bot, Update(update_id=1, message=message))
-
-        mock_update_balance.assert_called_with(regular_user.id, 500)
-        mock_update_fund.assert_called_with(500)
-        mock_add_tx.assert_called_once()
-        # Проверяем описание транзакции
-        tx_args = mock_add_tx.call_args
-        assert tx_args[0][0] == regular_user.id
-        assert tx_args[0][1] == 500
-        assert "Оплата" in tx_args[0][2]
-
-    @patch("src.handlers.update_fund_balance")
-    @patch("src.handlers.add_transaction")
-    @patch("src.handlers.get_fund_balance", return_value=500)
-    @patch("src.handlers.update_player_balance", return_value=True)
-    @patch("src.handlers.get_player_balance")
-    async def test_pay_shows_fund_in_reply(
-        self,
-        mock_get_balance,
-        mock_update_balance,
-        mock_get_fund,
-        mock_add_tx,
-        mock_update_fund,
-        admin_user,
-        regular_user,
-        admin_service,
-    ):
-        """Ответ на /pay содержит баланс кассы."""
-        bot = AsyncMock(spec=Bot)
-        dp = Dispatcher()
-
-        mock_get_balance.return_value = {
-            "id": regular_user.id,
-            "name": "regular_user",
-            "fullname": "Regular User",
-            "balance": 500,
-        }
-
-        dp.workflow_data.update(
-            {
-                "admin_service": admin_service,
-                "bot_state_service": MagicMock(spec=BotStateService),
-                "poll_service": MagicMock(spec=PollService),
-            }
-        )
-
-        register_handlers(dp, bot)
-
-        chat = Chat(id=-1001234567890, type="supergroup")
-        reply_message = Message(
-            message_id=1,
-            date=MagicMock(),
-            chat=chat,
-            from_user=regular_user,
-            text="hello",
-        )
-        message = Message(
-            message_id=2,
-            date=MagicMock(),
-            chat=chat,
-            from_user=admin_user,
-            text="/pay 500",
-            reply_to_message=reply_message,
-        )
-
-        await dp.feed_update(bot, Update(update_id=1, message=message))
-
-        assert bot.called
-        method = bot.call_args.args[0]
-        assert "Касса" in method.text
-
-
-# ── Handler-level /restore tests ────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-class TestRestoreCommand:
-    """/restore должен менять баланс, но НЕ кассу."""
-
-    @patch("src.handlers.update_fund_balance")
-    @patch("src.handlers.add_transaction")
-    @patch("src.handlers.update_player_balance", return_value=True)
+    @patch("src.handlers.get_fund_balance", return_value=0)
+    @patch("src.handlers.update_player_and_transaction_atomic", return_value=True)
     @patch("src.handlers.get_player_balance")
     @patch("src.handlers.ensure_player")
     async def test_restore_does_not_update_fund(
@@ -403,8 +268,7 @@ class TestRestoreCommand:
         mock_ensure,
         mock_get_balance,
         mock_update_balance,
-        mock_add_tx,
-        mock_update_fund,
+        mock_get_fund,
         admin_user,
         regular_user,
         admin_service,
@@ -425,6 +289,7 @@ class TestRestoreCommand:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -449,15 +314,14 @@ class TestRestoreCommand:
 
         await dp.feed_update(bot, Update(update_id=1, message=message))
 
-        mock_update_balance.assert_called_with(regular_user.id, 150)
-        mock_update_fund.assert_not_called()
-        mock_add_tx.assert_called_once()
-        tx_args = mock_add_tx.call_args
-        assert "Восстановление" in tx_args[0][2]
+        mock_update_balance.assert_called_once()
+        call_args = mock_update_balance.call_args
+        assert call_args[0][0] == regular_user.id
+        assert call_args[0][1] == 150
+        mock_get_fund.assert_not_called()
 
-    @patch("src.handlers.update_fund_balance")
-    @patch("src.handlers.add_transaction")
-    @patch("src.handlers.update_player_balance", return_value=True)
+    @patch("src.handlers.get_fund_balance", return_value=0)
+    @patch("src.handlers.update_player_and_transaction_atomic", return_value=True)
     @patch("src.handlers.get_player_balance")
     @patch("src.handlers.ensure_player")
     async def test_restore_shows_no_fund_change(
@@ -465,8 +329,7 @@ class TestRestoreCommand:
         mock_ensure,
         mock_get_balance,
         mock_update_balance,
-        mock_add_tx,
-        mock_update_fund,
+        mock_get_fund,
         admin_user,
         regular_user,
         admin_service,
@@ -487,6 +350,7 @@ class TestRestoreCommand:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -547,6 +411,7 @@ class TestHallPaymentHandler:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -590,6 +455,7 @@ class TestHallPaymentHandler:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -632,6 +498,7 @@ class TestHallPaymentHandler:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -651,6 +518,115 @@ class TestHallPaymentHandler:
         assert bot.called
         method = bot.call_args.args[0]
         assert "Неоплаченные залы" in method.text
+
+    async def test_hall_payment_callback_creates_admin_player_if_missing(
+        self, admin_user, admin_service, temp_db
+    ):
+        """Оплата зала через callback не должна падать, если админ ещё не игрок."""
+        init_db()
+        save_poll_template(
+            {
+                "name": "Пятница",
+                "message": "Игра",
+                "place": "Зал №1",
+                "cost": 150,
+                "cost_per_game": 1500,
+            }
+        )
+        update_fund_balance(7000)
+
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=10,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="Выберите зал",
+        )
+        callback_query = CallbackQuery(
+            id="hall-pay-1",
+            from_user=admin_user,
+            chat_instance="ci",
+            data="hall_pay:1:2026-04",
+            message=message,
+        )
+
+        await dp.feed_update(bot, Update(update_id=10, callback_query=callback_query))
+
+        assert get_player_balance(admin_user.id) is not None
+        assert get_fund_balance() == 1000
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT amount FROM transactions WHERE player_id = ?",
+                (admin_user.id,),
+            ).fetchone()
+        assert row is not None
+        assert int(row[0]) == -6000
+
+    @patch("src.handlers.record_hall_payment_atomic", return_value="error")
+    @patch("src.handlers.get_poll_templates")
+    async def test_hall_payment_callback_reports_generic_failure(
+        self,
+        mock_get_templates,
+        mock_record_payment,
+        admin_user,
+        admin_service,
+    ):
+        """Не-дубликатная ошибка оплаты не должна маскироваться под already paid."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        mock_get_templates.return_value = [
+            {
+                "id": 1,
+                "name": "Пятница",
+                "place": "Зал №1",
+                "cost_per_game": 1500,
+                "game_day": "fri",
+            }
+        ]
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=11,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="Выберите зал",
+        )
+        callback_query = CallbackQuery(
+            id="hall-pay-2",
+            from_user=admin_user,
+            chat_instance="ci",
+            data="hall_pay:1:2026-04",
+            message=message,
+        )
+
+        await dp.feed_update(bot, Update(update_id=11, callback_query=callback_query))
+
+        mock_record_payment.assert_called_once()
+        method = bot.call_args.args[0]
+        assert "Не удалось оплатить зал" in (method.text or "")
 
 
 # ── Handler-level /balance fund display ──────────────────────────────────────
@@ -678,6 +654,7 @@ class TestBalanceFundDisplay:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 

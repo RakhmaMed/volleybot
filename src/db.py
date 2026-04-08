@@ -11,7 +11,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .types import PollTemplate
 
@@ -430,7 +430,16 @@ def _create_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_transactions_poll_template_id ON transactions(poll_template_id)"
     )
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at DESC)"
+    )
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_games_status_kind ON games(status, kind)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_games_status ON games(status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_games_game_date ON games(game_date)"
     )
     conn.execute(
         """
@@ -446,6 +455,12 @@ def _create_indexes(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_games_opened_at ON games(opened_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_hall_payments_poll_template ON hall_payments(poll_template_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_monthly_poll_votes_game_poll_id ON monthly_poll_votes(game_poll_id)"
     )
     conn.execute(
         """
@@ -923,6 +938,135 @@ def update_fund_balance(amount: int) -> None:
         logging.exception(f"❌ Ошибка при обновлении баланса кассы на {amount}")
 
 
+def update_player_and_fund_balance_atomic(
+    player_id: int,
+    amount: int,
+    description: str,
+    poll_template_id: int | None = None,
+    poll_name_snapshot: str | None = None,
+) -> bool:
+    """
+    Атомарно изменяет баланс игрока, кассу и добавляет транзакцию в одной транзакции.
+
+    Используется для оплаты игроков, где все три операции должны выполниться
+    вместе или откатиться целиком.
+
+    Args:
+        player_id: ID игрока
+        amount: Сумма изменения баланса (положительная — оплата)
+        description: Описание транзакции
+        poll_template_id: ID шаблона опроса (необязательно)
+        poll_name_snapshot: Историческое имя зала (необязательно)
+
+    Returns:
+        True если все операции успешны, иначе False
+    """
+    try:
+        init_db()
+        with _connect() as conn:
+            # 1. Обновить баланс игрока
+            cursor = conn.execute(
+                "UPDATE players SET balance = balance + ? WHERE id = ?",
+                (amount, player_id),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                logging.warning(f"⚠️ Игрок {player_id} не найден для обновления баланса")
+                return False
+
+            # 2. Обновить баланс кассы (атомарно в той же транзакции)
+            conn.execute(
+                """
+                INSERT INTO kv_store(key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = CAST(kv_store.value AS INTEGER) + CAST(excluded.value AS INTEGER),
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (FUND_BALANCE_KEY, amount),
+            )
+
+            # 3. Добавить транзакцию
+            conn.execute(
+                """
+                INSERT INTO transactions (
+                    player_id, amount, description, poll_template_id, poll_name_snapshot
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (player_id, amount, description, poll_template_id, poll_name_snapshot),
+            )
+
+            conn.commit()
+            logging.info(
+                f"💰 Атомарно обновлён баланс игрока {player_id}: {amount:+d}, "
+                f"касса +{amount:+d}, транзакция: {description}"
+            )
+            return True
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка атомарного обновления баланса игрока {player_id}"
+        )
+        return False
+
+
+def update_player_and_transaction_atomic(
+    player_id: int,
+    amount: int,
+    description: str,
+    poll_template_id: int | None = None,
+    poll_name_snapshot: str | None = None,
+) -> bool:
+    """
+    Атомарно изменяет баланс игрока и добавляет транзакцию (без изменения кассы).
+
+    Используется для восстановления баланса (/restore), где касса не меняется.
+
+    Args:
+        player_id: ID игрока
+        amount: Сумма изменения баланса
+        description: Описание транзакции
+        poll_template_id: ID шаблона опроса (необязательно)
+        poll_name_snapshot: Историческое имя зала (необязательно)
+
+    Returns:
+        True если все операции успешны, иначе False
+    """
+    try:
+        init_db()
+        with _connect() as conn:
+            # 1. Обновить баланс игрока
+            cursor = conn.execute(
+                "UPDATE players SET balance = balance + ? WHERE id = ?",
+                (amount, player_id),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                logging.warning(f"⚠️ Игрок {player_id} не найден для восстановления баланса")
+                return False
+
+            # 2. Добавить транзакцию (касса НЕ меняется)
+            conn.execute(
+                """
+                INSERT INTO transactions (
+                    player_id, amount, description, poll_template_id, poll_name_snapshot
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (player_id, amount, description, poll_template_id, poll_name_snapshot),
+            )
+
+            conn.commit()
+            logging.info(
+                f"🔄 Атомарно восстановлен баланс игрока {player_id}: {amount:+d}, "
+                f"касса не изменена, транзакция: {description}"
+            )
+            return True
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка атомарного восстановления баланса игрока {player_id}"
+        )
+        return False
+
+
 # ── Hall payments (оплата залов) ─────────────────────────────────────────────
 
 
@@ -1014,6 +1158,91 @@ def record_hall_payment(poll_template_id: int, month: str, amount: int) -> bool:
         return False
 
 
+def record_hall_payment_atomic(
+    payer_id: int,
+    poll_template_id: int,
+    month: str,
+    amount: int,
+    poll_name: str,
+) -> Literal["success", "duplicate", "error"]:
+    """
+    Атомарно записывает оплату зала, уменьшает кассу и добавляет транзакцию.
+
+    Используется при оплате зала из кассы, где все три операции должны
+    выполниться вместе или откатиться целиком.
+
+    Args:
+        payer_id: ID администратора, производящего оплату
+        poll_template_id: ID шаблона опроса
+        month: Месяц в формате "YYYY-MM"
+        amount: Сумма оплаты (положительная)
+        poll_name: Название зала для транзакции
+
+    Returns:
+        "success" если все операции успешны
+        "duplicate" если зал уже был оплачен за этот месяц
+        "error" для прочих ошибок
+    """
+    try:
+        init_db()
+        with _connect() as conn:
+            # 1. Записать оплату зала
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO hall_payments (poll_template_id, month, amount)
+                    VALUES (?, ?, ?)
+                    """,
+                    (poll_template_id, month, amount),
+                )
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                logging.warning(
+                    f"⚠️ Зал {poll_name} за {month} уже оплачен"
+                )
+                return "duplicate"
+
+            # 2. Уменьшить баланс кассы
+            conn.execute(
+                """
+                INSERT INTO kv_store(key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = CAST(kv_store.value AS INTEGER) + CAST(excluded.value AS INTEGER),
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (FUND_BALANCE_KEY, -amount),
+            )
+
+            # 3. Добавить транзакцию
+            conn.execute(
+                """
+                INSERT INTO transactions (
+                    player_id, amount, description, poll_template_id, poll_name_snapshot
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    payer_id,
+                    -amount,
+                    f"Оплата зала: {poll_name} ({month})",
+                    poll_template_id,
+                    poll_name,
+                ),
+            )
+
+            conn.commit()
+            logging.info(
+                f"🏟 Атомарно оплачен зал {poll_name} за {month}: {amount}₽, "
+                f"касса -{amount}₽, транзакция добавлена"
+            )
+            return "success"
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка атомарной оплаты зала {poll_name} за {month}"
+        )
+        return "error"
+
+
 def create_game(
     *,
     poll_id: str,
@@ -1035,8 +1264,13 @@ def create_game(
     info_message_id: int | None = None,
     final_message_id: int | None = None,
     last_info_text: str = "⏳ Идёт сбор голосов...",
-) -> None:
-    """Создаёт или обновляет запись игры/голосования."""
+) -> bool:
+    """
+    Создаёт или обновляет запись игры/голосования.
+
+    Returns:
+        True если запись успешно создана/обновлена, иначе False
+    """
     try:
         init_db()
         with _connect() as conn:
@@ -1093,8 +1327,11 @@ def create_game(
                 ),
             )
             conn.commit()
+            logging.info(f"✅ Запись игры создана/обновлена: poll_id={poll_id}")
+            return True
     except sqlite3.Error:
         logging.exception(f"❌ Ошибка при создании игры poll_id={poll_id}")
+        return False
 
 
 def update_game_info_message(

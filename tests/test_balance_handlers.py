@@ -1,6 +1,6 @@
 """Тесты для команд управления балансом."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram import Bot, Dispatcher
@@ -37,6 +37,7 @@ class TestBalanceCommand:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -82,6 +83,7 @@ class TestBalanceCommand:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -108,7 +110,7 @@ class TestBalanceCommand:
 class TestPayCommand:
     """Тесты для команды /pay."""
 
-    @patch("src.handlers.update_player_balance")
+    @patch("src.handlers.update_player_and_fund_balance_atomic", return_value=True)
     @patch("src.handlers.get_player_balance")
     @patch("src.handlers.ensure_player")
     async def test_pay_reply_as_admin(
@@ -158,7 +160,7 @@ class TestPayCommand:
         await dp.feed_update(bot, Update(update_id=2, message=message))
 
         mock_ensure.assert_called()
-        mock_update.assert_called_with(regular_user.id, 500)
+        mock_update.assert_called_with(regular_user.id, 500, ANY)
         assert bot.called
         method = bot.call_args.args[0]
         # Проверяем, что в ответе есть гиперссылка на игрока
@@ -170,7 +172,7 @@ class TestPayCommand:
         )
 
     @patch("src.handlers.find_player_by_name")
-    @patch("src.handlers.update_player_balance")
+    @patch("src.handlers.update_player_and_fund_balance_atomic", return_value=True)
     @patch("src.handlers.get_player_balance")
     async def test_pay_by_name_single_match(
         self, mock_get_balance, mock_update, mock_find, admin_user, admin_service
@@ -212,7 +214,7 @@ class TestPayCommand:
         await dp.feed_update(bot, Update(update_id=3, message=message))
 
         mock_find.assert_called_with("Peter")
-        mock_update.assert_called_with(777, 100)
+        mock_update.assert_called_with(777, 100, ANY)
         assert bot.called
         method = bot.call_args.args[0]
         # Проверяем, что в ответе есть гиперссылка на игрока
@@ -264,7 +266,7 @@ class TestPayCommand:
         assert buttons[0][0].callback_data == "pay_select:1:500"
 
     @patch("src.handlers.get_player_balance")
-    @patch("src.handlers.update_player_balance")
+    @patch("src.handlers.update_player_and_fund_balance_atomic", return_value=True)
     async def test_pay_by_id(
         self, mock_update, mock_get_balance, admin_user, admin_service
     ):
@@ -303,7 +305,7 @@ class TestPayCommand:
         await dp.feed_update(bot, Update(update_id=7, message=message))
 
         mock_get_balance.assert_called_with(12345)
-        mock_update.assert_called_with(12345, 500)
+        mock_update.assert_called_with(12345, 500, ANY)
         assert bot.called
         method = bot.call_args.args[0]
         # Проверяем, что в ответе есть гиперссылка на игрока
@@ -316,7 +318,7 @@ class TestPayCommand:
 class TestPayCallback:
     """Тесты для обработки callback_query при выборе игрока."""
 
-    @patch("src.handlers.update_player_balance")
+    @patch("src.handlers.update_player_and_fund_balance_atomic", return_value=True)
     @patch("src.handlers.get_player_balance")
     async def test_process_pay_select(
         self, mock_get_balance, mock_update, admin_user, admin_service
@@ -357,7 +359,7 @@ class TestPayCallback:
 
         await dp.feed_update(bot, Update(update_id=6, callback_query=callback_query))
 
-        mock_update.assert_called_with(1, 500)
+        mock_update.assert_called_with(1, 500, ANY)
         mock_get_balance.assert_called_once_with(1)
         # Проверяем, что баланс был успешно обновлен (через логи или состояние)
         # Так как edit_text вызывается через aiogram API, мы не можем напрямую

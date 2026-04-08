@@ -20,6 +20,9 @@ from src.utils import (
     is_telegram_ip,
     rate_limit_check,
     save_error_dump,
+    validate_balance_callback_data,
+    validate_hall_pay_callback_data,
+    validate_player_select_callback_data,
 )
 
 
@@ -101,6 +104,21 @@ class TestAdminService:
 
         cached = admin_service.get_cached_admins()
         assert admin_user.id in cached
+
+    @pytest.mark.asyncio
+    async def test_refresh_cache_keeps_previous_ttl_on_fetch_failure(
+        self, admin_service, mock_bot
+    ):
+        """Ошибка refresh_cache не должна продлевать TTL устаревшего кэша."""
+        chat_id = -1001234567890
+        admin_service._admin_cache[chat_id] = {111, 222}
+        admin_service._cache_updated_at[chat_id] = 123.0
+        mock_bot.get_chat_administrators = AsyncMock(side_effect=Exception("API Error"))
+
+        await admin_service.refresh_cache(mock_bot, chat_id=chat_id)
+
+        assert admin_service.get_cached_admins(chat_id) == {111, 222}
+        assert admin_service._cache_updated_at[chat_id] == 123.0
 
     def test_invalidate_cache_clears_cache(self, admin_service):
         """Тест инвалидации кэша."""
@@ -645,3 +663,79 @@ class TestFormatPlayerLink:
         player_data = {"id": 123456789, "name": "testuser", "fullname": "   "}
         result = format_player_link(player_data)
         assert result == '<a href="https://t.me/testuser">@testuser</a>'
+
+
+class TestCallbackValidation:
+    """Регрессионные тесты для валидации callback data."""
+
+    def test_balance_callback_accepts_large_telegram_user_id(self):
+        """Telegram user ID > 2^31-1 должен приниматься (регрессия #1).
+
+        Новые аккаунты Telegram имеют ID > 2_147_483_647.
+        Пример: 5_013_132_836 — реальный ID из тестовой базы.
+        """
+        large_id = 5_013_132_836
+        result = validate_balance_callback_data(
+            f"pay_select:{large_id}:500", "pay_select"
+        )
+        assert result == (large_id, 500)
+
+    def test_player_select_accepts_large_telegram_user_id(self):
+        """Telegram user ID > 2^31-1 должен приниматься в player_select."""
+        large_id = 5_013_132_836
+        result = validate_player_select_callback_data(
+            f"player_select:{large_id}", "player_select"
+        )
+        assert result == large_id
+
+    def test_balance_callback_rejects_zero_or_negative_id(self):
+        """player_id <= 0 должен отвергаться."""
+        assert validate_balance_callback_data("pay_select:0:500", "pay_select") is None
+        assert (
+            validate_balance_callback_data("pay_select:-1:500", "pay_select") is None
+        )
+
+    def test_player_select_rejects_zero_or_negative_id(self):
+        """player_id <= 0 должен отвергаться в player_select."""
+        assert (
+            validate_player_select_callback_data("player_select:0", "player_select")
+            is None
+        )
+        assert (
+            validate_player_select_callback_data("player_select:-1", "player_select")
+            is None
+        )
+
+    def test_balance_callback_rejects_excessive_amount(self):
+        """Сумма > 1_000_000 должна отвергаться."""
+        large_id = 5_013_132_836
+        assert (
+            validate_balance_callback_data(
+                f"pay_select:{large_id}:2000000", "pay_select"
+            )
+            is None
+        )
+
+    def test_balance_callback_rejects_wrong_prefix(self):
+        """Неверный префикс должен отвергаться."""
+        assert validate_balance_callback_data("restore_select:123:500", "pay_select") is None
+
+    def test_balance_callback_rejects_malformed_data(self):
+        """Некорректный формат данных должен отвергаться."""
+        assert validate_balance_callback_data("pay_select:abc:500", "pay_select") is None
+        assert validate_balance_callback_data("pay_select:123", "pay_select") is None
+
+    def test_hall_pay_callback_accepts_valid_data(self):
+        """Валидные данные hall_pay должны приниматься."""
+        result = validate_hall_pay_callback_data("hall_pay:1:2025-03")
+        assert result == (1, "2025-03")
+
+    def test_hall_pay_callback_rejects_invalid_month(self):
+        """Некорректный месяц должен отвергаться."""
+        assert validate_hall_pay_callback_data("hall_pay:1:2025-13") is None
+        assert validate_hall_pay_callback_data("hall_pay:1:bad-month") is None
+
+    def test_hall_pay_callback_rejects_zero_poll_id(self):
+        """poll_template_id <= 0 должен отвергаться."""
+        assert validate_hall_pay_callback_data("hall_pay:0:2025-03") is None
+        assert validate_hall_pay_callback_data("hall_pay:-1:2025-03") is None

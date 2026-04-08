@@ -105,6 +105,9 @@ class AdminService:
         """
         Принудительно обновляет кэш администраторов.
 
+        При ошибке сети НЕ перезаписывает кэш пустым результатом,
+        а сохраняет предыдущий кэш с предупреждением.
+
         Args:
             bot: Экземпляр бота
             chat_id: ID чата (если None или приватный чат, используется default_chat_id)
@@ -118,21 +121,26 @@ class AdminService:
 
         async with self._cache_lock:
             admin_ids = await self._fetch_admins(bot, target_chat_id)
+            
             if admin_ids:
+                # Успешная загрузка — обновляем кэш
                 self._admin_cache[target_chat_id] = admin_ids
                 self._cache_updated_at[target_chat_id] = time.time()
                 logging.info(
-                    f"🔄 Кэш администраторов обновлён для чата {target_chat_id}"
+                    f"🔄 Кэш администраторов обновлён для чата {target_chat_id} "
+                    f"({len(admin_ids)} администраторов)"
                 )
             elif target_chat_id in self._admin_cache:
-                self._cache_updated_at[target_chat_id] = time.time()
+                # Ошибка загрузки — сохраняем предыдущий кэш
                 logging.warning(
-                    "⚠️ Не удалось обновить список админов для чата %s. "
-                    "Используем предыдущий кэш (%s пользователей).",
+                    "⚠️ Не удалось загрузить администраторов для чата %s. "
+                    "Используем предыдущий кэш (%s пользователей), "
+                    "но не продлеваем TTL, чтобы повторить запрос при следующей проверке.",
                     target_chat_id,
                     len(self._admin_cache[target_chat_id]),
                 )
             else:
+                # Ошибка загрузки и нет предыдущего кэша
                 logging.warning(
                     "⚠️ Не удалось загрузить администраторов для чата %s, кэш пуст.",
                     target_chat_id,

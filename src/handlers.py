@@ -27,7 +27,6 @@ from aiogram.types import (
 )
 
 from .db import (
-    add_transaction,
     create_backup,
     ensure_player,
     find_player_by_name,
@@ -43,14 +42,15 @@ from .db import (
     get_stats_summary,
     get_unpaid_halls,
     load_state,
-    record_hall_payment,
+    record_hall_payment_atomic,
     save_monthly_vote,
     save_poll_template,
     save_state,
     toggle_player_ball_donate,
-    update_fund_balance,
-    update_player_balance,
+    update_player_and_fund_balance_atomic,
+    update_player_and_transaction_atomic,
 )
+from .scheduler import refresh_scheduler
 from .services import AdminService, BotStateService, PollService
 from .types import PollTemplate
 from .utils import (
@@ -61,6 +61,9 @@ from .utils import (
     get_player_name,
     rate_limit_check,
     retry_async,
+    validate_balance_callback_data,
+    validate_hall_pay_callback_data,
+    validate_player_select_callback_data,
 )
 
 # Логируем загрузку модуля для отладки
@@ -978,12 +981,22 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         template["enabled"] = 1 if enabled else 0
         save_poll_template(template)
 
+        # Обновляем расписание планировщика без перезапуска бота
+        scheduler = dp.workflow_data["scheduler"]
+        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
+        poll_service: PollService = dp.workflow_data["poll_service"]
+        refresh_scheduler(scheduler, bot, bot_state_service, poll_service)
+
         result_lines = [
             f"✅ Опрос <b>{escape_html(poll_name)}</b> (ID: {template.get('id')}) теперь {desired_status}.",
         ]
         if not enabled:
             result_lines.append(
-                "Изменение повлияет на следующие плановые открытия после перезапуска или пересоздания расписания."
+                "Расписание обновлено. Опрос больше не будет открываться автоматически."
+            )
+        else:
+            result_lines.append(
+                "Расписание обновлено. Опрос будет открываться по расписанию."
             )
 
         await safe_reply(
@@ -1305,10 +1318,12 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
             return
 
-        if update_player_balance(target_user_id, amount):
-            update_fund_balance(amount)
-            admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
-            add_transaction(target_user_id, amount, f"Оплата (admin: {admin_name})")
+        admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
+        description = f"Оплата (admin: {admin_name})"
+        
+        if update_player_and_fund_balance_atomic(
+            target_user_id, amount, description
+        ):
             new_balance_data = get_player_balance(target_user_id)
             new_balance = (
                 new_balance_data["balance"] if new_balance_data else "неизвестно"
@@ -1421,11 +1436,12 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
             return
 
-        if update_player_balance(target_user_id, amount):
-            admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
-            add_transaction(
-                target_user_id, amount, f"Восстановление (admin: {admin_name})"
-            )
+        admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
+        description = f"Восстановление (admin: {admin_name})"
+        
+        if update_player_and_transaction_atomic(
+            target_user_id, amount, description
+        ):
             new_balance_data = get_player_balance(target_user_id)
             new_balance = (
                 new_balance_data["balance"] if new_balance_data else "неизвестно"
@@ -1743,17 +1759,18 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
             return
 
-        parts = callback_query.data.split(":", 1)
-        if len(parts) != 2 or not parts[1].isdigit():
+        player_id = validate_player_select_callback_data(
+            callback_query.data, "player_select"
+        )
+        if player_id is None:
             await safe_answer_callback(
                 callback_query,
-                text="❌ Ошибка формата.",
+                text="❌ Ошибка формата данных.",
                 show_alert=True,
                 action_name="answer player_select invalid format",
             )
             return
 
-        player_id = int(parts[1])
         p = get_player_info(player_id)
         if not p:
             await safe_answer_callback(
@@ -1826,20 +1843,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
             return
 
-        data_parts = callback_query.data.split(":")
-        if len(data_parts) != 3:
-            await safe_answer_callback(
-                callback_query,
-                text="❌ Ошибка данных.",
-                show_alert=True,
-                action_name="answer balance_select invalid data",
-            )
-            return
-
-        try:
-            target_user_id = int(data_parts[1])
-            amount = int(data_parts[2])
-        except ValueError:
+        prefix = "pay_select" if update_fund else "restore_select"
+        result = validate_balance_callback_data(callback_query.data, prefix)
+        if result is None:
             await safe_answer_callback(
                 callback_query,
                 text="❌ Ошибка формата данных.",
@@ -1848,16 +1854,25 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
             return
 
-        if update_player_balance(target_user_id, amount):
-            admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
-            if update_fund:
-                update_fund_balance(amount)
-                add_transaction(target_user_id, amount, f"Оплата (admin: {admin_name})")
-            else:
-                add_transaction(
-                    target_user_id, amount, f"Восстановление (admin: {admin_name})"
-                )
+        target_user_id, amount = result
 
+        admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
+        description = (
+            f"Оплата (admin: {admin_name})"
+            if update_fund
+            else f"Восстановление (admin: {admin_name})"
+        )
+
+        if update_fund:
+            success = update_player_and_fund_balance_atomic(
+                target_user_id, amount, description
+            )
+        else:
+            success = update_player_and_transaction_atomic(
+                target_user_id, amount, description
+            )
+
+        if success:
             new_balance_data = get_player_balance(target_user_id)
             new_balance = (
                 new_balance_data["balance"] if new_balance_data else "неизвестно"
@@ -1958,9 +1973,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
             return
 
-        # Парсим callback_data: hall_pay:{poll_template_id}:{month}
-        parts = callback_query.data.split(":", 2)
-        if len(parts) != 3:
+        # Парсим и валидируем callback_data: hall_pay:{poll_template_id}:{month}
+        result = validate_hall_pay_callback_data(callback_query.data)
+        if result is None:
             await safe_answer_callback(
                 callback_query,
                 text="❌ Ошибка формата данных.",
@@ -1969,17 +1984,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
             return
 
-        try:
-            poll_template_id = int(parts[1])
-        except ValueError:
-            await safe_answer_callback(
-                callback_query,
-                text="❌ Ошибка идентификатора зала.",
-                show_alert=True,
-                action_name="answer hall_pay invalid hall id",
-            )
-            return
-        month = parts[2]
+        poll_template_id, month = result
 
         # Получаем стоимость зала
         poll_templates = get_poll_templates()
@@ -2008,8 +2013,13 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
             return
 
-        # Записываем оплату
-        if not record_hall_payment(poll_template_id, month, monthly_rent):
+        # Записываем оплату атомарно
+        ensure_player(user_id=user.id, name=user.username, fullname=user.full_name)
+
+        payment_result = record_hall_payment_atomic(
+            user.id, poll_template_id, month, monthly_rent, poll_name
+        )
+        if payment_result == "duplicate":
             await safe_answer_callback(
                 callback_query,
                 text=f"⚠️ Зал '{poll_name}' за {month} уже оплачен.",
@@ -2017,15 +2027,14 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 action_name="answer hall_pay already paid",
             )
             return
-
-        update_fund_balance(-monthly_rent)
-        add_transaction(
-            user.id,
-            -monthly_rent,
-            f"Оплата зала: {poll_name} ({month})",
-            poll_template_id=poll_template_id,
-            poll_name_snapshot=poll_name,
-        )
+        if payment_result != "success":
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Не удалось оплатить зал. Попробуйте ещё раз.",
+                show_alert=True,
+                action_name="answer hall_pay payment failure",
+            )
+            return
 
         fund = get_fund_balance()
         place = str(hall.get("place", ""))

@@ -446,3 +446,132 @@ def format_player_link(
         link = f"tg://user?id={pid}"
 
     return f'<a href="{link}">{display_text}</a>'
+
+
+# ── Callback Data Validation ────────────────────────────────────────────────
+
+# Максимально допустимое значение для изменения баланса (1 миллион рублей)
+MAX_BALANCE_CHANGE = 1_000_000
+
+# Минимальный ID пользователя Telegram (реальные ID начинаются с небольших чисел)
+MIN_TELEGRAM_USER_ID = 1
+
+
+def validate_balance_callback_data(
+    data: str, expected_prefix: str
+) -> tuple[int, int] | None:
+    """
+    Парсит и валидирует callback data для операций с балансом.
+
+    Проверяет:
+    - Формат данных (expected_prefix:player_id:amount)
+    - player_id > 0
+    - |amount| <= MAX_BALANCE_CHANGE
+
+    Примечание: Telegram user IDs могут превышать 2^31-1 (например, 5_013_132_836),
+    поэтому верхняя граница не проверяется — достаточно проверки player_id > 0.
+
+    Args:
+        data: Исходные callback data
+        expected_prefix: Ожидаемый префикс (например, "pay_select" или "restore_select")
+
+    Returns:
+        Кортеж (player_id, amount) или None при ошибке валидации
+    """
+    parts = data.split(":")
+    if len(parts) != 3 or parts[0] != expected_prefix:
+        logging.warning(f"❌ Invalid callback data format: {data}")
+        return None
+
+    try:
+        player_id = int(parts[1])
+        amount = int(parts[2])
+    except ValueError:
+        logging.warning(f"❌ Non-integer values in callback data: {data}")
+        return None
+
+    if player_id < MIN_TELEGRAM_USER_ID:
+        logging.warning(f"❌ Invalid player_id in callback data: {data}")
+        return None
+
+    if abs(amount) > MAX_BALANCE_CHANGE:
+        logging.warning(f"❌ Excessive amount in callback data: {data}")
+        return None
+
+    return player_id, amount
+
+
+def validate_player_select_callback_data(
+    data: str, expected_prefix: str
+) -> int | None:
+    """
+    Парсит и валидирует callback data для выбора игрока.
+
+    Args:
+        data: Исходные callback data
+        expected_prefix: Ожидаемый префикс (например, "player_select")
+
+    Returns:
+        player_id или None при ошибке валидации
+    """
+    parts = data.split(":")
+    if len(parts) != 2 or parts[0] != expected_prefix:
+        logging.warning(f"❌ Invalid player_select callback data: {data}")
+        return None
+
+    try:
+        player_id = int(parts[1])
+    except ValueError:
+        logging.warning(f"❌ Non-integer player_id in callback data: {data}")
+        return None
+
+    if player_id < MIN_TELEGRAM_USER_ID:
+        logging.warning(f"❌ Invalid player_id in callback data: {data}")
+        return None
+
+    return player_id
+
+
+def validate_hall_pay_callback_data(
+    data: str,
+) -> tuple[int, str] | None:
+    """
+    Парсит и валидирует callback data для оплаты зала.
+
+    Args:
+        data: Исходные callback data (формат: hall_pay:poll_template_id:month)
+
+    Returns:
+        Кортеж (poll_template_id, month) или None при ошибке валидации
+    """
+    parts = data.split(":", 2)
+    if len(parts) != 3 or parts[0] != "hall_pay":
+        logging.warning(f"❌ Invalid hall_pay callback data: {data}")
+        return None
+
+    try:
+        poll_template_id = int(parts[1])
+    except ValueError:
+        logging.warning(f"❌ Invalid poll_template_id in callback data: {data}")
+        return None
+
+    if poll_template_id <= 0:
+        logging.warning(f"❌ Invalid poll_template_id in callback data: {data}")
+        return None
+
+    month = parts[2]
+    # Простая валидация формата месяца (YYYY-MM)
+    if len(month) != 7 or month[4] != "-":
+        logging.warning(f"❌ Invalid month format in callback data: {data}")
+        return None
+
+    try:
+        year, month_num = int(month[:4]), int(month[5:])
+        if year < 2020 or year > 2030 or month_num < 1 or month_num > 12:
+            logging.warning(f"❌ Invalid month values in callback data: {data}")
+            return None
+    except ValueError:
+        logging.warning(f"❌ Non-integer month values in callback data: {data}")
+        return None
+
+    return poll_template_id, month
