@@ -33,7 +33,4 @@ htmlcov/
 
 local_scripts
 
-#AI
-.codex
-.rules
-.claude
+.*
