@@ -9,6 +9,7 @@ from src.db import init_db
 from src.scheduler import (
     create_close_poll_job,
     create_poll_job,
+    refresh_scheduler,
     setup_scheduler,
 )
 from src.services import BotStateService, PollService
@@ -280,3 +281,88 @@ class TestSetupScheduler:
             assert "normal (закрытие)" in jobs
             assert "midnight_crossover (закрытие)" in jobs
             assert "week_crossover (закрытие)" in jobs
+
+
+class TestRefreshScheduler:
+    """Регрессионные тесты для refresh_scheduler."""
+
+    @patch("src.scheduler.get_poll_templates")
+    async def test_refresh_removes_monthly_subs_jobs(
+        self, mock_get_templates
+    ):
+        """Регрессия #2: refresh_scheduler должен удалять monthly_subs_* задачи.
+
+        При отключении последнего платного опроса задачи monthly_subs_*
+        не должны оставаться в планировщике.
+        """
+        scheduler = AsyncIOScheduler(timezone="UTC")
+        bot = MagicMock()
+        bot_state_service = MagicMock(spec=BotStateService)
+        poll_service = MagicMock(spec=PollService)
+
+        # Добавляем фейковые monthly_subs_* задачи
+        scheduler.add_job(
+            lambda: None,
+            "date",
+            id="monthly_subs_open",
+            name="Абонемент (открытие)",
+            run_date="2030-01-01",
+        )
+        scheduler.add_job(
+            lambda: None,
+            "date",
+            id="monthly_subs_close",
+            name="Абонемент (закрытие)",
+            run_date="2030-01-02",
+        )
+
+        # Ни одного платного опроса — monthly не должен быть запланирован
+        mock_get_templates.return_value = [
+            {"id": 1, "name": "Test", "cost": 0, "enabled": 1},
+        ]
+        scheduler.start()
+
+        refresh_scheduler(scheduler, bot, bot_state_service, poll_service)
+
+        job_ids = {job.id for job in scheduler.get_jobs()}
+        assert "monthly_subs_open" not in job_ids
+        assert "monthly_subs_close" not in job_ids
+        # backup_cleanup должен остаться
+        assert "backup_cleanup" not in job_ids  # не добавлялся в этот scheduler
+
+        scheduler.shutdown()
+
+    @patch("src.scheduler.get_poll_templates")
+    async def test_refresh_removes_poll_open_close_jobs(
+        self, mock_get_templates
+    ):
+        """refresh_scheduler должен удалять poll_open_* и poll_close_* задачи."""
+        scheduler = AsyncIOScheduler(timezone="UTC")
+        bot = MagicMock()
+        bot_state_service = MagicMock(spec=BotStateService)
+        poll_service = MagicMock(spec=PollService)
+
+        # Добавляем фейковые задачи
+        scheduler.add_job(
+            lambda: None,
+            "date",
+            id="poll_open_1",
+            run_date="2030-01-01",
+        )
+        scheduler.add_job(
+            lambda: None,
+            "date",
+            id="poll_close_1",
+            run_date="2030-01-01",
+        )
+
+        mock_get_templates.return_value = []
+        scheduler.start()
+
+        refresh_scheduler(scheduler, bot, bot_state_service, poll_service)
+
+        job_ids = {job.id for job in scheduler.get_jobs()}
+        assert "poll_open_1" not in job_ids
+        assert "poll_close_1" not in job_ids
+
+        scheduler.shutdown()

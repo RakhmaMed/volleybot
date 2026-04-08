@@ -59,3 +59,11 @@ def regular_user() -> User:
         username="regular_user",
         language_code="ru",
     )
+
+
+@pytest.fixture
+def mock_scheduler() -> MagicMock:
+    """Создаёт мок-объект планировщика."""
+    scheduler = MagicMock()
+    scheduler.get_jobs.return_value = []
+    return scheduler

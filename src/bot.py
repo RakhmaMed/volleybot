@@ -201,17 +201,18 @@ async def run_polling() -> None:
     bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
 
-    # Сохраняем сервисы в workflow_data для доступа из handlers
+    # Планировщик задач
+    scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
+
+    # Сохраняем сервисы и планировщик в workflow_data для доступа из handlers
     dp.workflow_data.update(
         {
             "admin_service": admin_service,
             "bot_state_service": bot_state_service,
             "poll_service": poll_service,
+            "scheduler": scheduler,
         }
     )
-
-    # Планировщик задач
-    scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
 
     # Регистрация обработчиков
     register_handlers(dp, bot)
@@ -251,17 +252,18 @@ def run_webhook() -> None:
     bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
 
-    # Сохраняем сервисы в workflow_data для доступа из handlers
+    # Планировщик задач
+    scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
+
+    # Сохраняем сервисы и планировщик в workflow_data для доступа из handlers
     dp.workflow_data.update(
         {
             "admin_service": admin_service,
             "bot_state_service": bot_state_service,
             "poll_service": poll_service,
+            "scheduler": scheduler,
         }
     )
-
-    # Планировщик задач
-    scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
 
     # Регистрация обработчиков
     register_handlers(dp, bot)

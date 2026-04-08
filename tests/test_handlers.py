@@ -234,6 +234,7 @@ class TestSubsCommand:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -277,6 +278,7 @@ class TestSubsCommand:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -312,6 +314,7 @@ class TestSubsCommand:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -360,6 +363,7 @@ class TestSubsCommand:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -407,6 +411,7 @@ class TestPollToggleCommands:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -451,6 +456,7 @@ class TestPollToggleCommands:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -495,6 +501,7 @@ class TestPollToggleCommands:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -534,6 +541,7 @@ class TestPollToggleCommands:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -576,6 +584,7 @@ class TestPollToggleCommands:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -617,6 +626,7 @@ class TestPollToggleCommands:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 
@@ -654,6 +664,7 @@ class TestPollToggleCommands:
                 "admin_service": admin_service,
                 "bot_state_service": MagicMock(spec=BotStateService),
                 "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
             }
         )
 

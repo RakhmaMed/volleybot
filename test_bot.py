@@ -171,14 +171,14 @@ async def main():
         # Инициализация бота и диспетчера
         bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         dp = Dispatcher()
+        scheduler = AsyncIOScheduler(timezone="UTC")
 
         dp.workflow_data.update({
             "admin_service": admin_service,
             "bot_state_service": bot_state_service,
             "poll_service": poll_service,
+            "scheduler": scheduler,
         })
-
-        scheduler = AsyncIOScheduler(timezone="UTC")
 
         # Регистрация обработчиков
         register_handlers(dp, bot)

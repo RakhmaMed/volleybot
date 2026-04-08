@@ -148,12 +148,7 @@ def setup_scheduler(
         bot_state_service: Сервис состояния бота
         poll_service: Сервис опросов
     """
-    poll_templates = get_poll_templates()
-    enabled_poll_templates = [
-        poll for poll in poll_templates if int(poll.get("enabled", 1) or 0) == 1
-    ]
-    disabled_count = len(poll_templates) - len(enabled_poll_templates)
-
+    # Добавляем задачу очистки старых бэкапов
     scheduler.add_job(
         cleanup_old_backups,
         trigger=CronTrigger(hour=0, minute=15, timezone="UTC"),
@@ -161,6 +156,13 @@ def setup_scheduler(
         name="Бэкапы (очистка)",
         replace_existing=True,
     )
+
+    # Загружаем шаблоны опросов из БД
+    poll_templates = get_poll_templates()
+    enabled_poll_templates = [
+        poll for poll in poll_templates if int(poll.get("enabled", 1) or 0) == 1
+    ]
+    disabled_count = len(poll_templates) - len(enabled_poll_templates)
 
     if not poll_templates:
         logging.warning("⚠️ Расписание опросов не найдено в базе данных.")
@@ -182,8 +184,78 @@ def setup_scheduler(
         f"выключено={disabled_count}"
     )
 
-    for idx, poll_config in enumerate(enabled_poll_templates):
+    _apply_scheduler_jobs(
+        scheduler, bot, bot_state_service, poll_service, enabled_poll_templates
+    )
+
+    _schedule_monthly_subscription_poll(
+        scheduler, bot, bot_state_service, poll_service, enabled_poll_templates
+    )
+
+
+def refresh_scheduler(
+    scheduler: AsyncIOScheduler,
+    bot: Bot,
+    bot_state_service: BotStateService,
+    poll_service: PollService,
+) -> None:
+    """
+    Перезагружает расписание опросов из БД без перезапуска бота.
+
+    Используется при включении/выключении шаблонов через /poll_on и /poll_off,
+    чтобы изменения применялись немедленно.
+    """
+    # Удаляем все существующие задачи опросов и месячных подписок
+    # (но не backup_cleanup)
+    jobs_to_remove = [
+        job.id
+        for job in scheduler.get_jobs()
+        if job.id.startswith("poll_open_")
+        or job.id.startswith("poll_close_")
+        or job.id.startswith("monthly_subs_")
+    ]
+    for job_id in jobs_to_remove:
+        scheduler.remove_job(job_id)
+        logging.debug(f"🗑️ Удалена задача: {job_id}")
+
+    # Перезагружаем из БД
+    poll_templates = get_poll_templates()
+    enabled_poll_templates = [
+        poll for poll in poll_templates if int(poll.get("enabled", 1) or 0) == 1
+    ]
+
+    _apply_scheduler_jobs(
+        scheduler, bot, bot_state_service, poll_service, enabled_poll_templates
+    )
+
+    _schedule_monthly_subscription_poll(
+        scheduler, bot, bot_state_service, poll_service, enabled_poll_templates
+    )
+
+    logging.info(
+        f"✅ Планировщик обновлён: {len(enabled_poll_templates)} шаблонов включено"
+    )
+
+
+def _apply_scheduler_jobs(
+    scheduler: AsyncIOScheduler,
+    bot: Bot,
+    bot_state_service: BotStateService,
+    poll_service: PollService,
+    enabled_poll_templates: list[PollTemplate],
+) -> None:
+    """Добавляет задачи открытия и закрытия для включённых шаблонов."""
+    if not enabled_poll_templates:
+        logging.warning("⚠️ Все шаблоны опросов выключены.")
+        return
+
+    logging.info(
+        f"⏰ Настройка планировщика: включено={len(enabled_poll_templates)}"
+    )
+
+    for poll_config in enabled_poll_templates:
         poll_name: str = poll_config["name"]
+        poll_template_id = int(poll_config.get("id", 0) or 0)
 
         # Время открытия опроса
         open_day: str = poll_config.get("open_day", "*")
@@ -196,7 +268,8 @@ def setup_scheduler(
         game_minute_utc: int = poll_config.get("game_minute_utc", 0)
 
         # === Задача открытия опроса ===
-        open_job_id: str = f"poll_open_{idx}"
+        # Используем poll_template_id вместо индекса для стабильных job_id
+        open_job_id: str = f"poll_open_{poll_template_id}"
 
         open_trigger_kwargs: dict[str, Any] = {
             "hour": open_hour_utc,
@@ -232,7 +305,8 @@ def setup_scheduler(
             )
 
         # === Задача закрытия опроса ===
-        close_job_id: str = f"poll_close_{idx}"
+        # Используем poll_template_id вместо индекса для стабильных job_id
+        close_job_id: str = f"poll_close_{poll_template_id}"
 
         # Закрываем опрос за 30 минут до игры
         total_close_minutes = (game_hour_utc * 60 + game_minute_utc - 30) % (24 * 60)
