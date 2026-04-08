@@ -242,6 +242,59 @@ class PollService:
             logger=logging.getLogger(__name__),
         )
 
+    async def _notify_admin_failed_poll_persistence(
+        self,
+        bot: Bot,
+        *,
+        chat_id: int,
+        poll_name: str,
+        poll_id: str,
+        poll_message_id: int,
+        info_message_id: int | None,
+    ) -> None:
+        """Уведомляет администратора о poll, созданном в Telegram, но не сохранённом в БД."""
+        if not ADMIN_USER_ID:
+            logging.warning(
+                "⚠️ ADMIN_USER_ID не задан, уведомление о несохранённом опросе не отправлено"
+            )
+            return
+
+        lines = [
+            "🚨 <b>Инцидент при создании опроса</b>",
+            "",
+            f"Опрос <b>{escape_html(poll_name)}</b> был отправлен в чат, но не сохранился в БД.",
+            "Бот не будет управлять этим опросом после перезапуска.",
+            "",
+            f"chat_id: <code>{chat_id}</code>",
+            f"poll_id: <code>{escape_html(poll_id)}</code>",
+            f"poll_message_id: <code>{poll_message_id}</code>",
+        ]
+        if info_message_id is not None:
+            lines.append(f"info_message_id: <code>{info_message_id}</code>")
+
+        try:
+            await self._safe_send_message(
+                bot,
+                chat_id=ADMIN_USER_ID,
+                text="\n".join(lines),
+                parse_mode="HTML",
+                action_name="notify admin about failed poll persistence",
+            )
+            logging.info(
+                "✅ Уведомление об инциденте по опросу '%s' отправлено админу",
+                poll_name,
+            )
+        except (
+            TelegramAPIError,
+            TelegramNetworkError,
+            asyncio.TimeoutError,
+            OSError,
+        ):
+            logging.exception(
+                "❌ Не удалось отправить админу уведомление о несохранённом опросе '%s'",
+                poll_name,
+            )
+
     def get_poll_data(self, poll_id: str) -> PollData | None:
         """Получить данные опроса по ID."""
         return self._poll_data.get(poll_id)
@@ -835,7 +888,8 @@ class PollService:
 
         opened_dt = datetime.now(timezone.utc)
         opened_at = opened_dt.isoformat()
-        create_game(
+        
+        if not create_game(
             poll_id=poll_message.poll.id,
             kind=spec.kind,
             status="open",
@@ -852,7 +906,24 @@ class PollService:
             target_month_snapshot=spec.target_month_snapshot,
             options=poll_options,
             option_poll_names=list(spec.option_poll_names),
-        )
+        ):
+            # Критическая ошибка: опрос в Telegram создан, но запись в БД не удалась
+            logging.error(
+                f"❌ КРИТИЧЕСКАЯ ОШИБКА: Опрос '{poll_name}' создан в Telegram, "
+                f"но запись в БД не удалась! poll_id={poll_message.poll.id}. "
+                f"Опрос будет потерян при перезапуске бота."
+            )
+            await self._notify_admin_failed_poll_persistence(
+                bot,
+                chat_id=chat_id,
+                poll_name=poll_name,
+                poll_id=poll_message.poll.id,
+                poll_message_id=poll_message.message_id,
+                info_message_id=info_message.message_id if info_message else None,
+            )
+            # Не создаём PollData, чтобы бот не управлял несохранённым опросом
+            return chat_id
+        
         update_game_info_message(
             poll_message.poll.id,
             info_message_id=info_message.message_id if info_message else None,

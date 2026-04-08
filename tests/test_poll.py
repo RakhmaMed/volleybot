@@ -446,6 +446,40 @@ class TestSendPollSpec:
             mock_save.assert_called_once()
             mock_bot.send_message.assert_called_once()
 
+    async def test_send_poll_spec_notifies_admin_when_db_save_fails(
+        self, mock_bot
+    ):
+        """При сбое create_game бот оставляет poll в чате и уведомляет админа."""
+        service = PollService()
+
+        mock_poll_message = MagicMock()
+        mock_poll_message.poll.id = "test_poll_id"
+        mock_poll_message.message_id = 123
+        mock_bot.send_poll = AsyncMock(return_value=mock_poll_message)
+        mock_bot.send_message = AsyncMock(
+            side_effect=[MagicMock(message_id=124), MagicMock(message_id=999)]
+        )
+        mock_bot.pin_chat_message = AsyncMock()
+
+        with (
+            patch("src.services.poll_service.create_game", return_value=False),
+            patch("src.services.poll_service.ADMIN_USER_ID", 777),
+        ):
+            result = await service.send_poll_spec(
+                mock_bot,
+                chat_id=-1001234567890,
+                spec=self._regular_spec(),
+                bot_enabled=True,
+            )
+
+        assert result == -1001234567890
+        assert not service.has_poll("test_poll_id")
+        assert mock_bot.send_message.await_count == 2
+        admin_call = mock_bot.send_message.await_args_list[1]
+        assert admin_call.kwargs["chat_id"] == 777
+        assert "не сохранился в БД" in admin_call.kwargs["text"]
+        assert "test_poll_id" in admin_call.kwargs["text"]
+
     async def test_open_regular_poll_uses_fresh_subscriptions(self, mock_bot, temp_db):
         """open_regular_poll должен брать subs из БД в момент открытия."""
         init_db()
