@@ -1020,7 +1020,7 @@ class PollService:
             text += "\n".join(
                 f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
             )
-            text += "\n\n🎫 <b>Забронированные места:</b>\n"
+            text += "\n\n🎫 <b>Лист ожидания:</b>\n"
             text += "\n".join(
                 f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(booked)
             )
@@ -1071,7 +1071,7 @@ class PollService:
                 booked_count = max(0, len(yes_voters) - MAX_PLAYERS - RESERVE_PLAYERS)
                 logging.info(
                     f"✅ Список игроков обновлен для опроса {poll_id}: {len(yes_voters)} человек "
-                    f"(основных: {main_count}, запасных: {reserve_count}, забронированных: {booked_count})"
+                    f"(основных: {main_count}, запасных: {reserve_count}, в листе ожидания: {booked_count})"
                 )
             except (
                 TelegramAPIError,
@@ -1214,14 +1214,13 @@ class PollService:
             final_text += "\n".join(
                 f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
             )
-            final_text += f"\n\n🎫 <b>Забронированные места ({len(booked)}):</b>\n"
+            final_text += f"\n\n🎫 <b>Лист ожидания ({len(booked)}):</b>\n"
             final_text += "\n".join(
                 f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(booked)
             )
             final_text += (
                 "\n\n⚠️ <b>Превышен лимит игроков!</b>\n"
-                "Если вы в списке забронированных мест, на эту игру мест уже не осталось. "
-                "Пожалуйста, оставайтесь дома."
+                "Игроков в листе ожидания просим остаться дома и не нарушать правила."
             )
 
         # Добавляем легенду
@@ -1277,7 +1276,7 @@ class PollService:
             logging.info(
                 f"✅ Финальный список отправлен новым сообщением для '{poll_name}': "
                 f"{len(yes_voters)} участников (основных: {main_count}, "
-                f"запасных: {reserve_count}, забронированных: {booked_count})"
+                f"запасных: {reserve_count}, в листе ожидания: {booked_count})"
             )
 
             # Удаляем старое информационное сообщение
@@ -1745,7 +1744,7 @@ class PollService:
                     voter, is_subscriber=voter.id in subs
                 )
                 logging.info(
-                    "  ⏭️  Игрок %s (ID: %s) на забронированном месте, списание пропущено",
+                    "  ⏭️  Игрок %s (ID: %s) в листе ожидания, списание пропущено",
                     voter.name,
                     voter.id,
                 )
@@ -1818,7 +1817,7 @@ class PollService:
         logging.info(
             f"✅ Списание завершено: {len(charged_players)} игроков, "
             f"итого {total_charged}₽. С подпиской: {len(subscribed_players)}. "
-            f"Забронированных без списания: {booked_count}"
+            f"В листе ожидания (без списания): {booked_count}"
         )
         return participant_finance_rows
 

@@ -891,7 +891,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 f"Игр всего: <b>{stats['games_total']}</b>\n"
                 f"Основной состав: <b>{stats['main_count']}</b>\n"
                 f"Запасной: <b>{stats['reserve_count']}</b>\n"
-                f"Забронирован: <b>{stats['booked_count']}</b>\n"
+                f"В листе ожидания: <b>{stats['booked_count']}</b>\n"
                 f"Игр по абонементу: <b>{stats['subscription_games']}</b>\n"
                 f"Разовых игр: <b>{stats['single_game_count']}</b>\n"
                 f"Списано разово: <b>{stats['single_game_sum']} ₽</b>\n"

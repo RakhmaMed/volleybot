@@ -729,7 +729,7 @@ class TestClosePoll:
     async def test_close_poll_with_booked_warns_players_not_to_come(
         self, mock_bot, temp_db
     ):
-        """Для забронированных мест бот должен явно сообщать, что места не осталось."""
+        """Для листа ожидания бот должен явно сообщать, что мест не осталось."""
         service = PollService()
         poll_id = "test_poll_id"
         voters: list[VoterInfo] = [
@@ -753,9 +753,8 @@ class TestClosePoll:
         await service.close_poll(mock_bot, poll_id)
 
         call_args = mock_bot.send_message.call_args
-        assert "Забронированные места" in call_args.kwargs["text"]
-        assert "на эту игру мест уже не осталось" in call_args.kwargs["text"]
-        assert "Пожалуйста, оставайтесь дома" in call_args.kwargs["text"]
+        assert "Лист ожидания" in call_args.kwargs["text"]
+        assert "Игроков в листе ожидания просим остаться дома и не нарушать правила." in call_args.kwargs["text"]
 
 
 @pytest.mark.asyncio
@@ -886,7 +885,7 @@ class TestProcessPaymentDeduction:
         assert charged[0]["new_balance"] == -50
 
     async def test_skips_booked_players_without_charge(self, mock_bot, temp_db):
-        """Игроки на забронированных местах не должны списываться автоматически."""
+        """Игроки в листе ожидания не должны списываться автоматически."""
         init_db()
         save_poll_template(
             {
