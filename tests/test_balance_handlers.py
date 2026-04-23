@@ -964,9 +964,8 @@ class TestPollIntegration:
     """Тест интеграции регистрации игрока при голосовании."""
 
     @patch("src.handlers.ensure_player")
-    @patch("src.handlers.get_player_name")
     async def test_poll_answer_registers_player(
-        self, mock_get_name, mock_ensure, regular_user, admin_service
+        self, mock_ensure, regular_user, admin_service
     ):
         """Проверка, что при голосовании игрок автоматически попадает в БД."""
         bot = AsyncMock(spec=Bot)
@@ -975,7 +974,6 @@ class TestPollIntegration:
         poll_service = MagicMock(spec=PollService)
         poll_service.has_poll.return_value = True
         poll_service.get_poll_data.return_value = MagicMock(subs=[])
-        mock_get_name.return_value = "Regular User"
 
         dp.workflow_data.update(
             {

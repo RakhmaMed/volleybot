@@ -1,6 +1,7 @@
 """Тесты для модуля poll и PollService."""
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,9 +22,32 @@ from src.db import (
     save_poll_template,
     update_player_balance,
 )
-from src.poll import PollData, VoterInfo, sort_voters_by_update_id
+from src.poll import (
+    PollData,
+    VoterInfo,
+    build_regular_poll_roster,
+    sort_voters_by_update_id,
+)
 from src.services import PollService
 from src.types import PollCreationSpec, SubscriptionResult
+
+
+def _build_roster(
+    yes_voters: list[VoterInfo],
+    *,
+    subs: list[int] | None = None,
+    opened_at: str = "2026-04-01T10:00:00+00:00",
+) -> Any:
+    return build_regular_poll_roster(
+        PollData(
+            kind="regular",
+            chat_id=1,
+            poll_msg_id=2,
+            yes_voters=yes_voters,
+            subs=subs or [],
+            opened_at=opened_at,
+        )
+    )
 
 
 def test_sort_voters_by_update_id_orders_updates():
@@ -53,6 +77,82 @@ def test_sort_voters_by_subscription():
     # Sub1 (id=2) должен быть первым, несмотря на update_id=20
     # Затем User2 (id=3, update_id=5) и User1 (id=1, update_id=10)
     assert [v.id for v in sorted_voters] == [2, 3, 1]
+
+
+def test_build_regular_poll_roster_applies_14h_subscription_priority():
+    roster = _build_roster(
+        [
+            VoterInfo(
+                id=1,
+                name="Regular",
+                update_id=1,
+                voted_at="2026-04-01T12:00:00+00:00",
+            ),
+            VoterInfo(
+                id=2,
+                name="Subscriber",
+                update_id=2,
+                voted_at="2026-04-01T13:00:00+00:00",
+            ),
+        ],
+        subs=[2],
+    )
+
+    assert [entry.player_id for entry in roster.entries] == [2, 1]
+    assert roster.entries[0].has_subscription_priority is True
+
+
+def test_build_regular_poll_roster_ignores_subscriber_priority_after_14h():
+    roster = _build_roster(
+        [
+            VoterInfo(
+                id=1,
+                name="Regular",
+                update_id=1,
+                voted_at="2026-04-01T12:00:00+00:00",
+            ),
+            VoterInfo(
+                id=2,
+                name="Late Subscriber",
+                update_id=2,
+                voted_at="2026-04-02T01:00:01+00:00",
+            ),
+        ],
+        subs=[2],
+    )
+
+    assert [entry.player_id for entry in roster.entries] == [1, 2]
+    assert roster.entries[1].has_subscription_priority is False
+
+
+def test_build_regular_poll_roster_keeps_early_subscriber_place_after_window():
+    data = PollData(
+        kind="regular",
+        chat_id=1,
+        poll_msg_id=2,
+        opened_at="2026-04-01T10:00:00+00:00",
+        yes_voters=[
+            VoterInfo(
+                id=1,
+                name="Regular",
+                update_id=1,
+                voted_at="2026-04-01T11:00:00+00:00",
+            ),
+            VoterInfo(
+                id=2,
+                name="Early Subscriber",
+                update_id=2,
+                voted_at="2026-04-01T12:00:00+00:00",
+            ),
+        ],
+        subs=[2],
+    )
+
+    first_roster = build_regular_poll_roster(data)
+    second_roster = build_regular_poll_roster(data)
+
+    assert [entry.player_id for entry in first_roster.entries] == [2, 1]
+    assert [entry.player_id for entry in second_roster.entries] == [2, 1]
 
 
 class TestPollService:
@@ -133,24 +233,39 @@ class TestPollService:
         mock_sleep.assert_awaited_once()
 
     def test_poll_service_update_voters(self):
-        """Тест обновления списка голосующих."""
+        """Тест обновления raw-списка голосующих."""
         service = PollService()
         service._poll_data["test_id"] = PollData(
             chat_id=123,
             poll_msg_id=456,
+            opened_at="2026-04-01T10:00:00+00:00",
             yes_voters=[VoterInfo(id=1, name="User1", update_id=1)],
             subs=[2],  # User2 будет подписчиком
         )
 
         # Добавляем нового голосующего (подписчика)
-        result = service.update_voters("test_id", 2, "User2", 2, True)
+        result = service.update_voters(
+            "test_id",
+            2,
+            "User2",
+            2,
+            "2026-04-01T12:00:00+00:00",
+            True,
+        )
         assert len(result) == 2
-        # User2 (подписчик) должен быть первым, хотя проголосовал позже (update_id=2)
-        assert result[0].id == 2
-        assert result[1].id == 1
+        assert result[0].id == 1
+        assert result[1].id == 2
+        assert result[1].voted_at == "2026-04-01T12:00:00+00:00"
 
         # Убираем голосующего
-        result = service.update_voters("test_id", 2, "User2", 3, False)
+        result = service.update_voters(
+            "test_id",
+            2,
+            "User2",
+            3,
+            "2026-04-01T12:05:00+00:00",
+            False,
+        )
         assert len(result) == 1
         assert result[0].id == 1
 
@@ -765,13 +880,11 @@ class TestProcessPaymentDeduction:
         """Если опрос не в конфиге шаблонов — списание не выполняется."""
         init_db()
         service = PollService()
-        yes_voters = [VoterInfo(id=1, name="@user1")]
+        roster = _build_roster([VoterInfo(id=1, name="@user1")])
         with patch.object(
             service, "_send_admin_report", new_callable=AsyncMock
         ) as mock_report:
-            await service._process_payment_deduction(
-                mock_bot, "Несуществующий опрос", yes_voters, []
-            )
+            await service._process_payment_deduction(mock_bot, "Несуществующий опрос", roster)
         mock_report.assert_not_called()
         # Баланс не должен меняться (игрок мог не быть в БД)
         data = get_player_balance(1)
@@ -789,13 +902,11 @@ class TestProcessPaymentDeduction:
             }
         )
         service = PollService()
-        yes_voters = [VoterInfo(id=2, name="@user2")]
+        roster = _build_roster([VoterInfo(id=2, name="@user2")])
         with patch.object(
             service, "_send_admin_report", new_callable=AsyncMock
         ) as mock_report:
-            await service._process_payment_deduction(
-                mock_bot, "Бесплатный зал", yes_voters, []
-            )
+            await service._process_payment_deduction(mock_bot, "Бесплатный зал", roster)
         mock_report.assert_not_called()
         data = get_player_balance(2)
         if data:
@@ -814,13 +925,11 @@ class TestProcessPaymentDeduction:
         ensure_player(2, "user2")
         update_player_balance(2, 500)
         service = PollService()
-        yes_voters = [VoterInfo(id=2, name="@user2")]
+        roster = _build_roster([VoterInfo(id=2, name="@user2")])
         with patch.object(
             service, "_send_admin_report", new_callable=AsyncMock
         ) as mock_report:
-            await service._process_payment_deduction(
-                mock_bot, "Платный зал", yes_voters, []
-            )
+            await service._process_payment_deduction(mock_bot, "Платный зал", roster)
         data = get_player_balance(2)
         assert data is not None
         assert data["balance"] == 350
@@ -844,20 +953,17 @@ class TestProcessPaymentDeduction:
         ensure_player(10, "sub_user")
         update_player_balance(10, 200)
         service = PollService()
-        yes_voters = [VoterInfo(id=10, name="@sub_user")]
-        subs = [10]
+        roster = _build_roster([VoterInfo(id=10, name="@sub_user")], subs=[10])
         with patch.object(
             service, "_send_admin_report", new_callable=AsyncMock
         ) as mock_report:
-            await service._process_payment_deduction(
-                mock_bot, "Зал с подпиской", yes_voters, subs
-            )
+            await service._process_payment_deduction(mock_bot, "Зал с подпиской", roster)
         data = get_player_balance(10)
         assert data is not None
         assert data["balance"] == 200
         _, _, _, charged, subscribed_names = mock_report.call_args[0]
         assert charged == []
-        assert "@sub_user" in subscribed_names
+        assert any("@sub_user" in name for name in subscribed_names)
 
     async def test_handles_none_from_get_player_balance(self, mock_bot, temp_db):
         """Если get_player_balance возвращает None — используется 0, исключения нет."""
@@ -870,13 +976,13 @@ class TestProcessPaymentDeduction:
             }
         )
         service = PollService()
-        yes_voters = [VoterInfo(id=99, name="@new_user")]
+        roster = _build_roster([VoterInfo(id=99, name="@new_user")])
         with patch("src.services.poll_service.get_player_balance", return_value=None):
             with patch.object(
                 service, "_send_admin_report", new_callable=AsyncMock
             ) as mock_report:
                 await service._process_payment_deduction(
-                    mock_bot, "Зал для теста None", yes_voters, []
+                    mock_bot, "Зал для теста None", roster
                 )
         mock_report.assert_called_once()
         _, _, _, charged, _ = mock_report.call_args[0]
@@ -906,12 +1012,13 @@ class TestProcessPaymentDeduction:
             for i in range(1, MAX_PLAYERS + RESERVE_PLAYERS + 1)
         ]
         yes_voters.append(VoterInfo(id=booked_id, name=f"@user{booked_id}"))
+        roster = _build_roster(yes_voters)
 
         with patch.object(
             service, "_send_admin_report", new_callable=AsyncMock
         ) as mock_report:
             finance_rows = await service._process_payment_deduction(
-                mock_bot, "Платный зал с перебором", yes_voters, []
+                mock_bot, "Платный зал с перебором", roster
             )
 
         charged_player = get_player_balance(1)
@@ -1017,6 +1124,56 @@ def test_load_persisted_state_prefers_db_subs_for_regular_games():
     restored = service.get_poll_data("poll123")
     assert restored is not None
     assert restored.subs == [20]
+
+
+def test_load_persisted_state_fills_missing_voted_at_for_regular_games():
+    """Legacy regular poll без voted_at должен получить fallback на opened_at."""
+    init_db()
+    save_poll_template(
+        {
+            "name": "Пятница",
+            "message": "Играем?",
+            "subs": [],
+            "enabled": 1,
+        }
+    )
+    create_game(
+        poll_id="poll123",
+        kind="regular",
+        status="open",
+        poll_template_id=1,
+        poll_name_snapshot="Пятница",
+        question_snapshot="Играем?",
+        chat_id=1,
+        poll_message_id=2,
+        info_message_id=3,
+        opened_at="2026-04-02T16:00:00+00:00",
+    )
+    save_state(
+        POLL_STATE_KEY,
+        {
+            "poll123": {
+                "kind": "regular",
+                "status": "open",
+                "poll_template_id": 1,
+                "poll_name_snapshot": "Пятница",
+                "question_snapshot": "Играем?",
+                "chat_id": 1,
+                "poll_msg_id": 2,
+                "info_msg_id": 3,
+                "yes_voters": [{"id": 10, "name": "@legacy", "update_id": 5}],
+                "last_message_text": "cached",
+                "subs": [],
+            }
+        },
+    )
+
+    service = PollService()
+    service.load_persisted_state()
+
+    restored = service.get_poll_data("poll123")
+    assert restored is not None
+    assert restored.yes_voters[0].voted_at == "2026-04-02T16:00:00+00:00"
 
 
 def test_refresh_restored_regular_polls_schedules_only_regular_with_info_msg():
@@ -1128,6 +1285,7 @@ class TestHtmlEscapingInPollTexts:
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=124,
+            opened_at="2026-04-01T10:00:00+00:00",
             yes_voters=[
                 VoterInfo(id=1, name="⭐️ Wrong Sub (@wrong_sub)", update_id=1),
                 VoterInfo(id=2, name="Right Sub (@right_sub)", update_id=2),
@@ -1186,6 +1344,7 @@ class TestHtmlEscapingInPollTexts:
             chat_id=-1001234567890,
             poll_msg_id=123,
             info_msg_id=124,
+            opened_at="2026-04-01T10:00:00+00:00",
             yes_voters=[
                 VoterInfo(id=1, name="⭐️ Wrong Sub (@wrong_sub)", update_id=1),
                 VoterInfo(id=2, name="Right Sub (@right_sub)", update_id=2),

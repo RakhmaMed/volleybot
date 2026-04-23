@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramNetworkError
@@ -58,7 +58,6 @@ from .utils import (
     count_games_in_month,
     escape_html,
     format_player_link,
-    get_player_name,
     rate_limit_check,
     retry_async,
     validate_balance_callback_data,
@@ -2116,19 +2115,24 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         voted_yes = 0 in selected  # Да
-        subs: list[int] = data.subs
-        name: str = get_player_name(user, subs)
+        name = (
+            f"@{user.username}"
+            if user.username
+            else (user.full_name or "Неизвестный")
+        )
+        voted_at = datetime.now(timezone.utc).isoformat()
 
         # Обновляем список голосующих
-        sorted_yes_voters = poll_service.update_voters(
+        yes_voters = poll_service.update_voters(
             poll_id=poll_id,
             user_id=user.id,
             user_name=name,
             update_id=update_id,
+            voted_at=voted_at,
             voted_yes=voted_yes,
         )
         logging.debug(
-            f"Обновленный список голосующих за опрос {poll_id}: {len(sorted_yes_voters)} чел."
+            f"Обновленный список голосующих за опрос {poll_id}: {len(yes_voters)} чел."
         )
 
         # Отменяем предыдущую задачу обновления

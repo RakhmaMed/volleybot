@@ -41,7 +41,6 @@ from ..db import (
     get_open_games,
     get_open_monthly_game,
     get_player_balance,
-    get_player_info,
     get_poll_templates,
     load_monthly_votes,
     load_state,
@@ -52,7 +51,7 @@ from ..db import (
     update_game_last_info_text,
     update_player_balance,
 )
-from ..poll import PollData, VoterInfo, sort_voters_by_update_id
+from ..poll import PollData, PollRoster, VoterInfo, build_regular_poll_roster
 from ..types import (
     HallBreakdown,
     PollCreationSpec,
@@ -500,19 +499,26 @@ class PollService:
                         # списку подписчиков из poll_state. Это точечная синхронизация, пока
                         # не придумаем более чистую стратегию хранения/восстановления subs.
                         restored_subs = template_subs
+                    restored_opened_at = str(row.get("opened_at") or "")
                     restored = PollData(
                         kind=poll_kind,
                         status=str(row.get("status") or "open"),
                         poll_template_id=row.get("poll_template_id"),
                         poll_name_snapshot=str(row.get("poll_name_snapshot") or ""),
                         question_snapshot=str(row.get("question_snapshot") or ""),
-                        opened_at=str(row.get("opened_at") or ""),
+                        opened_at=restored_opened_at,
                         chat_id=int(row["chat_id"]),
                         poll_msg_id=int(row["poll_message_id"]),
                         info_msg_id=row.get("info_message_id"),
                         final_message_id=row.get("final_message_id"),
                         yes_voters=[
-                            VoterInfo(**item)
+                            VoterInfo(
+                                **{
+                                    **item,
+                                    "voted_at": item.get("voted_at")
+                                    or restored_opened_at,
+                                }
+                            )
                             for item in fallback.get("yes_voters", [])
                             if isinstance(item, dict)
                         ],
@@ -536,6 +542,10 @@ class PollService:
                             else fallback.get("target_month")
                         ),
                     )
+                    if poll_kind == "regular":
+                        restored.yes_voters = self._normalize_voter_timestamps(
+                            restored.yes_voters, restored.opened_at
+                        )
                     self._poll_data[poll_id] = restored
                     self._update_tasks[poll_id] = None
                     successful += 1
@@ -554,6 +564,10 @@ class PollService:
         for poll_id, data in stored.items():
             try:
                 restored = PollData(**data)
+                if restored.kind == "regular":
+                    restored.yes_voters = self._normalize_voter_timestamps(
+                        restored.yes_voters, restored.opened_at
+                    )
                 self._poll_data[poll_id] = restored
                 self._update_tasks[poll_id] = None
                 successful += 1
@@ -605,67 +619,103 @@ class PollService:
         logging.debug("Создана новая задача отложенного обновления (10 сек)")
 
     @staticmethod
-    def _strip_voter_status_prefix(name: str) -> str:
-        """Убирает статусные эмодзи из начала уже отформатированного имени."""
-        cleaned = name.lstrip()
-        changed = True
-        while changed:
-            changed = False
-            for prefix in ("⭐️", "⭐", "🏐"):
-                if cleaned.startswith(prefix):
-                    cleaned = cleaned[len(prefix) :].lstrip()
-                    changed = True
-        return cleaned or name
-
-    @classmethod
-    def _render_voter_name(cls, voter: VoterInfo, subs: list[int]) -> str:
-        """Пересобирает отображаемое имя голосующего по актуальным данным БД."""
-        player = get_player_info(voter.id)
-        fallback_name = cls._strip_voter_status_prefix(voter.name)
-
-        username = ""
-        display_name = fallback_name
-        ball_donate = False
-        if player:
-            username = str(player.get("name") or "").replace("@", "").strip()
-            fullname = str(player.get("fullname") or "").strip()
-            ball_donate = bool(player.get("ball_donate"))
-            if fullname:
-                display_name = fullname
-            elif username:
-                display_name = f"@{username}"
-
-        emojis = ""
-        if voter.id in subs:
-            emojis += "⭐️"
-        if ball_donate:
-            emojis += "🏐"
-        if emojis:
-            display_name = f"{emojis} {display_name}"
-
-        if not username:
-            return display_name
-
-        username_mention = f"@{username}"
-        if display_name == username_mention or display_name.endswith(
-            f" {username_mention}"
-        ):
-            return display_name
-        return f"{display_name} ({username_mention})"
-
-    @classmethod
-    def _refresh_voter_names(
-        cls, voters: list[VoterInfo], subs: list[int]
+    def _normalize_voter_timestamps(
+        voters: list[VoterInfo], opened_at: str
     ) -> list[VoterInfo]:
-        """Возвращает список голосующих с актуальными именами и статусами."""
-        return [
-            VoterInfo(
-                id=voter.id,
-                name=cls._render_voter_name(voter, subs),
-                update_id=voter.update_id,
+        """Заполняет voted_at для legacy-голосов, если поле ещё пустое."""
+        normalized: list[VoterInfo] = []
+        for voter in voters:
+            if voter.voted_at:
+                normalized.append(voter)
+                continue
+            normalized.append(voter.model_copy(update={"voted_at": opened_at}))
+        return normalized
+
+    def _build_regular_roster(self, data: PollData) -> PollRoster:
+        """Возвращает единый состав regular-опроса и нормализует legacy-состояние."""
+        normalized_voters = self._normalize_voter_timestamps(
+            data.yes_voters, data.opened_at
+        )
+        if normalized_voters != data.yes_voters:
+            data.yes_voters = normalized_voters
+        return build_regular_poll_roster(data)
+
+    @staticmethod
+    def _format_roster_lines(entries: list[Any]) -> str:
+        return "\n".join(
+            f"{index}) {escape_html(entry.rendered_name)}"
+            for index, entry in enumerate(entries, start=1)
+        )
+
+    def _build_live_roster_text(self, roster: PollRoster) -> str:
+        """Строит промежуточный текст списка игроков из готового состава."""
+        if roster.total == 0:
+            return "⏳ Идёт сбор голосов...\n\n⭐️ — абонемент\n🏐 — донат на мяч"
+
+        if roster.total < MIN_PLAYERS:
+            text = (
+                f"⏳ <b>Идёт сбор голосов:</b> {roster.total}/{MIN_PLAYERS}\n\n"
+                "<b>Проголосовали:</b>\n"
+                f"{self._format_roster_lines(roster.entries)}"
             )
-            for voter in voters
-        ]
+        elif not roster.reserve_entries and not roster.booked_entries:
+            text = "✅ <b>Список игроков:</b>\n"
+            text += self._format_roster_lines(roster.main_entries)
+        elif not roster.booked_entries:
+            text = "✅ <b>Список игроков:</b>\n"
+            text += self._format_roster_lines(roster.main_entries)
+            text += "\n\n🕗 <b>Запасные игроки:</b>\n"
+            text += self._format_roster_lines(roster.reserve_entries)
+        else:
+            text = "✅ <b>Список игроков:</b>\n"
+            text += self._format_roster_lines(roster.main_entries)
+            text += "\n\n🕗 <b>Запасные игроки:</b>\n"
+            text += self._format_roster_lines(roster.reserve_entries)
+            text += "\n\n🎫 <b>Лист ожидания:</b>\n"
+            text += self._format_roster_lines(roster.booked_entries)
+
+        return text + "\n\n⭐️ — абонемент\n🏐 — донат на мяч"
+
+    def _build_final_roster_text(self, roster: PollRoster) -> str:
+        """Строит финальный текст regular-опроса из готового состава."""
+        if roster.total == 0:
+            return "📊 <b>Голосование завершено</b>\n\nНикто не записался."
+
+        if roster.total < MIN_PLAYERS:
+            text = (
+                f"📊 <b>Голосование завершено:</b> {roster.total}/{MIN_PLAYERS}\n\n"
+                "<b>Записались:</b>\n"
+                f"{self._format_roster_lines(roster.entries)}"
+                "\n\n⚠️ <b>Не хватает игроков!</b>"
+            )
+        elif not roster.reserve_entries and not roster.booked_entries:
+            text = (
+                "📊 <b>Голосование завершено</b> ✅\n\n"
+                f"<b>Основной состав ({len(roster.main_entries)}):</b>\n"
+                f"{self._format_roster_lines(roster.main_entries)}"
+            )
+        elif not roster.booked_entries:
+            text = (
+                "📊 <b>Голосование завершено</b> ✅\n\n"
+                f"<b>Основной состав ({len(roster.main_entries)}):</b>\n"
+                f"{self._format_roster_lines(roster.main_entries)}"
+                f"\n\n🕗 <b>Запасные ({len(roster.reserve_entries)}):</b>\n"
+                f"{self._format_roster_lines(roster.reserve_entries)}"
+            )
+        else:
+            text = (
+                "📊 <b>Голосование завершено</b> ✅\n\n"
+                f"<b>Основной состав ({len(roster.main_entries)}):</b>\n"
+                f"{self._format_roster_lines(roster.main_entries)}"
+                f"\n\n🕗 <b>Запасные ({len(roster.reserve_entries)}):</b>\n"
+                f"{self._format_roster_lines(roster.reserve_entries)}"
+                f"\n\n🎫 <b>Лист ожидания ({len(roster.booked_entries)}):</b>\n"
+                f"{self._format_roster_lines(roster.booked_entries)}"
+                "\n\n⚠️ <b>Превышен лимит игроков!</b>\n"
+                "Игроков в листе ожидания просим остаться дома и не нарушать правила."
+            )
+
+        return text + "\n\n⭐️ — абонемент\n🏐 — донат на мяч"
 
     def update_voters(
         self,
@@ -673,38 +723,40 @@ class PollService:
         user_id: int,
         user_name: str,
         update_id: int,
+        voted_at: str,
         voted_yes: bool,
     ) -> list[VoterInfo]:
         """
-        Обновить список голосующих.
+        Обновить raw-список голосующих.
 
         Args:
             poll_id: ID опроса
             user_id: ID пользователя
             user_name: Имя пользователя
             update_id: ID обновления
+            voted_at: Время голоса в UTC ISO-формате
             voted_yes: Проголосовал ли "Да"
 
         Returns:
-            Обновлённый отсортированный список голосующих
+            Обновлённый raw-список голосующих
         """
         if poll_id not in self._poll_data:
             return []
 
         data = self._poll_data[poll_id]
-        yes_voters = data.yes_voters
 
         # Удаляем пользователя, если был
-        yes_voters = [v for v in yes_voters if v.id != user_id]
-
+        data.yes_voters = [v for v in data.yes_voters if v.id != user_id]
         if voted_yes:
-            yes_voters.append(
-                VoterInfo(id=user_id, name=user_name, update_id=update_id)
+            data.yes_voters.append(
+                VoterInfo(
+                    id=user_id,
+                    name=user_name,
+                    update_id=update_id,
+                    voted_at=voted_at,
+                )
             )
-
-        sorted_yes_voters = sort_voters_by_update_id(yes_voters, data.subs)
-        data.yes_voters = sorted_yes_voters
-        return sorted_yes_voters
+        return data.yes_voters
 
     async def send_poll_spec(
         self,
@@ -971,62 +1023,8 @@ class PollService:
             return
 
         data = self._poll_data[poll_id]
-        yes_voters: list[VoterInfo] = sort_voters_by_update_id(
-            data.yes_voters, data.subs
-        )
-        yes_voters = self._refresh_voter_names(yes_voters, data.subs)
-        data.yes_voters = yes_voters
-
-        # Формируем текст (HTML-разметка)
-        text: str
-        if len(yes_voters) == 0:
-            text = "⏳ Идёт сбор голосов..."
-        elif len(yes_voters) < MIN_PLAYERS:
-            text = (
-                f"⏳ <b>Идёт сбор голосов:</b> "
-                f"{len(yes_voters)}/{MIN_PLAYERS}\n\n"
-                "<b>Проголосовали:</b>\n"
-            )
-            text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(yes_voters)
-            )
-        elif len(yes_voters) <= MAX_PLAYERS:
-            text = "✅ <b>Список игроков:</b>\n"
-            text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(yes_voters)
-            )
-        elif len(yes_voters) <= MAX_PLAYERS + RESERVE_PLAYERS:
-            main_players: list[VoterInfo] = yes_voters[:MAX_PLAYERS]
-            reserves: list[VoterInfo] = yes_voters[MAX_PLAYERS:]
-
-            text = "✅ <b>Список игроков:</b>\n"
-            text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(main_players)
-            )
-            text += "\n\n🕗 <b>Запасные игроки:</b>\n"
-            text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
-            )
-        else:
-            main_players = yes_voters[:MAX_PLAYERS]
-            reserves = yes_voters[MAX_PLAYERS : MAX_PLAYERS + RESERVE_PLAYERS]
-            booked: list[VoterInfo] = yes_voters[MAX_PLAYERS + RESERVE_PLAYERS :]
-
-            text = "✅ <b>Список игроков:</b>\n"
-            text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(main_players)
-            )
-            text += "\n\n🕗 <b>Запасные игроки:</b>\n"
-            text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
-            )
-            text += "\n\n🎫 <b>Лист ожидания:</b>\n"
-            text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(booked)
-            )
-
-        # Добавляем легенду
-        text += "\n\n⭐️ — абонемент\n🏐 — донат на мяч"
+        roster = self._build_regular_roster(data)
+        text = self._build_live_roster_text(roster)
 
         info_msg_id = data.info_msg_id
         if info_msg_id is None:
@@ -1064,13 +1062,11 @@ class PollService:
                 await edit_with_retry()
                 data.last_message_text = text
                 update_game_last_info_text(poll_id, text)
-                main_count = min(len(yes_voters), MAX_PLAYERS)
-                reserve_count = max(
-                    0, min(len(yes_voters) - MAX_PLAYERS, RESERVE_PLAYERS)
-                )
-                booked_count = max(0, len(yes_voters) - MAX_PLAYERS - RESERVE_PLAYERS)
+                main_count = len(roster.main_entries)
+                reserve_count = len(roster.reserve_entries)
+                booked_count = len(roster.booked_entries)
                 logging.info(
-                    f"✅ Список игроков обновлен для опроса {poll_id}: {len(yes_voters)} человек "
+                    f"✅ Список игроков обновлен для опроса {poll_id}: {roster.total} человек "
                     f"(основных: {main_count}, запасных: {reserve_count}, в листе ожидания: {booked_count})"
                 )
             except (
@@ -1157,74 +1153,8 @@ class PollService:
             )
             return
 
-        # Формируем финальный список
-        yes_voters: list[VoterInfo] = sort_voters_by_update_id(data.yes_voters, data.subs)
-        yes_voters = self._refresh_voter_names(yes_voters, data.subs)
-        data.yes_voters = yes_voters
-
-        final_text: str
-        if len(yes_voters) == 0:
-            final_text = "📊 <b>Голосование завершено</b>\n\nНикто не записался."
-        elif len(yes_voters) < MIN_PLAYERS:
-            final_text = (
-                f"📊 <b>Голосование завершено:</b> "
-                f"{len(yes_voters)}/{MIN_PLAYERS}\n\n"
-                "<b>Записались:</b>\n"
-            )
-            final_text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(yes_voters)
-            )
-            final_text += "\n\n⚠️ <b>Не хватает игроков!</b>"
-        elif len(yes_voters) <= MAX_PLAYERS:
-            final_text = (
-                "📊 <b>Голосование завершено</b> ✅\n\n"
-                f"<b>Основной состав ({len(yes_voters)}):</b>\n"
-            )
-            final_text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(yes_voters)
-            )
-        elif len(yes_voters) <= MAX_PLAYERS + RESERVE_PLAYERS:
-            main_players: list[VoterInfo] = yes_voters[:MAX_PLAYERS]
-            reserves: list[VoterInfo] = yes_voters[MAX_PLAYERS:]
-
-            final_text = (
-                "📊 <b>Голосование завершено</b> ✅\n\n"
-                f"<b>Основной состав ({len(main_players)}):</b>\n"
-            )
-            final_text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(main_players)
-            )
-            final_text += f"\n\n🕗 <b>Запасные ({len(reserves)}):</b>\n"
-            final_text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
-            )
-        else:
-            main_players = yes_voters[:MAX_PLAYERS]
-            reserves = yes_voters[MAX_PLAYERS : MAX_PLAYERS + RESERVE_PLAYERS]
-            booked: list[VoterInfo] = yes_voters[MAX_PLAYERS + RESERVE_PLAYERS :]
-
-            final_text = (
-                "📊 <b>Голосование завершено</b> ✅\n\n"
-                f"<b>Основной состав ({len(main_players)}):</b>\n"
-            )
-            final_text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(main_players)
-            )
-            final_text += f"\n\n🕗 <b>Запасные ({len(reserves)}):</b>\n"
-            final_text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(reserves)
-            )
-            final_text += f"\n\n🎫 <b>Лист ожидания ({len(booked)}):</b>\n"
-            final_text += "\n".join(
-                f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(booked)
-            )
-            final_text += (
-                "\n\n⚠️ <b>Превышен лимит игроков!</b>\n"
-                "Игроков в листе ожидания просим остаться дома и не нарушать правила."
-            )
-
-        # Добавляем легенду
-        final_text += "\n\n⭐️ — абонемент\n🏐 — донат на мяч"
+        roster = self._build_regular_roster(data)
+        final_text = self._build_final_roster_text(roster)
 
         # Добавляем реквизиты для перевода
         payment_lines = [
@@ -1241,9 +1171,7 @@ class PollService:
             final_text += "\n".join(payment_lines)
 
         # Обработка списания средств для платных залов
-        charge_rows = await self._process_payment_deduction(
-            bot, poll_name, yes_voters, data.subs
-        )
+        charge_rows = await self._process_payment_deduction(bot, poll_name, roster)
 
         # Отправляем финальный список новым сообщением с ответом на голосовалку
         info_msg_id = data.info_msg_id
@@ -1270,12 +1198,12 @@ class PollService:
                 )
             final_message_id = final_message.message_id
             data.final_message_id = final_message_id
-            main_count = min(len(yes_voters), MAX_PLAYERS)
-            reserve_count = max(0, min(len(yes_voters) - MAX_PLAYERS, RESERVE_PLAYERS))
-            booked_count = max(0, len(yes_voters) - MAX_PLAYERS - RESERVE_PLAYERS)
+            main_count = len(roster.main_entries)
+            reserve_count = len(roster.reserve_entries)
+            booked_count = len(roster.booked_entries)
             logging.info(
                 f"✅ Финальный список отправлен новым сообщением для '{poll_name}': "
-                f"{len(yes_voters)} участников (основных: {main_count}, "
+                f"{roster.total} участников (основных: {main_count}, "
                 f"запасных: {reserve_count}, в листе ожидания: {booked_count})"
             )
 
@@ -1319,21 +1247,15 @@ class PollService:
 
         participant_rows: list[dict[str, Any]] = []
         charge_by_player = {int(row["player_id"]): row for row in charge_rows}
-        for index, voter in enumerate(yes_voters):
-            if index < MAX_PLAYERS:
-                bucket = "main"
-            elif index < MAX_PLAYERS + RESERVE_PLAYERS:
-                bucket = "reserve"
-            else:
-                bucket = "booked"
-            charge = charge_by_player.get(voter.id, {})
+        for entry in roster.entries:
+            charge = charge_by_player.get(entry.player_id, {})
             participant_rows.append(
                 {
-                    "player_id": voter.id,
-                    "roster_bucket": bucket,
-                    "sort_order": index + 1,
+                    "player_id": entry.player_id,
+                    "roster_bucket": entry.roster_bucket,
+                    "sort_order": entry.sort_order,
                     "is_subscriber": bool(
-                        charge.get("is_subscriber", voter.id in data.subs)
+                        charge.get("is_subscriber", entry.is_subscriber)
                     ),
                     "charged_amount": int(charge.get("charged_amount", 0) or 0),
                     "charge_source": str(charge.get("charge_source", "none")),
@@ -1663,8 +1585,7 @@ class PollService:
         self,
         bot: Bot,
         poll_name: str,
-        yes_voters: list[VoterInfo],
-        subs: list[int],
+        roster: PollRoster,
     ) -> list[dict[str, Any]]:
         """
         Обработка списания средств с игроков без подписки для платных залов.
@@ -1672,8 +1593,7 @@ class PollService:
         Args:
             bot: Экземпляр бота
             poll_name: Название опроса
-            yes_voters: Список проголосовавших "Да"
-            subs: Список ID подписчиков
+            roster: Единый состав игроков regular-опроса
         """
         # Получаем информацию о стоимости опроса из БД
         poll_templates = get_poll_templates()
@@ -1694,15 +1614,15 @@ class PollService:
             )
             return [
                 {
-                    "player_id": voter.id,
-                    "name": voter.name,
-                    "is_subscriber": voter.id in subs,
+                    "player_id": entry.player_id,
+                    "name": entry.rendered_name,
+                    "is_subscriber": entry.is_subscriber,
                     "charged_amount": 0,
                     "charge_source": "none",
                     "balance_before": None,
                     "balance_after": None,
                 }
-                for voter in yes_voters
+                for entry in roster.entries
             ]
 
         logging.info(
@@ -1714,10 +1634,9 @@ class PollService:
         subscribed_players: list[str] = []
         participant_finance_rows: list[dict[str, Any]] = []
         booked_count = 0
-        roster_limit = MAX_PLAYERS + RESERVE_PLAYERS
 
         def append_participant_finance_row(
-            voter: VoterInfo,
+            entry: Any,
             *,
             is_subscriber: bool,
             charged_amount: int = 0,
@@ -1727,8 +1646,8 @@ class PollService:
         ) -> None:
             participant_finance_rows.append(
                 {
-                    "player_id": voter.id,
-                    "name": voter.name,
+                    "player_id": entry.player_id,
+                    "name": entry.rendered_name,
                     "is_subscriber": is_subscriber,
                     "charged_amount": charged_amount,
                     "charge_source": charge_source,
@@ -1737,48 +1656,48 @@ class PollService:
                 }
             )
 
-        for index, voter in enumerate(yes_voters):
-            if index >= roster_limit:
+        for entry in roster.entries:
+            if entry.roster_bucket == "booked":
                 booked_count += 1
                 append_participant_finance_row(
-                    voter, is_subscriber=voter.id in subs
+                    entry, is_subscriber=entry.is_subscriber
                 )
                 logging.info(
                     "  ⏭️  Игрок %s (ID: %s) в листе ожидания, списание пропущено",
-                    voter.name,
-                    voter.id,
+                    entry.rendered_name,
+                    entry.player_id,
                 )
                 continue
 
             # Проверяем, есть ли у игрока подписка
-            if voter.id in subs:
-                subscribed_players.append(voter.name)
+            if entry.is_subscriber:
+                subscribed_players.append(entry.rendered_name)
                 append_participant_finance_row(
-                    voter,
+                    entry,
                     is_subscriber=True,
                     charge_source="subscription",
                 )
                 logging.debug(
-                    f"  ⏭️  Игрок {voter.name} (ID: {voter.id}) с подпиской, списание пропущено"
+                    f"  ⏭️  Игрок {entry.rendered_name} (ID: {entry.player_id}) с подпиской, списание пропущено"
                 )
                 continue
 
             # Убеждаемся, что игрок есть в БД
-            ensure_player(voter.id, voter.name)
+            ensure_player(entry.player_id, entry.rendered_name)
 
             # Получаем текущий баланс (get_player_balance возвращает dict с ключом "balance" или None)
-            player_data = get_player_balance(voter.id)
+            player_data = get_player_balance(entry.player_id)
             old_balance = player_data.get("balance", 0) if player_data else 0
 
             # Списываем средства
-            update_player_balance(voter.id, -cost)
+            update_player_balance(entry.player_id, -cost)
             new_balance = old_balance - cost
 
             # Добавляем транзакцию в историю
             game_date = datetime.now().strftime("%d.%m.%Y")
             description = f"Зал: {poll_name} ({game_date})"
             add_transaction(
-                voter.id,
+                entry.player_id,
                 -cost,
                 description,
                 poll_template_id=int(poll_config["id"]),
@@ -1787,14 +1706,14 @@ class PollService:
 
             charged_players.append(
                 {
-                    "name": voter.name,
-                    "id": voter.id,
+                    "name": entry.rendered_name,
+                    "id": entry.player_id,
                     "old_balance": old_balance,
                     "new_balance": new_balance,
                 }
             )
             append_participant_finance_row(
-                voter,
+                entry,
                 is_subscriber=False,
                 charged_amount=cost,
                 charge_source="single_game",
@@ -1803,7 +1722,7 @@ class PollService:
             )
 
             logging.info(
-                f"  💳 Списано {cost}₽ с {voter.name} (ID: {voter.id}), "
+                f"  💳 Списано {cost}₽ с {entry.rendered_name} (ID: {entry.player_id}), "
                 f"баланс: {old_balance}₽ → {new_balance}₽"
             )
 
