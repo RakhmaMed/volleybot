@@ -80,6 +80,7 @@ COMBO_DISCOUNT_COEFF = 1.7  # Комбо = 1.7× одного зала (скид
 MIN_SUB_PRICE = 400  # Минимальная цена абонемента за 1 зал
 MAX_SUB_PRICE = 500  # Максимальная цена абонемента за 1 зал
 DEFAULT_SUB_PRICE = 450  # Цена по умолчанию, если нет подписчиков
+PLAYERS_LIST_UPDATE_DELAY_SECONDS = 5  # Задержка перед обновлением списка игроков
 
 
 def calculate_subscription(
@@ -616,7 +617,10 @@ class PollService:
         self._update_tasks[poll_id] = asyncio.create_task(
             self._update_players_list(bot, poll_id)
         )
-        logging.debug("Создана новая задача отложенного обновления (10 сек)")
+        logging.debug(
+            "Создана новая задача отложенного обновления "
+            f"({PLAYERS_LIST_UPDATE_DELAY_SECONDS} сек)"
+        )
 
     @staticmethod
     def _normalize_voter_timestamps(
@@ -1012,11 +1016,13 @@ class PollService:
         return chat_id
 
     async def _update_players_list(self, bot: Bot, poll_id: str) -> None:
-        """Обновить список игроков с задержкой 10 секунд."""
+        """Обновить список игроков с настраиваемой задержкой."""
         logging.debug(
-            f"Задержка 10 секунд перед обновлением списка игроков для опроса {poll_id}..."
+            "Задержка "
+            f"{PLAYERS_LIST_UPDATE_DELAY_SECONDS} секунд перед обновлением "
+            f"списка игроков для опроса {poll_id}..."
         )
-        await asyncio.sleep(10)
+        await asyncio.sleep(PLAYERS_LIST_UPDATE_DELAY_SECONDS)
 
         if poll_id not in self._poll_data:
             logging.debug(f"Опрос {poll_id} больше не существует, отмена обновления")
