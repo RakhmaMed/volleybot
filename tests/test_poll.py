@@ -8,7 +8,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramMigrateToChat
 from aiogram.methods import SendPoll
 
-from src.config import MAX_PLAYERS, MIN_PLAYERS
+from src.config import MAX_PLAYERS, MIN_PLAYERS, RESERVE_PLAYERS
 from src.db import (
     POLL_STATE_KEY,
     create_game,
@@ -726,6 +726,37 @@ class TestClosePoll:
         # Должен быть reply_to_message_id
         assert call_args.kwargs["reply_to_message_id"] == 123
 
+    async def test_close_poll_with_booked_warns_players_not_to_come(
+        self, mock_bot, temp_db
+    ):
+        """Для забронированных мест бот должен явно сообщать, что места не осталось."""
+        service = PollService()
+        poll_id = "test_poll_id"
+        voters: list[VoterInfo] = [
+            VoterInfo(id=i, name=f"@user{i}")
+            for i in range(MAX_PLAYERS + RESERVE_PLAYERS + 2)
+        ]
+        service._poll_data[poll_id] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=123,
+            info_msg_id=124,
+            yes_voters=voters,
+            last_message_text="",
+            subs=[],
+        )
+        service._update_tasks[poll_id] = None
+
+        mock_bot.stop_poll = AsyncMock()
+        mock_bot.send_message = AsyncMock()
+        mock_bot.delete_message = AsyncMock()
+
+        await service.close_poll(mock_bot, poll_id)
+
+        call_args = mock_bot.send_message.call_args
+        assert "Забронированные места" in call_args.kwargs["text"]
+        assert "на эту игру мест уже не осталось" in call_args.kwargs["text"]
+        assert "Пожалуйста, оставайтесь дома" in call_args.kwargs["text"]
+
 
 @pytest.mark.asyncio
 class TestProcessPaymentDeduction:
@@ -853,6 +884,51 @@ class TestProcessPaymentDeduction:
         assert len(charged) == 1
         assert charged[0]["old_balance"] == 0
         assert charged[0]["new_balance"] == -50
+
+    async def test_skips_booked_players_without_charge(self, mock_bot, temp_db):
+        """Игроки на забронированных местах не должны списываться автоматически."""
+        init_db()
+        save_poll_template(
+            {
+                "name": "Платный зал с перебором",
+                "message": "Текст",
+                "cost": 150,
+            }
+        )
+        booked_id = MAX_PLAYERS + RESERVE_PLAYERS + 100
+        ensure_player(1, "user1")
+        ensure_player(booked_id, f"user{booked_id}")
+        update_player_balance(1, 500)
+        update_player_balance(booked_id, 400)
+
+        service = PollService()
+        yes_voters = [
+            VoterInfo(id=i, name=f"@user{i}")
+            for i in range(1, MAX_PLAYERS + RESERVE_PLAYERS + 1)
+        ]
+        yes_voters.append(VoterInfo(id=booked_id, name=f"@user{booked_id}"))
+
+        with patch.object(
+            service, "_send_admin_report", new_callable=AsyncMock
+        ) as mock_report:
+            finance_rows = await service._process_payment_deduction(
+                mock_bot, "Платный зал с перебором", yes_voters, []
+            )
+
+        charged_player = get_player_balance(1)
+        booked_player = get_player_balance(booked_id)
+
+        assert charged_player is not None
+        assert booked_player is not None
+        assert charged_player["balance"] == 350
+        assert booked_player["balance"] == 400
+
+        booked_row = next(row for row in finance_rows if row["player_id"] == booked_id)
+        assert booked_row["charged_amount"] == 0
+        assert booked_row["charge_source"] == "none"
+        assert booked_row["balance_before"] is None
+        assert booked_row["balance_after"] is None
+        mock_report.assert_called_once()
 
 
 def test_persist_poll_state_roundtrip():

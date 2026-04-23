@@ -1218,7 +1218,11 @@ class PollService:
             final_text += "\n".join(
                 f"{i + 1}) {escape_html(p.name)}" for i, p in enumerate(booked)
             )
-            final_text += "\n\n⚠️ <b>Превышен лимит игроков!</b>"
+            final_text += (
+                "\n\n⚠️ <b>Превышен лимит игроков!</b>\n"
+                "Если вы в списке забронированных мест, на эту игру мест уже не осталось. "
+                "Пожалуйста, оставайтесь дома."
+            )
 
         # Добавляем легенду
         final_text += "\n\n⭐️ — абонемент\n🏐 — донат на мяч"
@@ -1710,22 +1714,50 @@ class PollService:
         charged_players: list[dict[str, Any]] = []
         subscribed_players: list[str] = []
         participant_finance_rows: list[dict[str, Any]] = []
+        booked_count = 0
+        roster_limit = MAX_PLAYERS + RESERVE_PLAYERS
 
-        # Проходим по всем проголосовавшим (основной состав + запасные)
-        for voter in yes_voters:
+        def append_participant_finance_row(
+            voter: VoterInfo,
+            *,
+            is_subscriber: bool,
+            charged_amount: int = 0,
+            charge_source: str = "none",
+            balance_before: int | None = None,
+            balance_after: int | None = None,
+        ) -> None:
+            participant_finance_rows.append(
+                {
+                    "player_id": voter.id,
+                    "name": voter.name,
+                    "is_subscriber": is_subscriber,
+                    "charged_amount": charged_amount,
+                    "charge_source": charge_source,
+                    "balance_before": balance_before,
+                    "balance_after": balance_after,
+                }
+            )
+
+        for index, voter in enumerate(yes_voters):
+            if index >= roster_limit:
+                booked_count += 1
+                append_participant_finance_row(
+                    voter, is_subscriber=voter.id in subs
+                )
+                logging.info(
+                    "  ⏭️  Игрок %s (ID: %s) на забронированном месте, списание пропущено",
+                    voter.name,
+                    voter.id,
+                )
+                continue
+
             # Проверяем, есть ли у игрока подписка
             if voter.id in subs:
                 subscribed_players.append(voter.name)
-                participant_finance_rows.append(
-                    {
-                        "player_id": voter.id,
-                        "name": voter.name,
-                        "is_subscriber": True,
-                        "charged_amount": 0,
-                        "charge_source": "subscription",
-                        "balance_before": None,
-                        "balance_after": None,
-                    }
+                append_participant_finance_row(
+                    voter,
+                    is_subscriber=True,
+                    charge_source="subscription",
                 )
                 logging.debug(
                     f"  ⏭️  Игрок {voter.name} (ID: {voter.id}) с подпиской, списание пропущено"
@@ -1762,16 +1794,13 @@ class PollService:
                     "new_balance": new_balance,
                 }
             )
-            participant_finance_rows.append(
-                {
-                    "player_id": voter.id,
-                    "name": voter.name,
-                    "is_subscriber": False,
-                    "charged_amount": cost,
-                    "charge_source": "single_game",
-                    "balance_before": old_balance,
-                    "balance_after": new_balance,
-                }
+            append_participant_finance_row(
+                voter,
+                is_subscriber=False,
+                charged_amount=cost,
+                charge_source="single_game",
+                balance_before=old_balance,
+                balance_after=new_balance,
             )
 
             logging.info(
@@ -1788,7 +1817,8 @@ class PollService:
         total_charged = len(charged_players) * cost
         logging.info(
             f"✅ Списание завершено: {len(charged_players)} игроков, "
-            f"итого {total_charged}₽. С подпиской: {len(subscribed_players)}"
+            f"итого {total_charged}₽. С подпиской: {len(subscribed_players)}. "
+            f"Забронированных без списания: {booked_count}"
         )
         return participant_finance_rows
 
