@@ -270,10 +270,12 @@ class TestPayCommand:
         assert bot.called
         method = bot.call_args.args[0]
         assert "Найдено несколько игроков" in method.text
+        assert "Alim B." in method.text
+        assert "<b>0 ₽</b>" in method.text
         assert isinstance(method.reply_markup, InlineKeyboardMarkup)
         buttons = method.reply_markup.inline_keyboard
         assert len(buttons) == 2
-        assert buttons[0][0].text == "Alim B. (ID: 1)"
+        assert buttons[0][0].text == "Alim B. (ID: 1, баланс: 0 ₽)"
         assert buttons[0][0].callback_data == "pay_select:1:500"
 
     @patch("src.handlers.get_player_balance")
@@ -562,9 +564,12 @@ class TestPlayerCommand:
         assert bot.called
         method = bot.call_args.args[0]
         assert "Найдено несколько игроков" in method.text
+        assert "Alim B." in method.text
+        assert "<b>0 ₽</b>" in method.text
         assert isinstance(method.reply_markup, InlineKeyboardMarkup)
         buttons = method.reply_markup.inline_keyboard
         assert len(buttons) == 2
+        assert buttons[0][0].text == "Alim B. (ID: 1, баланс: 0 ₽)"
         assert buttons[0][0].callback_data == "player_select:1"
         assert buttons[1][0].callback_data == "player_select:2"
 

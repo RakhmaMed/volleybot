@@ -148,6 +148,13 @@ def _format_player_detail(p: dict) -> str:
     return "\n".join(lines)
 
 
+def _format_player_choice_label(p: dict) -> str:
+    """Форматирует игрока для списков выбора с указанием баланса."""
+    display_name = p.get("fullname") or p.get("name") or f"ID: {p['id']}"
+    balance = int(p.get("balance", 0) or 0)
+    return f"{display_name} (ID: {p['id']}, баланс: {balance} ₽)"
+
+
 def _is_poll_enabled(template: PollTemplate) -> bool:
     """Возвращает признак активности шаблона опроса."""
     return int(template.get("enabled", 1) or 0) == 1
@@ -1229,14 +1236,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         return None
                     if len(players) > 1:
                         keyboard = []
-                        player_links = []
+                        player_lines = []
                         for p in players[:10]:  # Ограничим 10 игроками
-                            # Для кнопок используем простое текстовое представление
-                            p_name = (
-                                f"{p['fullname'] or p['name']} (ID: {p['id']})"
-                                if (p["fullname"] or p["name"])
-                                else f"ID: {p['id']}"
-                            )
+                            p_name = _format_player_choice_label(p)
                             callback_data = f"{callback_prefix}:{p['id']}:{amount}"
                             keyboard.append(
                                 [
@@ -1245,12 +1247,12 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                                     )
                                 ]
                             )
-                            # Для текста сообщения используем гиперссылки
-                            player_links.append(format_player_link(p))
+                            player_lines.append(
+                                f"• {format_player_link(p)} — <b>{int(p.get('balance', 0) or 0)} ₽</b>"
+                            )
 
                         reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-                        # Формируем список с гиперссылками
-                        players_list = "\n".join([f"• {link}" for link in player_links])
+                        players_list = "\n".join(player_lines)
                         await safe_reply(
                             message,
                             f"❓ Найдено несколько игроков ({len(players)}). Выберите нужного:\n\n{players_list}",
@@ -1572,13 +1574,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     return
                 # Несколько совпадений — клавиатура выбора
                 keyboard = []
-                player_links = []
+                player_lines = []
                 for p in players[:10]:
-                    p_name = (
-                        f"{p['fullname'] or p['name']} (ID: {p['id']})"
-                        if (p.get("fullname") or p.get("name"))
-                        else f"ID: {p['id']}"
-                    )
+                    p_name = _format_player_choice_label(p)
                     keyboard.append(
                         [
                             InlineKeyboardButton(
@@ -1587,9 +1585,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                             )
                         ]
                     )
-                    player_links.append(format_player_link(p))
+                    player_lines.append(
+                        f"• {format_player_link(p)} — <b>{int(p.get('balance', 0) or 0)} ₽</b>"
+                    )
                 reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-                players_list = "\n".join([f"• {link}" for link in player_links])
+                players_list = "\n".join(player_lines)
                 await safe_reply(
                     message,
                     f"❓ Найдено несколько игроков ({len(players)}). Выберите:\n\n{players_list}",
