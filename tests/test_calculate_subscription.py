@@ -109,8 +109,7 @@ class TestZeroMonthlyCost:
         votes = {"Среда": {1, 2, 3}}
         result = calculate_subscription(polls, votes)
 
-        assert len(result.hall_breakdown) == 1
-        assert result.hall_breakdown[0].per_person == 0
+        assert len(result.hall_breakdown) == 0
         assert result.subscriber_charges == []
 
 
@@ -154,7 +153,7 @@ class TestDynamicMonthlyRent:
         votes = {"Среда": {1}}
         result = calculate_subscription([poll], votes)
 
-        assert result.hall_breakdown[0].per_person == 0
+        assert len(result.hall_breakdown) == 0
         assert result.subscriber_charges == []
 
 
@@ -430,7 +429,7 @@ class TestMixedHalls:
 
         # Среда: per_person == 0
         hall_by_name = {h.name: h for h in result.hall_breakdown}
-        assert hall_by_name["Среда"].per_person == 0
+        assert "Среда" not in hall_by_name
 
         # Подписчики 10, 11 — только в бесплатном зале, не должно быть списаний
         charged_ids = {c.user_id for c in result.subscriber_charges}
@@ -525,7 +524,7 @@ class TestResultStructure:
         result = calculate_subscription(polls, votes)
 
         names = [h.name for h in result.hall_breakdown]
-        assert names == ["Среда", "Пятница", "Понедельник"]
+        assert names == ["Пятница", "Понедельник"]
 
     def test_subscriber_charges_sorted_by_user_id(self):
         """subscriber_charges отсортированы по user_id."""
@@ -660,7 +659,7 @@ class TestRealWorldScenario:
         result = calculate_subscription(polls, votes)
 
         hall_by_name = {h.name: h for h in result.hall_breakdown}
-        assert hall_by_name["Среда"].per_person == 0
+        assert "Среда" not in hall_by_name
         assert hall_by_name["Понедельник"].per_person == result.price_per_hall
         assert hall_by_name["Четверг"].per_person == result.price_per_hall
 
@@ -719,5 +718,5 @@ class TestNegativeMonthlyCost:
         votes = {"Глюк": {1, 2}}
         result = calculate_subscription(polls, votes)
 
-        assert result.hall_breakdown[0].per_person == 0
+        assert len(result.hall_breakdown) == 0
         assert result.subscriber_charges == []

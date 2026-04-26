@@ -111,7 +111,6 @@ def calculate_subscription(
         target_month = datetime.now().strftime("%Y-%m")
 
     hall_breakdown: list[HallBreakdown] = []
-    paid_hall_names: list[str] = []
 
     for template in paid_polls:
         name = str(template.get("name", ""))
@@ -122,9 +121,9 @@ def calculate_subscription(
         subs_set = votes_by_poll.get(name, set())
         num_subs = len(subs_set)
 
-        if monthly_rent > 0:
-            paid_hall_names.append(name)
-
+        if monthly_rent <= 0:
+            continue
+        
         hall_breakdown.append(
             HallBreakdown(
                 name=name,
@@ -136,16 +135,14 @@ def calculate_subscription(
             )
         )
 
-    total_rent = sum(h.monthly_rent for h in hall_breakdown if h.monthly_rent > 0)
-    total_games_across_halls = sum(
-        h.games_in_month for h in hall_breakdown if h.monthly_rent > 0
-    )
+    total_rent = sum(h.monthly_rent for h in hall_breakdown)
+    total_games_across_halls = sum(h.games_in_month for h in hall_breakdown)
 
     # --- 2. Классифицируем подписчиков: single-hall vs combo ---
     user_halls: dict[int, list[str]] = {}
-    for hall_name in paid_hall_names:
-        for uid in votes_by_poll.get(hall_name, set()):
-            user_halls.setdefault(uid, []).append(hall_name)
+    for hall in hall_breakdown:
+        for uid in votes_by_poll.get(hall.name, set()):
+            user_halls.setdefault(uid, []).append(hall.name)
 
     n_combo = sum(1 for halls in user_halls.values() if len(halls) >= 2)
     n_single = sum(1 for halls in user_halls.values() if len(halls) == 1)
@@ -183,7 +180,7 @@ def calculate_subscription(
 
     # --- 8. Заполняем per_person в hall_breakdown ---
     for h in hall_breakdown:
-        if h.monthly_rent > 0 and h.num_subs > 0:
+        if h.num_subs > 0:
             h.per_person = price_per_hall
 
     # --- 9. Формируем списания ---
