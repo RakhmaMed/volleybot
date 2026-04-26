@@ -22,7 +22,11 @@ TEST_MONTH = "2026-02"
 
 
 def calculate_subscription(
-    paid_polls, votes_by_poll, target_month: str = TEST_MONTH, fund_balance: int = 0
+    paid_polls,
+    votes_by_poll,
+    target_month: str = TEST_MONTH,
+    fund_balance: int = 0,
+    single_game_income_stats=None,
 ):
     """Обёртка для детерминированного месяца расчёта в тестах."""
     return _calculate_subscription(
@@ -30,18 +34,20 @@ def calculate_subscription(
         votes_by_poll,
         target_month=target_month,
         fund_balance=fund_balance,
+        single_game_income_stats=single_game_income_stats,
     )
 
 
 def _make_poll(
     name: str,
+    poll_id: int = 1,
     cost: int = 150,
     cost_per_game: int = 0,
     game_day: str = "tue",
 ) -> PollTemplate:
     """Фабрика для создания PollTemplate с минимальными полями."""
     return PollTemplate(
-        id=1,
+        id=poll_id,
         name=name,
         message=f"Игра {name}",
         open_day="mon",
@@ -482,7 +488,7 @@ class TestProjectedSavings:
         assert result.projected_savings == expected
 
     def test_expected_singles_income_formula(self):
-        """Проверяем формулу дохода от разовых игроков."""
+        """Без статистики используется fallback-формула дохода от разовых."""
         polls = [
             _make_poll("Понедельник", cost_per_game=1500),
             _make_poll("Четверг", cost_per_game=1500),
@@ -501,6 +507,78 @@ class TestProjectedSavings:
             * num_halls
             * SAFETY_K
         )
+        assert result.expected_singles_income == expected
+
+    def test_expected_singles_income_uses_per_hall_stats(self):
+        """При достаточной истории прогноз считается отдельно по каждому залу."""
+        polls = [
+            _make_poll(
+                "Понедельник",
+                poll_id=10,
+                cost_per_game=1500,
+                game_day="mon",
+            ),
+            _make_poll(
+                "Пятница",
+                poll_id=20,
+                cost_per_game=1500,
+                game_day="fri",
+            ),
+        ]
+        stats = {
+            "global": {
+                "games_count": 10,
+                "single_game_charges": 70,
+                "single_game_sum": 10500,
+                "avg_income_per_game": 1050.0,
+            },
+            "by_poll_template_id": {
+                10: {
+                    "games_count": 2,
+                    "single_game_charges": 10,
+                    "single_game_sum": 1600,
+                    "avg_income_per_game": 800.0,
+                },
+                20: {
+                    "games_count": 2,
+                    "single_game_charges": 16,
+                    "single_game_sum": 2400,
+                    "avg_income_per_game": 1200.0,
+                },
+            },
+        }
+
+        result = calculate_subscription(
+            polls,
+            {"Понедельник": {1}, "Пятница": {2}},
+            target_month="2026-05",
+            single_game_income_stats=stats,
+        )
+
+        # Май 2026: 4 понедельника и 5 пятниц.
+        expected = round(((800 * 4) + (1200 * 5)) * SAFETY_K)
+        assert result.expected_singles_income == expected
+
+    def test_expected_singles_income_falls_back_to_global_stats(self):
+        """Новый зал без истории использует общий средний доход по платным играм."""
+        polls = [_make_poll("Новый зал", poll_id=99, cost_per_game=1500)]
+        stats = {
+            "global": {
+                "games_count": 4,
+                "single_game_charges": 24,
+                "single_game_sum": 3600,
+                "avg_income_per_game": 900.0,
+            },
+            "by_poll_template_id": {},
+        }
+
+        result = calculate_subscription(
+            polls,
+            {"Новый зал": {1}},
+            single_game_income_stats=stats,
+        )
+
+        expected = round(900 * GAMES_PER_MONTH * SAFETY_K)
         assert result.expected_singles_income == expected
 
 
@@ -564,6 +642,7 @@ class TestResultStructure:
         assert isinstance(result.projected_savings, int)
 
         h = result.paid_polls[0]
+        assert isinstance(h.poll_template_id, int)
         assert isinstance(h.name, str)
         assert isinstance(h.cost_per_game, int)
         assert isinstance(h.num_subs, int)

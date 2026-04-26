@@ -20,13 +20,11 @@ from aiogram.exceptions import (
 
 from ..config import (
     ADMIN_USER_ID,
-    MAX_PLAYERS,
     MIN_PLAYERS,
     PAYMENT_BANK,
     PAYMENT_NAME,
     PAYMENT_PHONE,
     POLL_OPTIONS,
-    RESERVE_PLAYERS,
 )
 from ..db import (
     POLL_STATE_KEY,
@@ -42,6 +40,7 @@ from ..db import (
     get_open_monthly_game,
     get_player_balance,
     get_poll_templates,
+    get_single_game_income_stats,
     load_monthly_votes,
     load_state,
     save_game_participants,
@@ -72,6 +71,9 @@ from ..utils import (
 # ── Константы бюджетного расчёта абонемента ──────────────────────────────────
 AVG_SINGLES_PER_GAME = 7  # Среднее кол-во разовых игроков за игру
 SINGLE_GAME_PRICE = 150  # Цена разового входа (руб.)
+SINGLE_GAME_STATS_MONTHS_BACK = 3  # Окно истории для прогноза разовых игроков
+HALL_SINGLE_GAME_STATS_MIN_GAMES = 2  # Минимум игр для статистики конкретного зала
+GLOBAL_SINGLE_GAME_STATS_MIN_GAMES = 4  # Минимум игр для общей статистики
 GAMES_PER_MONTH = 4  # fallback для '*'/некорректного дня
 SAFETY_K = 0.7  # Коэффициент надёжности (риск неявки)
 TARGET_GROWTH = 1000  # Желаемый прирост казны в месяц (руб.)
@@ -88,6 +90,7 @@ def calculate_subscription(
     votes_by_poll: dict[str, set[int]],
     target_month: str | None = None,
     fund_balance: int = 0,
+    single_game_income_stats: dict[str, Any] | None = None,
 ) -> SubscriptionResult:
     """
     Бюджетный расчёт стоимости абонемента без побочных эффектов.
@@ -101,6 +104,7 @@ def calculate_subscription(
         votes_by_poll: маппинг ``poll_name → {user_id, …}`` из голосования.
         target_month: месяц расчёта в формате ``YYYY-MM``.
         fund_balance: текущий баланс казны (влияет на целевую сумму сбора).
+        single_game_income_stats: исторический доход с разовых игроков из БД.
 
     Returns:
         :class:`SubscriptionResult` с разбивкой по залам и списаниями по
@@ -114,6 +118,7 @@ def calculate_subscription(
 
     for template in paid_polls:
         name = str(template.get("name", ""))
+        poll_template_id = template["id"]
         cost_per_game = int(template.get("cost_per_game", 0) or 0)
         game_day = str(template.get("game_day", "*") or "*")
         games_in_month = count_games_in_month(game_day, target_month, GAMES_PER_MONTH)
@@ -123,9 +128,10 @@ def calculate_subscription(
 
         if monthly_rent <= 0:
             continue
-        
+
         paid_poll_rows.append(
             HallBreakdown(
+                poll_template_id=poll_template_id,
                 name=name,
                 cost_per_game=cost_per_game,
                 games_in_month=games_in_month,
@@ -136,7 +142,6 @@ def calculate_subscription(
         )
 
     total_rent = sum(h.monthly_rent for h in paid_poll_rows)
-    total_games_across_halls = sum(h.games_in_month for h in paid_poll_rows)
 
     # --- 2. Классифицируем подписчиков: single-hall vs combo ---
     user_halls: dict[int, list[str]] = {}
@@ -148,9 +153,58 @@ def calculate_subscription(
     n_single = sum(1 for halls in user_halls.values() if len(halls) == 1)
 
     # --- 3. Прогноз дохода с разовых игроков ---
-    expected_singles_income = round(
-        AVG_SINGLES_PER_GAME * SINGLE_GAME_PRICE * total_games_across_halls * SAFETY_K
+    # Историческая статистика приходит из БД как средний доход с разовых за одну
+    # закрытую платную игру. Нам нужен прогноз на будущий месяц, поэтому для
+    # каждого зала умножаем его средний доход за игру на число игр этого зала.
+    #
+    # Fallback сохраняет старое поведение: если истории недостаточно, считаем,
+    # что на каждой игре будет AVG_SINGLES_PER_GAME разовых игроков по
+    # SINGLE_GAME_PRICE рублей.
+    fallback_income_per_game = AVG_SINGLES_PER_GAME * SINGLE_GAME_PRICE
+    global_stats = (
+        single_game_income_stats.get("global", {})
+        if isinstance(single_game_income_stats, dict)
+        else {}
     )
+    by_poll_template_id = (
+        single_game_income_stats.get("by_poll_template_id", {})
+        if isinstance(single_game_income_stats, dict)
+        else {}
+    )
+    global_games_count = int(global_stats.get("games_count", 0) or 0)
+    global_avg_income = float(global_stats.get("avg_income_per_game", 0.0) or 0.0)
+
+    expected_singles_income_before_safety = 0.0
+    for hall in paid_poll_rows:
+        avg_income_per_game = fallback_income_per_game
+        hall_stats = by_poll_template_id.get(hall.poll_template_id)
+
+        # Приоритет 1: статистика конкретного зала. Она точнее общей, потому что
+        # понедельник и пятница могут стабильно собирать разное число разовых
+        # игроков. Используем её только после минимального числа закрытых игр,
+        # чтобы одна случайная игра не задавала цену абонемента.
+        hall_games_count = (
+            int(hall_stats.get("games_count", 0) or 0) if hall_stats else 0
+        )
+        if hall_games_count >= HALL_SINGLE_GAME_STATS_MIN_GAMES:
+            avg_income_per_game = float(
+                hall_stats.get("avg_income_per_game", 0.0) or 0.0
+            )
+        # Приоритет 2: общая статистика по платным играм. Это полезно для новых
+        # залов без собственной истории, но только когда общая выборка уже не
+        # совсем мала.
+        elif global_games_count >= GLOBAL_SINGLE_GAME_STATS_MIN_GAMES:
+            avg_income_per_game = global_avg_income
+
+        # На этом шаге сумма ещё без SAFETY_K: это "средний исторический доход",
+        # растянутый на календарь будущего месяца для конкретного зала.
+        expected_singles_income_before_safety += (
+            avg_income_per_game * hall.games_in_month
+        )
+
+    # SAFETY_K применяем один раз ко всему прогнозу как консервативную скидку на
+    # риск неявок/слабого месяца. Старый расчет делал то же самое.
+    expected_singles_income = round(expected_singles_income_before_safety * SAFETY_K)
 
     # --- 4. Корректировка целевой суммы по состоянию казны ---
     if fund_balance >= SAVINGS_BUFFER * 1.5:
@@ -1316,9 +1370,17 @@ class PollService:
         total_voters = len(data.monthly_votes)
         target_month = self._resolve_target_month(data)
         fund_balance = get_fund_balance()
+        single_game_income_stats = get_single_game_income_stats(
+            months_back=SINGLE_GAME_STATS_MONTHS_BACK,
+            before_month=target_month,
+        )
 
         result = calculate_subscription(
-            paid_polls, votes_by_poll, target_month, fund_balance
+            paid_polls,
+            votes_by_poll,
+            target_month,
+            fund_balance,
+            single_game_income_stats,
         )
         # Касса не меняется при закрытии опроса — уменьшается только при оплате залов
 

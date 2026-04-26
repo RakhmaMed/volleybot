@@ -367,6 +367,10 @@ EXPECTED_TABLE_COLUMNS: dict[str, set[str]] = {
     },
 }
 
+EXPECTED_PRIMARY_KEYS: dict[str, list[str]] = {
+    "poll_templates": ["id"],
+}
+
 
 def _ensure_current_schema(conn: sqlite3.Connection) -> None:
     existing_tables = {
@@ -399,16 +403,24 @@ def _ensure_current_schema(conn: sqlite3.Connection) -> None:
 def _validate_schema_strict(conn: sqlite3.Connection) -> list[str]:
     mismatches: list[str] = []
     for table_name, expected_columns in EXPECTED_TABLE_COLUMNS.items():
-        actual_columns = {
-            row[1]
-            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-        }
+        table_info = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        actual_columns = {row[1] for row in table_info}
         missing_columns = sorted(expected_columns - actual_columns)
         unexpected_columns = sorted(actual_columns - expected_columns)
         if missing_columns:
             mismatches.append(f"{table_name}: missing columns {missing_columns}")
         if unexpected_columns:
             mismatches.append(f"{table_name}: unexpected columns {unexpected_columns}")
+        expected_primary_key = EXPECTED_PRIMARY_KEYS.get(table_name)
+        if expected_primary_key is not None:
+            actual_primary_key = [
+                row[1] for row in sorted(table_info, key=lambda item: item[5]) if row[5]
+            ]
+            if actual_primary_key != expected_primary_key:
+                mismatches.append(
+                    f"{table_name}: primary key {actual_primary_key}, "
+                    f"expected {expected_primary_key}"
+                )
     return mismatches
 
 
@@ -1588,6 +1600,116 @@ def _month_bounds(month: str | None) -> tuple[str | None, str | None]:
     else:
         end = f"{year:04d}-{month_num + 1:02d}-01"
     return start, end
+
+
+def _shift_month(month: str, delta: int) -> str:
+    """Сдвигает месяц ``YYYY-MM`` на delta месяцев."""
+    year_str, month_str = month.split("-")
+    year = int(year_str)
+    month_num = int(month_str)
+    month_index = year * 12 + (month_num - 1) + delta
+    shifted_year = month_index // 12
+    shifted_month = month_index % 12 + 1
+    return f"{shifted_year:04d}-{shifted_month:02d}"
+
+
+def _single_game_income_stats_empty() -> dict[str, Any]:
+    return {
+        "global": {
+            "games_count": 0,
+            "single_game_charges": 0,
+            "single_game_sum": 0,
+            "avg_income_per_game": 0.0,
+        },
+        "by_poll_template_id": {},
+    }
+
+
+def get_single_game_income_stats(
+    months_back: int = 3, before_month: str | None = None
+) -> dict[str, Any]:
+    """
+    Возвращает средний доход с разовых игроков по закрытым платным играм.
+
+    Статистика считается только по regular-играм с положительной стоимостью
+    аренды. Игроки из листа ожидания не учитываются в доходе с разовых.
+    """
+    try:
+        if months_back < 1:
+            months_back = 1
+        before = before_month or datetime.now(timezone.utc).strftime("%Y-%m")
+        start_month = _shift_month(before, -months_back)
+        start, _ = _month_bounds(start_month)
+        end, _ = _month_bounds(before)
+
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            params: list[Any] = [start, end]
+            base_where = """
+                g.kind = 'regular'
+                AND g.status = 'closed'
+                AND g.cost_per_game_snapshot > 0
+                AND g.closed_at >= ?
+                AND g.closed_at < ?
+            """
+            join_sql = """
+                LEFT JOIN game_participants gp
+                    ON gp.game_poll_id = g.poll_id
+                    AND gp.charge_source = 'single_game'
+                    AND gp.roster_bucket != 'booked'
+            """
+            global_row = conn.execute(
+                f"""
+                SELECT
+                    COUNT(DISTINCT g.poll_id) AS games_count,
+                    COUNT(gp.player_id) AS single_game_charges,
+                    COALESCE(SUM(gp.charged_amount), 0) AS single_game_sum
+                FROM games g
+                {join_sql}
+                WHERE {base_where}
+                """,
+                params,
+            ).fetchone()
+            hall_rows = conn.execute(
+                f"""
+                SELECT
+                    g.poll_template_id,
+                    COUNT(DISTINCT g.poll_id) AS games_count,
+                    COUNT(gp.player_id) AS single_game_charges,
+                    COALESCE(SUM(gp.charged_amount), 0) AS single_game_sum
+                FROM games g
+                {join_sql}
+                WHERE {base_where}
+                  AND g.poll_template_id IS NOT NULL
+                GROUP BY g.poll_template_id
+                """,
+                params,
+            ).fetchall()
+
+        def build_row(row: sqlite3.Row | None) -> dict[str, Any]:
+            games_count = int(row["games_count"] or 0) if row else 0
+            single_game_sum = int(row["single_game_sum"] or 0) if row else 0
+            return {
+                "games_count": games_count,
+                "single_game_charges": int(row["single_game_charges"] or 0)
+                if row
+                else 0,
+                "single_game_sum": single_game_sum,
+                "avg_income_per_game": (
+                    single_game_sum / games_count if games_count > 0 else 0.0
+                ),
+            }
+
+        return {
+            "global": build_row(global_row),
+            "by_poll_template_id": {
+                int(row["poll_template_id"]): build_row(row) for row in hall_rows
+            },
+        }
+    except (sqlite3.Error, ValueError):
+        logging.exception("❌ Ошибка при получении статистики разовых игроков")
+        return _single_game_income_stats_empty()
 
 
 def get_stats_summary(month: str | None = None) -> dict[str, Any]:

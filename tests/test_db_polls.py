@@ -4,6 +4,7 @@ import pytest
 
 from src.db import (
     _connect,
+    _create_current_schema,
     close_game,
     create_game,
     get_open_game_by_template_id,
@@ -11,12 +12,48 @@ from src.db import (
     get_player_stats,
     get_poll_stats,
     get_poll_templates,
+    get_single_game_income_stats,
     get_stats_summary,
     init_db,
     save_game_participants,
     save_monthly_vote,
     save_poll_template,
 )
+
+
+def _insert_player(player_id: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO players (id, name, fullname) VALUES (?, ?, ?)",
+            (player_id, f"user{player_id}", f"User {player_id}"),
+        )
+        conn.commit()
+
+
+def _create_closed_game_with_participants(
+    *,
+    poll_id: str,
+    template_id: int,
+    closed_at: str,
+    cost_per_game_snapshot: int,
+    participants: list[dict],
+) -> None:
+    for participant in participants:
+        _insert_player(int(participant["player_id"]))
+    create_game(
+        poll_id=poll_id,
+        kind="regular",
+        status="closed",
+        poll_template_id=template_id,
+        poll_name_snapshot=f"Зал {template_id}",
+        question_snapshot="Играем?",
+        chat_id=1,
+        poll_message_id=100,
+        opened_at=closed_at,
+        cost_per_game_snapshot=cost_per_game_snapshot,
+    )
+    close_game(poll_id, closed_at=closed_at, final_message_id=101)
+    save_game_participants(poll_id, participants)
 
 
 class TestDBPolls:
@@ -144,6 +181,169 @@ class TestDBPolls:
         assert summary["games_count"] == 1
         assert poll_stats["games_count"] == 1
         assert player_stats["games_total"] == 1
+
+    def test_single_game_income_stats_aggregates_paid_games(self, temp_db):
+        init_db()
+        save_poll_template(
+            {
+                "name": "Понедельник",
+                "message": "Игра",
+                "cost": 150,
+                "cost_per_game": 1500,
+            }
+        )
+        save_poll_template(
+            {
+                "name": "Пятница",
+                "message": "Игра",
+                "cost": 150,
+                "cost_per_game": 1500,
+            }
+        )
+        monday, friday = get_poll_templates()
+
+        _create_closed_game_with_participants(
+            poll_id="mon-1",
+            template_id=int(monday["id"]),
+            closed_at="2026-03-02T10:00:00+00:00",
+            cost_per_game_snapshot=1500,
+            participants=[
+                {
+                    "player_id": 1,
+                    "roster_bucket": "main",
+                    "sort_order": 1,
+                    "charged_amount": 150,
+                    "charge_source": "single_game",
+                },
+                {
+                    "player_id": 2,
+                    "roster_bucket": "main",
+                    "sort_order": 2,
+                    "charged_amount": 150,
+                    "charge_source": "single_game",
+                },
+                {
+                    "player_id": 3,
+                    "roster_bucket": "main",
+                    "sort_order": 3,
+                    "is_subscriber": True,
+                    "charged_amount": 0,
+                    "charge_source": "subscription",
+                },
+            ],
+        )
+        _create_closed_game_with_participants(
+            poll_id="mon-2",
+            template_id=int(monday["id"]),
+            closed_at="2026-03-09T10:00:00+00:00",
+            cost_per_game_snapshot=1500,
+            participants=[
+                {
+                    "player_id": 4,
+                    "roster_bucket": "reserve",
+                    "sort_order": 1,
+                    "charged_amount": 150,
+                    "charge_source": "single_game",
+                },
+                {
+                    "player_id": 5,
+                    "roster_bucket": "booked",
+                    "sort_order": 2,
+                    "charged_amount": 150,
+                    "charge_source": "single_game",
+                },
+            ],
+        )
+        _create_closed_game_with_participants(
+            poll_id="fri-1",
+            template_id=int(friday["id"]),
+            closed_at="2026-03-06T10:00:00+00:00",
+            cost_per_game_snapshot=1500,
+            participants=[
+                {
+                    "player_id": 6,
+                    "roster_bucket": "main",
+                    "sort_order": 1,
+                    "charged_amount": 150,
+                    "charge_source": "single_game",
+                }
+            ],
+        )
+        _create_closed_game_with_participants(
+            poll_id="free-1",
+            template_id=int(friday["id"]),
+            closed_at="2026-03-13T10:00:00+00:00",
+            cost_per_game_snapshot=0,
+            participants=[
+                {
+                    "player_id": 7,
+                    "roster_bucket": "main",
+                    "sort_order": 1,
+                    "charged_amount": 150,
+                    "charge_source": "single_game",
+                }
+            ],
+        )
+
+        stats = get_single_game_income_stats(months_back=3, before_month="2026-04")
+
+        assert stats["global"]["games_count"] == 3
+        assert stats["global"]["single_game_charges"] == 4
+        assert stats["global"]["single_game_sum"] == 600
+        assert stats["global"]["avg_income_per_game"] == 200
+        monday_stats = stats["by_poll_template_id"][int(monday["id"])]
+        assert monday_stats["games_count"] == 2
+        assert monday_stats["single_game_charges"] == 3
+        assert monday_stats["single_game_sum"] == 450
+        assert monday_stats["avg_income_per_game"] == 225
+
+    def test_single_game_income_stats_respects_before_month(self, temp_db):
+        init_db()
+        save_poll_template(
+            {
+                "name": "Пятница",
+                "message": "Игра",
+                "cost": 150,
+                "cost_per_game": 1500,
+            }
+        )
+        template = get_poll_templates()[0]
+
+        _create_closed_game_with_participants(
+            poll_id="old-game",
+            template_id=int(template["id"]),
+            closed_at="2026-03-06T10:00:00+00:00",
+            cost_per_game_snapshot=1500,
+            participants=[
+                {
+                    "player_id": 1,
+                    "roster_bucket": "main",
+                    "sort_order": 1,
+                    "charged_amount": 150,
+                    "charge_source": "single_game",
+                }
+            ],
+        )
+        _create_closed_game_with_participants(
+            poll_id="target-month-game",
+            template_id=int(template["id"]),
+            closed_at="2026-04-03T10:00:00+00:00",
+            cost_per_game_snapshot=1500,
+            participants=[
+                {
+                    "player_id": 2,
+                    "roster_bucket": "main",
+                    "sort_order": 1,
+                    "charged_amount": 300,
+                    "charge_source": "single_game",
+                }
+            ],
+        )
+
+        stats = get_single_game_income_stats(months_back=3, before_month="2026-04")
+
+        assert stats["global"]["games_count"] == 1
+        assert stats["global"]["single_game_sum"] == 150
 
     def test_save_and_get_poll_templates(self, temp_db):
         """Проверка сохранения и получения шаблона опроса с подписчиками."""
@@ -478,4 +678,34 @@ class TestDBPolls:
             conn.commit()
 
         with pytest.raises(sqlite3.DatabaseError, match="games:"):
+            init_db()
+
+    def test_init_db_fails_when_poll_template_id_is_not_primary_key(self, temp_db):
+        """init_db падает, если poll_templates.id не является primary key."""
+        with _connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE poll_templates (
+                    id INTEGER,
+                    name TEXT NOT NULL UNIQUE,
+                    place TEXT,
+                    message TEXT NOT NULL,
+                    open_day TEXT NOT NULL DEFAULT '*',
+                    open_hour_utc INTEGER NOT NULL DEFAULT 0,
+                    open_minute_utc INTEGER NOT NULL DEFAULT 0,
+                    game_day TEXT NOT NULL DEFAULT '*',
+                    game_hour_utc INTEGER NOT NULL DEFAULT 0,
+                    game_minute_utc INTEGER NOT NULL DEFAULT 0,
+                    cost INTEGER NOT NULL DEFAULT 0,
+                    cost_per_game INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            _create_current_schema(conn)
+            conn.commit()
+
+        with pytest.raises(sqlite3.DatabaseError, match="poll_templates: primary key"):
             init_db()

@@ -56,6 +56,7 @@ class PollCreationSpec:
 class HallBreakdown:
     """Расчёт стоимости одного зала."""
 
+    poll_template_id: int
     name: str
     cost_per_game: int
     games_in_month: int
