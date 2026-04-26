@@ -77,7 +77,7 @@ class SubscriberCharge:
 class SubscriptionResult:
     """Полный результат расчёта абонемента."""
 
-    hall_breakdown: list[HallBreakdown]
+    paid_polls: list[HallBreakdown]
     subscriber_charges: list[SubscriberCharge]
     price_per_hall: int = 0          # Единая цена абонемента за 1 зал (400-500 руб.)
     combo_price: int = 0             # Комбо-цена (2+ зала, со скидкой)

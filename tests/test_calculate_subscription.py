@@ -64,7 +64,7 @@ class TestEmptyInputs:
     def test_no_paid_polls(self):
         """Нет платных опросов — пустой результат."""
         result = calculate_subscription([], {})
-        assert result.hall_breakdown == []
+        assert result.paid_polls == []
         assert result.subscriber_charges == []
         assert result.price_per_hall == DEFAULT_SUB_PRICE
         assert (
@@ -77,8 +77,8 @@ class TestEmptyInputs:
         polls = [_make_poll("Пятница", cost_per_game=1500)]
         result = calculate_subscription(polls, {})
 
-        assert len(result.hall_breakdown) == 1
-        h = result.hall_breakdown[0]
+        assert len(result.paid_polls) == 1
+        h = result.paid_polls[0]
         assert h.name == "Пятница"
         assert h.cost_per_game == 1500
         assert h.num_subs == 0
@@ -92,8 +92,8 @@ class TestEmptyInputs:
         polls = [_make_poll("Пятница", cost_per_game=1500)]
         result = calculate_subscription(polls, {"Пятница": set()})
 
-        assert result.hall_breakdown[0].num_subs == 0
-        assert result.hall_breakdown[0].per_person == 0
+        assert result.paid_polls[0].num_subs == 0
+        assert result.paid_polls[0].per_person == 0
         assert result.subscriber_charges == []
 
 
@@ -109,7 +109,7 @@ class TestZeroMonthlyCost:
         votes = {"Среда": {1, 2, 3}}
         result = calculate_subscription(polls, votes)
 
-        assert len(result.hall_breakdown) == 0
+        assert len(result.paid_polls) == 0
         assert result.subscriber_charges == []
 
 
@@ -125,16 +125,16 @@ class TestDynamicMonthlyRent:
             polls, {"Понедельник": {1}}, target_month="2026-03"
         )
 
-        assert feb.hall_breakdown[0].games_in_month == 4
-        assert feb.hall_breakdown[0].monthly_rent == 6000
-        assert mar.hall_breakdown[0].games_in_month == 5
-        assert mar.hall_breakdown[0].monthly_rent == 7500
+        assert feb.paid_polls[0].games_in_month == 4
+        assert feb.paid_polls[0].monthly_rent == 6000
+        assert mar.paid_polls[0].games_in_month == 5
+        assert mar.paid_polls[0].monthly_rent == 7500
 
     def test_wildcard_game_day_uses_default_four(self):
         polls = [_make_poll("Тест", cost_per_game=1500, game_day="*")]
         result = calculate_subscription(polls, {"Тест": {1}}, target_month="2026-03")
-        assert result.hall_breakdown[0].games_in_month == 4
-        assert result.hall_breakdown[0].monthly_rent == 6000
+        assert result.paid_polls[0].games_in_month == 4
+        assert result.paid_polls[0].monthly_rent == 6000
 
     def test_cost_per_game_missing(self):
         """Зал без поля cost_per_game (по умолчанию 0)."""
@@ -153,7 +153,7 @@ class TestDynamicMonthlyRent:
         votes = {"Среда": {1}}
         result = calculate_subscription([poll], votes)
 
-        assert len(result.hall_breakdown) == 0
+        assert len(result.paid_polls) == 0
         assert result.subscriber_charges == []
 
 
@@ -237,7 +237,7 @@ class TestPriceRange:
         result = calculate_subscription(polls, votes)
 
         paid_halls = [
-            h for h in result.hall_breakdown if h.cost_per_game > 0 and h.num_subs > 0
+            h for h in result.paid_polls if h.cost_per_game > 0 and h.num_subs > 0
         ]
         prices = {h.per_person for h in paid_halls}
         assert len(prices) == 1  # все цены одинаковые
@@ -428,7 +428,7 @@ class TestMixedHalls:
         result = calculate_subscription(polls, votes)
 
         # Среда: per_person == 0
-        hall_by_name = {h.name: h for h in result.hall_breakdown}
+        hall_by_name = {h.name: h for h in result.paid_polls}
         assert "Среда" not in hall_by_name
 
         # Подписчики 10, 11 — только в бесплатном зале, не должно быть списаний
@@ -475,7 +475,7 @@ class TestProjectedSavings:
 
         total_sub_income = sum(c.total for c in result.subscriber_charges)
         total_rent = sum(
-            h.monthly_rent for h in result.hall_breakdown if h.monthly_rent > 0
+            h.monthly_rent for h in result.paid_polls if h.monthly_rent > 0
         )
         expected = fund + total_sub_income + result.expected_singles_income - total_rent
 
@@ -510,8 +510,8 @@ class TestProjectedSavings:
 class TestResultStructure:
     """Проверка корректности структуры результата."""
 
-    def test_hall_breakdown_order_matches_input(self):
-        """hall_breakdown сохраняет порядок входных polls."""
+    def test_paid_polls_order_matches_input(self):
+        """paid_polls сохраняет порядок входных платных polls."""
         polls = [
             _make_poll("Среда", cost_per_game=0),
             _make_poll("Пятница", cost_per_game=1500),
@@ -523,7 +523,7 @@ class TestResultStructure:
         }
         result = calculate_subscription(polls, votes)
 
-        names = [h.name for h in result.hall_breakdown]
+        names = [h.name for h in result.paid_polls]
         assert names == ["Пятница", "Понедельник"]
 
     def test_subscriber_charges_sorted_by_user_id(self):
@@ -563,7 +563,7 @@ class TestResultStructure:
         assert isinstance(result.expected_singles_income, int)
         assert isinstance(result.projected_savings, int)
 
-        h = result.hall_breakdown[0]
+        h = result.paid_polls[0]
         assert isinstance(h.name, str)
         assert isinstance(h.cost_per_game, int)
         assert isinstance(h.num_subs, int)
@@ -658,7 +658,7 @@ class TestRealWorldScenario:
         }
         result = calculate_subscription(polls, votes)
 
-        hall_by_name = {h.name: h for h in result.hall_breakdown}
+        hall_by_name = {h.name: h for h in result.paid_polls}
         assert "Среда" not in hall_by_name
         assert hall_by_name["Понедельник"].per_person == result.price_per_hall
         assert hall_by_name["Четверг"].per_person == result.price_per_hall
@@ -689,7 +689,7 @@ class TestVotePollMismatch:
         assert 3 not in charges_by_id
 
     def test_poll_without_votes(self):
-        """Платный опрос без голосов — в hall_breakdown, но без списаний."""
+        """Платный опрос без голосов — в paid_polls, но без списаний."""
         polls = [
             _make_poll("Понедельник", cost_per_game=1500),
             _make_poll("Пятница", cost_per_game=250),
@@ -697,7 +697,7 @@ class TestVotePollMismatch:
         votes = {"Пятница": {1, 2}}
         result = calculate_subscription(polls, votes)
 
-        hall_by_name = {h.name: h for h in result.hall_breakdown}
+        hall_by_name = {h.name: h for h in result.paid_polls}
         assert hall_by_name["Понедельник"].num_subs == 0
         assert hall_by_name["Понедельник"].per_person == 0
 
@@ -718,5 +718,5 @@ class TestNegativeMonthlyCost:
         votes = {"Глюк": {1, 2}}
         result = calculate_subscription(polls, votes)
 
-        assert len(result.hall_breakdown) == 0
+        assert len(result.paid_polls) == 0
         assert result.subscriber_charges == []

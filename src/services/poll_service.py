@@ -97,7 +97,7 @@ def calculate_subscription(
     Подписчики на 2+ зала получают комбо-скидку (~15%).
 
     Args:
-        paid_polls: шаблоны платных опросов (``cost > 0``).
+        paid_polls: шаблоны залов, участвующих в расчёте абонемента.
         votes_by_poll: маппинг ``poll_name → {user_id, …}`` из голосования.
         target_month: месяц расчёта в формате ``YYYY-MM``.
         fund_balance: текущий баланс казны (влияет на целевую сумму сбора).
@@ -110,7 +110,7 @@ def calculate_subscription(
     if not target_month:
         target_month = datetime.now().strftime("%Y-%m")
 
-    hall_breakdown: list[HallBreakdown] = []
+    paid_poll_rows: list[HallBreakdown] = []
 
     for template in paid_polls:
         name = str(template.get("name", ""))
@@ -124,7 +124,7 @@ def calculate_subscription(
         if monthly_rent <= 0:
             continue
         
-        hall_breakdown.append(
+        paid_poll_rows.append(
             HallBreakdown(
                 name=name,
                 cost_per_game=cost_per_game,
@@ -135,12 +135,12 @@ def calculate_subscription(
             )
         )
 
-    total_rent = sum(h.monthly_rent for h in hall_breakdown)
-    total_games_across_halls = sum(h.games_in_month for h in hall_breakdown)
+    total_rent = sum(h.monthly_rent for h in paid_poll_rows)
+    total_games_across_halls = sum(h.games_in_month for h in paid_poll_rows)
 
     # --- 2. Классифицируем подписчиков: single-hall vs combo ---
     user_halls: dict[int, list[str]] = {}
-    for hall in hall_breakdown:
+    for hall in paid_poll_rows:
         for uid in votes_by_poll.get(hall.name, set()):
             user_halls.setdefault(uid, []).append(hall.name)
 
@@ -178,8 +178,8 @@ def calculate_subscription(
     # --- 7. Комбо-цена ---
     combo_price = round((price_per_hall * COMBO_DISCOUNT_COEFF) / 10) * 10
 
-    # --- 8. Заполняем per_person в hall_breakdown ---
-    for h in hall_breakdown:
+    # --- 8. Заполняем per_person в paid_polls ---
+    for h in paid_poll_rows:
         if h.num_subs > 0:
             h.per_person = price_per_hall
 
@@ -203,7 +203,7 @@ def calculate_subscription(
     )
 
     return SubscriptionResult(
-        hall_breakdown=hall_breakdown,
+        paid_polls=paid_poll_rows,
         subscriber_charges=subscriber_charges,
         price_per_hall=price_per_hall,
         combo_price=combo_price,
@@ -1482,7 +1482,7 @@ class PollService:
     def _format_hall_summary(result: SubscriptionResult) -> str:
         """Форматирует разбивку по залам в HTML."""
         lines: list[str] = []
-        for h in result.hall_breakdown:
+        for h in result.paid_polls:
             if h.monthly_rent > 0 and h.num_subs > 0:
                 lines.append(
                     f"• {escape_html(h.name)}: {h.cost_per_game} ₽ × {h.games_in_month} = {h.monthly_rent} ₽, "

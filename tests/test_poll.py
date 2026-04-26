@@ -421,7 +421,7 @@ async def test_close_monthly_subscription_uses_fixed_target_month(temp_db):
         patch("src.services.poll_service.get_fund_balance", return_value=0),
         patch(
             "src.services.poll_service.calculate_subscription",
-            return_value=SubscriptionResult(hall_breakdown=[], subscriber_charges=[]),
+            return_value=SubscriptionResult(paid_polls=[], subscriber_charges=[]),
         ) as mock_calculate,
         patch.object(service, "_apply_subscription_charges", return_value=[]),
         patch("src.services.poll_service.close_game"),

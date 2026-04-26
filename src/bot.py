@@ -21,6 +21,7 @@ from aiohttp.web import Request, StreamResponse, middleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from .config import (
+    ADMIN_USER_ID,
     CHAT_ID,
     LOG_FORMAT,
     LOG_LEVEL,
@@ -33,7 +34,7 @@ from .config import (
     WEBHOOK_SECRET,
     WEBHOOK_URL,
 )
-from .db import cleanup_old_backups, create_backup, init_db
+from .db import cleanup_old_backups, create_backup, get_poll_templates, init_db
 from .handlers import register_handlers, setup_bot_commands
 from .scheduler import setup_scheduler
 from .services import AdminService, BotStateService, PollService
@@ -47,6 +48,42 @@ logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format=LOG_FORMAT,
 )
+
+
+async def _notify_admin(bot: Bot, text: str) -> None:
+    """Отправляет служебное уведомление админу, если он настроен."""
+    if ADMIN_USER_ID is None:
+        logging.debug("ADMIN_USER_ID не задан, служебное уведомление пропущено")
+        return
+
+    @retry_async(
+        (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError),
+        tries=3,
+        delay=2,
+        backoff=2.0,
+        max_delay=8.0,
+    )
+    async def send_with_retry() -> None:
+        await bot.send_message(chat_id=ADMIN_USER_ID, text=text)
+
+    try:
+        await send_with_retry()
+    except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
+        logging.exception("Не удалось отправить служебное уведомление админу")
+
+
+def _find_inconsistent_poll_templates() -> list[str]:
+    """Возвращает список шаблонов с неконсистентными cost/cost_per_game."""
+    inconsistent: list[str] = []
+    for template in get_poll_templates():
+        cost = int(template.get("cost", 0) or 0)
+        cost_per_game = int(template.get("cost_per_game", 0) or 0)
+        if cost_per_game == 0 and cost != 0:
+            name = str(template.get("name", ""))
+            inconsistent.append(
+                f"• {name}: cost={cost}, cost_per_game={cost_per_game}"
+            )
+    return inconsistent
 
 
 async def on_startup(
@@ -70,6 +107,19 @@ async def on_startup(
 
     # Устанавливаем команды бота
     await setup_bot_commands(bot)
+
+    inconsistent_polls = _find_inconsistent_poll_templates()
+    if inconsistent_polls:
+        logging.warning(
+            "Найдены шаблоны с cost > 0 и cost_per_game == 0: %s",
+            inconsistent_polls,
+        )
+        await _notify_admin(
+            bot,
+            "⚠️ Найдены неконсистентные шаблоны залов:\n"
+            "Если cost_per_game = 0, то cost тоже должен быть 0.\n\n"
+            + "\n".join(inconsistent_polls),
+        )
 
     setup_scheduler(scheduler, bot, bot_state_service, poll_service)
     scheduler.start()
@@ -144,6 +194,9 @@ async def on_startup(
     else:
         logging.info("Режим polling активен")
 
+    mode = "webhook" if effective_webhook_path else "polling"
+    await _notify_admin(bot, f"🟢 Бот запущен ({mode}).")
+
 
 async def on_shutdown(
     bot: Bot,
@@ -155,6 +208,8 @@ async def on_shutdown(
     """Выполняется при остановке бота."""
     logging.info("🛑 Начало процедуры остановки бота...")
     create_backup("shutdown")
+
+    await _notify_admin(bot, "🔴 Бот остановлен.")
 
     if scheduler.running:
         logging.debug("Остановка планировщика...")
