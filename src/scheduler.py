@@ -373,6 +373,8 @@ def _schedule_monthly_subscription_poll(
     """
     Планирует ежемесячный опрос на абонемент для платных игр.
     """
+    # Месячный опрос имеет смысл только для платных включённых залов:
+    # именно по ним потом считаются абонементы и очищаются подписки.
     paid_polls = [
         p
         for p in poll_templates
@@ -387,6 +389,8 @@ def _schedule_monthly_subscription_poll(
     now_moscow = datetime.now(tz=moscow_tz)
 
     def month_bounds(base: datetime) -> tuple[datetime, datetime]:
+        # Границы считаем в МСК, потому что правило запуска месячного опроса
+        # привязано к локальному календарному месяцу игроков.
         month_start = base.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         if base.month == 12:
             next_month = base.replace(year=base.year + 1, month=1, day=1)
@@ -398,6 +402,9 @@ def _schedule_monthly_subscription_poll(
     def last_game_in_month(
         month_start_moscow: datetime, next_month_start_moscow: datetime
     ) -> datetime | None:
+        # Расписание игр хранится в UTC, но "последняя игра месяца" должна
+        # определяться по московскому месяцу. Поэтому перебираем UTC-даты,
+        # переводим каждую найденную игру в МСК и только потом фильтруем месяц.
         utc_start = month_start_moscow.astimezone(utc_tz)
         utc_end = next_month_start_moscow.astimezone(utc_tz)
         end_date = (utc_end - timedelta(seconds=1)).date()
@@ -439,6 +446,9 @@ def _schedule_monthly_subscription_poll(
         logging.warning("⚠️ Не удалось найти последнюю игру месяца для платных опросов")
         return
 
+    # Голосование за абонемент начинается в 22:00 МСК в день последней
+    # платной игры текущего месяца. Если планировщик запустили после этого
+    # момента, ближайшее голосование уже пропущено — планируем следующий месяц.
     open_moscow = last_game.replace(hour=22, minute=0, second=0, microsecond=0)
     if open_moscow <= now_moscow:
         month_start, next_month_start = month_bounds(next_month_start)
@@ -450,6 +460,8 @@ def _schedule_monthly_subscription_poll(
             return
         open_moscow = last_game.replace(hour=22, minute=0, second=0, microsecond=0)
 
+    # Перед открытием сбрасываем старые платные подписки, на следующий день
+    # напоминаем о дедлайне, а закрываем голосование ровно через 24 часа.
     clear_moscow = open_moscow - timedelta(minutes=1)
     reminder_moscow = (open_moscow + timedelta(days=1)).replace(
         hour=18, minute=0, second=0, microsecond=0
