@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -166,6 +166,9 @@ def setup_scheduler(
 
     if not poll_templates:
         logging.warning("⚠️ Расписание опросов не найдено в базе данных.")
+        _schedule_monthly_subscription_poll(
+            scheduler, bot, bot_state_service, poll_service, []
+        )
         return
 
     if not enabled_poll_templates:
@@ -358,10 +361,6 @@ def _apply_scheduler_jobs(
         f"✅ Планировщик настроен: {len(enabled_poll_templates) * 2} задач добавлено"
     )
 
-    _schedule_monthly_subscription_poll(
-        scheduler, bot, bot_state_service, poll_service, enabled_poll_templates
-    )
-
 
 def _schedule_monthly_subscription_poll(
     scheduler: AsyncIOScheduler,
@@ -373,6 +372,31 @@ def _schedule_monthly_subscription_poll(
     """
     Планирует ежемесячный опрос на абонемент для платных игр.
     """
+    moscow_tz = ZoneInfo("Europe/Moscow")
+    utc_tz = ZoneInfo("UTC")
+    now_moscow = datetime.now(tz=moscow_tz)
+
+    open_monthly_game = get_open_monthly_game()
+    if open_monthly_game is not None:
+        opened_at = str(open_monthly_game.get("opened_at") or "")
+        opened_moscow = _parse_datetime_to_moscow(opened_at, moscow_tz)
+        if opened_moscow is None:
+            logging.warning(
+                "⚠️ Открытый месячный опрос найден, но opened_at некорректен: %s",
+                opened_at,
+            )
+            return
+        _schedule_active_monthly_subscription_poll(
+            scheduler,
+            bot,
+            bot_state_service,
+            poll_service,
+            opened_moscow=opened_moscow,
+            now_moscow=now_moscow,
+            utc_tz=utc_tz,
+        )
+        return
+
     # Месячный опрос имеет смысл только для платных включённых залов:
     # именно по ним потом считаются абонементы и очищаются подписки.
     paid_polls = [
@@ -383,10 +407,6 @@ def _schedule_monthly_subscription_poll(
     if not paid_polls:
         logging.info("ℹ️ Платные опросы не найдены, месячный опрос не запланирован")
         return
-
-    moscow_tz = ZoneInfo("Europe/Moscow")
-    utc_tz = ZoneInfo("UTC")
-    now_moscow = datetime.now(tz=moscow_tz)
 
     def month_bounds(base: datetime) -> tuple[datetime, datetime]:
         # Границы считаем в МСК, потому что правило запуска месячного опроса
@@ -528,4 +548,80 @@ def _schedule_monthly_subscription_poll(
         "📆 Месячный опрос на абонемент запланирован: "
         f"очистка={clear_moscow}, открытие={open_moscow}, "
         f"напоминание={reminder_moscow}, закрытие={close_moscow}"
+    )
+
+
+def _parse_datetime_to_moscow(value: str, moscow_tz: ZoneInfo) -> datetime | None:
+    """Парсит ISO datetime из БД и возвращает timezone-aware время в МСК."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(moscow_tz)
+
+
+def _schedule_active_monthly_subscription_poll(
+    scheduler: AsyncIOScheduler,
+    bot: Bot,
+    bot_state_service: BotStateService,
+    poll_service: PollService,
+    *,
+    opened_moscow: datetime,
+    now_moscow: datetime,
+    utc_tz: ZoneInfo,
+) -> None:
+    """Планирует оставшиеся задачи уже открытого месячного опроса после рестарта."""
+    reminder_job_id = "monthly_subs_reminder"
+    close_job_id = "monthly_subs_close"
+
+    reminder_moscow = (opened_moscow + timedelta(days=1)).replace(
+        hour=18, minute=0, second=0, microsecond=0
+    )
+    close_moscow = opened_moscow + timedelta(hours=24)
+
+    def to_utc(dt_moscow: datetime) -> datetime:
+        return dt_moscow.astimezone(utc_tz)
+
+    if reminder_moscow > now_moscow:
+        reminder_text = (
+            "⏰ Напоминание: голосование за абонемент заканчивается сегодня в 22:00 МСК."
+        )
+        reminder_job = create_reminder_job(
+            bot, reminder_text, bot_state_service, poll_service
+        )
+        scheduler.add_job(
+            reminder_job,
+            trigger=DateTrigger(run_date=to_utc(reminder_moscow)),
+            id=reminder_job_id,
+            name="Абонемент (напоминание)",
+            replace_existing=True,
+        )
+    else:
+        logging.info(
+            "ℹ️ Напоминание для открытого месячного опроса уже прошло: %s",
+            reminder_moscow,
+        )
+
+    close_run_moscow = close_moscow
+    if close_moscow <= now_moscow:
+        close_run_moscow = now_moscow + timedelta(seconds=1)
+        logging.warning(
+            "⚠️ Открытый месячный опрос просрочен, закрытие запланировано немедленно: %s",
+            close_run_moscow,
+        )
+
+    close_job = create_close_poll_job(bot, poll_service, monthly=True)
+    scheduler.add_job(
+        close_job,
+        trigger=DateTrigger(run_date=to_utc(close_run_moscow)),
+        id=close_job_id,
+        name="Абонемент (закрытие)",
+        replace_existing=True,
+    )
+
+    logging.info(
+        "📆 Открытый месячный опрос восстановлен в планировщике: "
+        f"напоминание={reminder_moscow}, закрытие={close_run_moscow}"
     )

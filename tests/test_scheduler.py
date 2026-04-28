@@ -1,11 +1,13 @@
 """Тесты для модуля scheduler."""
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from src.db import init_db
+from src.db import create_game, init_db
 from src.scheduler import (
     create_close_poll_job,
     create_poll_job,
@@ -13,6 +15,33 @@ from src.scheduler import (
     setup_scheduler,
 )
 from src.services import BotStateService, PollService
+
+
+class FixedDatetime(datetime):
+    fixed_now_utc = datetime(2026, 4, 28, 12, 0, tzinfo=timezone.utc)
+
+    @classmethod
+    def now(cls, tz=None):
+        if tz is None:
+            return cls.fixed_now_utc.replace(tzinfo=None)
+        return cls.fixed_now_utc.astimezone(tz)
+
+
+def _create_open_monthly_game(opened_at: str = "2026-04-27T19:00:00+00:00") -> None:
+    create_game(
+        poll_id="monthly-test",
+        kind="monthly_subscription",
+        status="open",
+        poll_template_id=None,
+        poll_name_snapshot="monthly_subscription",
+        question_snapshot="Абонемент?",
+        chat_id=-1001234567890,
+        poll_message_id=20,
+        opened_at=opened_at,
+        options=["Пятница", "Смотреть результат"],
+        option_poll_names=["Пятница", None],
+        target_month_snapshot="2026-05",
+    )
 
 
 @pytest.mark.asyncio
@@ -208,6 +237,87 @@ class TestSetupScheduler:
             jobs = scheduler.get_jobs()
             assert len(jobs) == 1
             assert jobs[0].name == "Бэкапы (очистка)"
+
+    def test_setup_scheduler_restores_active_monthly_jobs_before_reminder(
+        self, monkeypatch: pytest.MonkeyPatch, temp_db
+    ):
+        """После рестарта открытый месячный опрос получает reminder и close jobs."""
+        init_db()
+        _create_open_monthly_game()
+        FixedDatetime.fixed_now_utc = datetime(
+            2026, 4, 28, 12, 0, tzinfo=timezone.utc
+        )
+        monkeypatch.setattr("src.scheduler.datetime", FixedDatetime)
+
+        scheduler = AsyncIOScheduler(timezone="UTC")
+        bot = MagicMock()
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
+
+        with patch("src.scheduler.get_poll_templates", return_value=[]):
+            setup_scheduler(scheduler, bot, bot_state_service, poll_service)
+
+        jobs = {job.id: job for job in scheduler.get_jobs()}
+        assert "monthly_subs_reminder" in jobs
+        assert "monthly_subs_close" in jobs
+        assert "monthly_subs_open" not in jobs
+        assert "monthly_subs_clear" not in jobs
+        assert jobs["monthly_subs_reminder"].trigger.run_date == datetime(
+            2026, 4, 28, 15, 0, tzinfo=ZoneInfo("UTC")
+        )
+        assert jobs["monthly_subs_close"].trigger.run_date == datetime(
+            2026, 4, 28, 19, 0, tzinfo=ZoneInfo("UTC")
+        )
+
+    def test_setup_scheduler_restores_active_monthly_close_after_reminder(
+        self, monkeypatch: pytest.MonkeyPatch, temp_db
+    ):
+        """Если 18:00 уже прошло, рестарт не дублирует reminder, но закрытие остаётся."""
+        init_db()
+        _create_open_monthly_game()
+        FixedDatetime.fixed_now_utc = datetime(
+            2026, 4, 28, 16, 0, tzinfo=timezone.utc
+        )
+        monkeypatch.setattr("src.scheduler.datetime", FixedDatetime)
+
+        scheduler = AsyncIOScheduler(timezone="UTC")
+        bot = MagicMock()
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
+
+        with patch("src.scheduler.get_poll_templates", return_value=[]):
+            setup_scheduler(scheduler, bot, bot_state_service, poll_service)
+
+        jobs = {job.id: job for job in scheduler.get_jobs()}
+        assert "monthly_subs_reminder" not in jobs
+        assert jobs["monthly_subs_close"].trigger.run_date == datetime(
+            2026, 4, 28, 19, 0, tzinfo=ZoneInfo("UTC")
+        )
+
+    def test_setup_scheduler_restores_overdue_active_monthly_close_immediately(
+        self, monkeypatch: pytest.MonkeyPatch, temp_db
+    ):
+        """Если дедлайн прошёл во время простоя, закрытие ставится сразу после старта."""
+        init_db()
+        _create_open_monthly_game()
+        FixedDatetime.fixed_now_utc = datetime(
+            2026, 4, 28, 20, 0, tzinfo=timezone.utc
+        )
+        monkeypatch.setattr("src.scheduler.datetime", FixedDatetime)
+
+        scheduler = AsyncIOScheduler(timezone="UTC")
+        bot = MagicMock()
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
+
+        with patch("src.scheduler.get_poll_templates", return_value=[]):
+            setup_scheduler(scheduler, bot, bot_state_service, poll_service)
+
+        jobs = {job.id: job for job in scheduler.get_jobs()}
+        assert "monthly_subs_reminder" not in jobs
+        assert jobs["monthly_subs_close"].trigger.run_date == datetime(
+            2026, 4, 28, 20, 0, 1, tzinfo=ZoneInfo("UTC")
+        )
 
     def test_setup_scheduler_poll_closure_timing(
         self, caplog: pytest.LogCaptureFixture, temp_db
