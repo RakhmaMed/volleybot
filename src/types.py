@@ -62,7 +62,7 @@ class HallBreakdown:
     games_in_month: int
     monthly_rent: int
     num_subs: int
-    per_person: int  # Единая цена абонемента за 1 зал (400-500 руб.), 0 если нет подписчиков
+    per_person: int  # Единая цена абонемента за 1 зал, 0 если нет подписчиков
 
 
 @dataclass
@@ -80,7 +80,7 @@ class SubscriptionResult:
 
     paid_polls: list[HallBreakdown]
     subscriber_charges: list[SubscriberCharge]
-    price_per_hall: int = 0          # Единая цена абонемента за 1 зал (400-500 руб.)
+    price_per_hall: int = 0          # Единая цена абонемента за 1 зал
     combo_price: int = 0             # Комбо-цена (2+ зала, со скидкой)
     expected_singles_income: int = 0  # Прогнозируемый доход с разовых игроков
     projected_savings: int = 0       # Прогноз казны на конец месяца

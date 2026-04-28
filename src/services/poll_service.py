@@ -20,11 +20,13 @@ from aiogram.exceptions import (
 
 from ..config import (
     ADMIN_USER_ID,
+    MAX_PLAYERS,
     MIN_PLAYERS,
     PAYMENT_BANK,
     PAYMENT_NAME,
     PAYMENT_PHONE,
     POLL_OPTIONS,
+    RESERVE_PLAYERS,
 )
 from ..db import (
     POLL_STATE_KEY,
@@ -80,6 +82,8 @@ TARGET_GROWTH = 1000  # Желаемый прирост казны в месяц
 SAVINGS_BUFFER = 6000  # Целевая «подушка» казны (руб.)
 COMBO_DISCOUNT_COEFF = 1.7  # Комбо = 1.7× одного зала (скидка ~15%)
 MIN_SUB_PRICE = 400  # Минимальная цена абонемента за 1 зал
+SUB_PRICE_DISCOUNT_SUBS_THRESHOLD = 18  # После этого порога можно уйти ниже MIN
+DISCOUNTED_MIN_SUB_PRICE = 100  # Абсолютный минимум при высокой загрузке зала
 MAX_SUB_PRICE = 500  # Максимальная цена абонемента за 1 зал
 DEFAULT_SUB_PRICE = 450  # Цена по умолчанию, если нет подписчиков
 PLAYERS_LIST_UPDATE_DELAY_SECONDS = 5  # Задержка перед обновлением списка игроков
@@ -95,7 +99,8 @@ def calculate_subscription(
     """
     Бюджетный расчёт стоимости абонемента без побочных эффектов.
 
-    Держит единую цену абонемента за каждый зал в диапазоне 400-500 руб.
+    Держит единую цену абонемента за каждый зал в диапазоне 400-500 руб.,
+    но при высокой загрузке хотя бы одного зала может опустить её до 100 руб.
     Недостающая часть аренды покрывается ожидаемым доходом с разовых игроков.
     Подписчики на 2+ зала получают комбо-скидку (~15%).
 
@@ -155,7 +160,8 @@ def calculate_subscription(
     # --- 3. Прогноз дохода с разовых игроков ---
     # Историческая статистика приходит из БД как средний доход с разовых за одну
     # закрытую платную игру. Нам нужен прогноз на будущий месяц, поэтому для
-    # каждого зала умножаем его средний доход за игру на число игр этого зала.
+    # каждого зала переводим средний доход в число разовых игроков, ограничиваем
+    # его свободными местами после абонементов и умножаем на число игр этого зала.
     #
     # Fallback сохраняет старое поведение: если истории недостаточно, считаем,
     # что на каждой игре будет AVG_SINGLES_PER_GAME разовых игроков по
@@ -196,10 +202,18 @@ def calculate_subscription(
         elif global_games_count >= GLOBAL_SINGLE_GAME_STATS_MIN_GAMES:
             avg_income_per_game = global_avg_income
 
-        # На этом шаге сумма ещё без SAFETY_K: это "средний исторический доход",
-        # растянутый на календарь будущего месяца для конкретного зала.
+        expected_single_players_per_game = avg_income_per_game / SINGLE_GAME_PRICE
+        max_single_players_per_game = max(
+            (MAX_PLAYERS + RESERVE_PLAYERS) - hall.num_subs, 0
+        )
+        capped_single_players_per_game = min(
+            expected_single_players_per_game, max_single_players_per_game
+        )
+
+        # На этом шаге сумма ещё без SAFETY_K: это консервативный доход с разовых,
+        # ограниченный свободными местами после абонементов.
         expected_singles_income_before_safety += (
-            avg_income_per_game * hall.games_in_month
+            capped_single_players_per_game * SINGLE_GAME_PRICE * hall.games_in_month
         )
 
     # SAFETY_K применяем один раз ко всему прогнозу как консервативную скидку на
@@ -225,8 +239,14 @@ def calculate_subscription(
     else:
         raw_price = DEFAULT_SUB_PRICE
 
-    # Ограничиваем диапазоном и округляем до 10 руб.
-    price_per_hall = max(MIN_SUB_PRICE, min(MAX_SUB_PRICE, raw_price))
+    # Ограничиваем диапазоном и округляем до 10 руб. Если хотя бы один платный
+    # зал собрал больше порога подписчиков, разрешаем общей цене уйти ниже MIN.
+    min_price = (
+        DISCOUNTED_MIN_SUB_PRICE
+        if any(h.num_subs > SUB_PRICE_DISCOUNT_SUBS_THRESHOLD for h in paid_poll_rows)
+        else MIN_SUB_PRICE
+    )
+    price_per_hall = max(min_price, min(MAX_SUB_PRICE, raw_price))
     price_per_hall = round(price_per_hall / 10) * 10
 
     # --- 7. Комбо-цена ---

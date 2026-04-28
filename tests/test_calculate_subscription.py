@@ -6,6 +6,7 @@ from src.services.poll_service import (
     AVG_SINGLES_PER_GAME,
     COMBO_DISCOUNT_COEFF,
     DEFAULT_SUB_PRICE,
+    DISCOUNTED_MIN_SUB_PRICE,
     GAMES_PER_MONTH,
     MAX_SUB_PRICE,
     MIN_SUB_PRICE,
@@ -163,11 +164,11 @@ class TestDynamicMonthlyRent:
         assert result.subscriber_charges == []
 
 
-# ── Ценовой диапазон 400-500 ─────────────────────────────────────────────────
+# ── Ценовой диапазон ─────────────────────────────────────────────────────────
 
 
 class TestPriceRange:
-    """Цена абонемента за 1 зал должна быть в диапазоне 400-500 руб."""
+    """Цена абонемента за 1 зал ограничена диапазоном с учетом загрузки."""
 
     def test_price_within_bounds(self):
         """Цена за 1 зал попадает в [400, 500]."""
@@ -201,7 +202,7 @@ class TestPriceRange:
         assert result.price_per_hall == MAX_SUB_PRICE
 
     def test_price_clamped_at_min(self):
-        """При большом числе подписчиков цена не опускается ниже MIN."""
+        """При высокой загрузке цена может опуститься ниже обычного MIN."""
         polls = [
             _make_poll("Понедельник", cost_per_game=1500),
             _make_poll("Четверг", cost_per_game=1500),
@@ -213,7 +214,36 @@ class TestPriceRange:
         }
         result = calculate_subscription(polls, votes, fund_balance=50000)
 
+        assert DISCOUNTED_MIN_SUB_PRICE <= result.price_per_hall < MIN_SUB_PRICE
+        assert result.price_per_hall == DISCOUNTED_MIN_SUB_PRICE
+
+    def test_exactly_18_subscribers_keeps_regular_min(self):
+        """Ровно 18 подписчиков на зал не включает скидочный минимум."""
+        polls = [
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
+        ]
+        votes = {
+            "Понедельник": set(range(18)),
+            "Четверг": set(range(18)),
+        }
+        result = calculate_subscription(polls, votes, fund_balance=50000)
+
         assert result.price_per_hall == MIN_SUB_PRICE
+
+    def test_any_hall_above_18_allows_discounted_min(self):
+        """Один зал с >18 подписчиками разрешает снизить общую цену."""
+        polls = [
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Четверг", cost_per_game=1500),
+        ]
+        votes = {
+            "Понедельник": set(range(19)),
+            "Четверг": {100},
+        }
+        result = calculate_subscription(polls, votes, fund_balance=50000)
+
+        assert DISCOUNTED_MIN_SUB_PRICE <= result.price_per_hall < MIN_SUB_PRICE
 
     def test_price_clamped_at_max(self):
         """При малом числе подписчиков цена не поднимается выше MAX."""
@@ -509,6 +539,23 @@ class TestProjectedSavings:
         )
         assert result.expected_singles_income == expected
 
+    def test_expected_singles_income_capped_by_available_slots(self):
+        """При высокой загрузке прогноз разовых ограничен свободными местами."""
+        polls = [
+            _make_poll("Понедельник", cost_per_game=1500, game_day="mon"),
+            _make_poll("Пятница", cost_per_game=1500, game_day="fri"),
+        ]
+        votes = {
+            "Понедельник": set(range(1, 17)),
+            "Пятница": set(range(17, 36)),
+        }
+        result = calculate_subscription(polls, votes)
+
+        # Вместимость 18+3. При 16 абонементах доступно 5 разовых,
+        # при 19 абонементах доступно 2 разовых. Fallback 7 режется до 5 и 2.
+        expected = round(((5 * 150 * 4) + (2 * 150 * 4)) * SAFETY_K)
+        assert result.expected_singles_income == expected
+
     def test_expected_singles_income_uses_per_hall_stats(self):
         """При достаточной истории прогноз считается отдельно по каждому залу."""
         polls = [
@@ -719,6 +766,131 @@ class TestRealWorldScenario:
             == round(result.price_per_hall * COMBO_DISCOUNT_COEFF / 10) * 10
         )
         assert len(result.subscriber_charges) == 17
+
+    def test_monday_16_friday_19_real_calculation(self):
+        """
+        Реальный расчёт: 16 подписчиков на понедельник, 19 на пятницу.
+        Пятница превышает порог 18, поэтому общий абонемент может быть ниже MIN.
+        """
+        polls = [
+            _make_poll("Понедельник", cost_per_game=1500, game_day="mon"),
+            _make_poll("Пятница", cost_per_game=1500, game_day="fri"),
+        ]
+        monday_users = set(range(1, 17))
+        friday_users = set(range(17, 36))
+        votes = {
+            "Понедельник": monday_users,
+            "Пятница": friday_users,
+        }
+        result = calculate_subscription(polls, votes, fund_balance=0)
+        print(result)
+
+        hall_by_name = {h.name: h for h in result.paid_polls}
+        assert hall_by_name["Понедельник"].num_subs == 16
+        assert hall_by_name["Понедельник"].games_in_month == 4
+        assert hall_by_name["Понедельник"].monthly_rent == 6000
+        assert hall_by_name["Пятница"].num_subs == 19
+        assert hall_by_name["Пятница"].games_in_month == 4
+        assert hall_by_name["Пятница"].monthly_rent == 6000
+
+        assert result.expected_singles_income == 2940
+        assert result.price_per_hall == 290
+        assert DISCOUNTED_MIN_SUB_PRICE <= result.price_per_hall < MIN_SUB_PRICE
+        assert result.combo_price == 490
+        assert len(result.subscriber_charges) == 35
+        assert sum(c.total for c in result.subscriber_charges) == 10150
+        assert result.projected_savings == 1090
+
+    def test_may_2026_monday_16_friday_19_with_overlaps(self):
+        """
+        Май 2026: 4 понедельника и 5 пятниц.
+        Реальный набор: 16 подписчиков на понедельник, 19 на пятницу,
+        10 пересечений между залами.
+        """
+        polls = [
+            _make_poll("Понедельник", cost_per_game=1500, game_day="mon"),
+            _make_poll("Пятница", cost_per_game=1500, game_day="fri"),
+        ]
+        monday_names = [
+            "player_01",
+            "player_02",
+            "player_03",
+            "player_04",
+            "player_05",
+            "player_06",
+            "player_07",
+            "player_08",
+            "player_09",
+            "player_10",
+            "player_11",
+            "player_12",
+            "player_13",
+            "player_14",
+            "player_15",
+            "player_16",
+        ]
+        friday_names = [
+            "player_01",
+            "player_02",
+            "player_03",
+            "player_04",
+            "player_05",
+            "player_06",
+            "player_07",
+            "player_08",
+            "player_09",
+            "player_10",
+            "player_17",
+            "player_18",
+            "player_19",
+            "player_20",
+            "player_21",
+            "player_22",
+            "player_23",
+            "player_24",
+            "player_25",
+        ]
+        player_ids = {
+            name: idx
+            for idx, name in enumerate(sorted(set(monday_names) | set(friday_names)), 1)
+        }
+        votes = {
+            "Понедельник": {player_ids[name] for name in monday_names},
+            "Пятница": {player_ids[name] for name in friday_names},
+        }
+        result = calculate_subscription(
+            polls,
+            votes,
+            target_month="2026-05",
+            fund_balance=0,
+        )
+        print(
+            {
+                "overlap_names": sorted(set(monday_names) & set(friday_names)),
+                "result": result,
+            }
+        )
+
+        hall_by_name = {h.name: h for h in result.paid_polls}
+        assert hall_by_name["Понедельник"].num_subs == 16
+        assert hall_by_name["Понедельник"].games_in_month == 4
+        assert hall_by_name["Понедельник"].monthly_rent == 6000
+        assert hall_by_name["Пятница"].num_subs == 19
+        assert hall_by_name["Пятница"].games_in_month == 5
+        assert hall_by_name["Пятница"].monthly_rent == 7500
+
+        combo_charges = [c for c in result.subscriber_charges if len(c.halls) == 2]
+        single_charges = [c for c in result.subscriber_charges if len(c.halls) == 1]
+        assert len(combo_charges) == 10
+        assert len(single_charges) == 15
+        assert len(result.subscriber_charges) == 25
+
+        assert result.expected_singles_income == 3150
+        assert result.price_per_hall == 350
+        assert DISCOUNTED_MIN_SUB_PRICE <= result.price_per_hall < MIN_SUB_PRICE
+        assert result.combo_price == 600
+        assert sum(c.total for c in result.subscriber_charges) == 11250
+        assert result.projected_savings == 900
 
     def test_with_free_wednesday(self):
         """
