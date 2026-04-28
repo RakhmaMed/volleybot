@@ -773,50 +773,91 @@ def get_poll_templates() -> list[PollTemplate]:
         return []
 
 
-def save_poll_template(template: typing.Mapping[str, typing.Any]) -> None:
-    """Сохраняет или обновляет шаблон опроса и его подписчиков."""
+def save_poll_template(
+    template: typing.Mapping[str, typing.Any],
+    *,
+    match_by: Literal["name", "id"] = "name",
+) -> int | None:
+    """Сохраняет или обновляет шаблон опроса и его подписчиков.
+
+    По умолчанию сохраняет старое поведение: upsert по уникальному ``name``.
+    ``match_by="id"`` используется для админского редактирования и выполняет
+    только UPDATE существующей строки без создания нового шаблона.
+    """
+    if match_by not in {"name", "id"}:
+        raise ValueError("match_by должен быть 'name' или 'id'")
+
     try:
         init_db()
         with _connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO poll_templates (
-                    name, place, message, open_day, open_hour_utc, open_minute_utc,
-                    game_day, game_hour_utc, game_minute_utc, cost, cost_per_game, enabled
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(name) DO UPDATE SET
-                    place = excluded.place,
-                    message = excluded.message,
-                    open_day = excluded.open_day,
-                    open_hour_utc = excluded.open_hour_utc,
-                    open_minute_utc = excluded.open_minute_utc,
-                    game_day = excluded.game_day,
-                    game_hour_utc = excluded.game_hour_utc,
-                    game_minute_utc = excluded.game_minute_utc,
-                    cost = excluded.cost,
-                    cost_per_game = excluded.cost_per_game,
-                    enabled = excluded.enabled,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    template["name"],
-                    template.get("place", ""),
-                    template["message"],
-                    template.get("open_day", "*"),
-                    template.get("open_hour_utc", 0),
-                    template.get("open_minute_utc", 0),
-                    template.get("game_day", "*"),
-                    template.get("game_hour_utc", 0),
-                    template.get("game_minute_utc", 0),
-                    template.get("cost", 0),
-                    template.get("cost_per_game", 1500),
-                    template.get("enabled", 1),
-                ),
+            values = (
+                template["name"],
+                template.get("place", ""),
+                template["message"],
+                template.get("open_day", "*"),
+                template.get("open_hour_utc", 0),
+                template.get("open_minute_utc", 0),
+                template.get("game_day", "*"),
+                template.get("game_hour_utc", 0),
+                template.get("game_minute_utc", 0),
+                template.get("cost", 0),
+                template.get("cost_per_game", 1500),
+                template.get("enabled", 1),
             )
-            row = conn.execute(
-                "SELECT id FROM poll_templates WHERE name = ?", (template["name"],)
-            ).fetchone()
-            poll_template_id = int(row[0])
+
+            if match_by == "name":
+                conn.execute(
+                    """
+                    INSERT INTO poll_templates (
+                        name, place, message, open_day, open_hour_utc, open_minute_utc,
+                        game_day, game_hour_utc, game_minute_utc, cost, cost_per_game, enabled
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET
+                        place = excluded.place,
+                        message = excluded.message,
+                        open_day = excluded.open_day,
+                        open_hour_utc = excluded.open_hour_utc,
+                        open_minute_utc = excluded.open_minute_utc,
+                        game_day = excluded.game_day,
+                        game_hour_utc = excluded.game_hour_utc,
+                        game_minute_utc = excluded.game_minute_utc,
+                        cost = excluded.cost,
+                        cost_per_game = excluded.cost_per_game,
+                        enabled = excluded.enabled,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    values,
+                )
+                row = conn.execute(
+                    "SELECT id FROM poll_templates WHERE name = ?", (template["name"],)
+                ).fetchone()
+                poll_template_id = int(row[0])
+            else:
+                poll_template_id = int(template["id"])
+                cursor = conn.execute(
+                    """
+                    UPDATE poll_templates
+                    SET
+                        name = ?,
+                        place = ?,
+                        message = ?,
+                        open_day = ?,
+                        open_hour_utc = ?,
+                        open_minute_utc = ?,
+                        game_day = ?,
+                        game_hour_utc = ?,
+                        game_minute_utc = ?,
+                        cost = ?,
+                        cost_per_game = ?,
+                        enabled = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (*values, poll_template_id),
+                )
+                if cursor.rowcount == 0:
+                    conn.rollback()
+                    return None
 
             # Обновляем подписчиков если они переданы
             if "subs" in template:
@@ -833,10 +874,12 @@ def save_poll_template(template: typing.Mapping[str, typing.Any]) -> None:
                         (poll_template_id, user_id),
                     )
             conn.commit()
+            return poll_template_id
     except sqlite3.Error:
         logging.exception(
             f"❌ Ошибка при сохранении шаблона опроса '{template.get('name')}'"
         )
+        return None
 
 
 def clear_paid_poll_subscriptions() -> None:

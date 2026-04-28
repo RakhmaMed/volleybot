@@ -425,6 +425,61 @@ class TestDBPolls:
         assert "subs" in templates[0]
         assert set(templates[0]["subs"]) == {2, 3}
 
+    def test_update_poll_template_by_id_allows_rename(self, temp_db):
+        """Обновление по id должно переименовывать шаблон без создания дубля."""
+        init_db()
+        template_id = save_poll_template({"name": "Old", "message": "Msg 1"})
+
+        updated_id = save_poll_template(
+            {
+                "id": template_id,
+                "name": "New",
+                "message": "Msg 2",
+                "cost": 200,
+                "cost_per_game": 2500,
+                "enabled": 0,
+            },
+            match_by="id",
+        )
+
+        templates = get_poll_templates()
+        assert updated_id == template_id
+        assert len(templates) == 1
+        assert templates[0]["name"] == "New"
+        assert templates[0]["message"] == "Msg 2"
+        assert templates[0]["cost"] == 200
+        assert templates[0]["cost_per_game"] == 2500
+        assert templates[0]["enabled"] == 0
+
+    def test_update_poll_template_by_id_does_not_insert_missing_id(self, temp_db):
+        """Обновление по неизвестному id не должно создавать новый шаблон."""
+        init_db()
+
+        result = save_poll_template(
+            {"id": 999, "name": "Missing", "message": "Msg"},
+            match_by="id",
+        )
+
+        assert result is None
+        assert get_poll_templates() == []
+
+    def test_update_poll_template_by_id_rejects_duplicate_name(self, temp_db):
+        """Переименование по id в занятое имя должно быть отклонено."""
+        init_db()
+        first_id = save_poll_template({"name": "First", "message": "Msg 1"})
+        second_id = save_poll_template({"name": "Second", "message": "Msg 2"})
+
+        result = save_poll_template(
+            {"id": second_id, "name": "First", "message": "Conflict"},
+            match_by="id",
+        )
+
+        templates = get_poll_templates()
+        assert result is None
+        assert len(templates) == 2
+        assert {template["name"] for template in templates} == {"First", "Second"}
+        assert first_id != second_id
+
     def test_foreign_keys_enforced_for_subscriptions(self, temp_db):
         """Проверка, что FK реально enforced на runtime."""
         init_db()

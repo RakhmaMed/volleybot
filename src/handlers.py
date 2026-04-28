@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BotCommand,
     BotCommandScopeAllChatAdministrators,
@@ -110,8 +112,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(
             command="ball_donate", description="Переключить донат мяча у игрока"
         ),
-        BotCommand(command="poll_off", description="Выключить опрос из расписания"),
-        BotCommand(command="poll_on", description="Включить опрос в расписание"),
+        BotCommand(command="hall", description="Управление залами"),
         BotCommand(command="start", description="Включить бота"),
         BotCommand(command="stop", description="Выключить бота"),
         BotCommand(command="webhookinfo", description="Статус webhook"),
@@ -205,6 +206,215 @@ def _find_poll_template(
         return partial_matches[0], []
 
     return None, partial_matches
+
+
+class HallWizard(StatesGroup):
+    """Состояния пошагового мастера управления залами."""
+
+    name = State()
+    place = State()
+    game_day = State()
+    game_time = State()
+    open_day = State()
+    open_time = State()
+    cost = State()
+    cost_per_game = State()
+    message = State()
+    enabled = State()
+    confirm = State()
+
+
+HALL_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+HALL_DAY_LABELS = {
+    "mon": "Пн",
+    "tue": "Вт",
+    "wed": "Ср",
+    "thu": "Чт",
+    "fri": "Пт",
+    "sat": "Сб",
+    "sun": "Вс",
+    "*": "Каждый день",
+}
+HALL_DAY_ALIASES = {
+    "mon": "mon",
+    "monday": "mon",
+    "пн": "mon",
+    "понедельник": "mon",
+    "tue": "tue",
+    "tuesday": "tue",
+    "вт": "tue",
+    "вторник": "tue",
+    "wed": "wed",
+    "wednesday": "wed",
+    "ср": "wed",
+    "среда": "wed",
+    "thu": "thu",
+    "thursday": "thu",
+    "чт": "thu",
+    "четверг": "thu",
+    "fri": "fri",
+    "friday": "fri",
+    "пт": "fri",
+    "пятница": "fri",
+    "sat": "sat",
+    "saturday": "sat",
+    "сб": "sat",
+    "суббота": "sat",
+    "sun": "sun",
+    "sunday": "sun",
+    "вс": "sun",
+    "воскресенье": "sun",
+}
+HALL_WIZARD_STEPS: list[tuple[str, State]] = [
+    ("name", HallWizard.name),
+    ("place", HallWizard.place),
+    ("game_day_msk", HallWizard.game_day),
+    ("game_time_msk", HallWizard.game_time),
+    ("open_day_msk", HallWizard.open_day),
+    ("open_time_msk", HallWizard.open_time),
+    ("cost", HallWizard.cost),
+    ("cost_per_game", HallWizard.cost_per_game),
+    ("message", HallWizard.message),
+    ("enabled", HallWizard.enabled),
+]
+
+
+def _previous_hall_day(day: str) -> str:
+    """Возвращает предыдущий день недели."""
+    return HALL_DAYS[(HALL_DAYS.index(day) - 1) % len(HALL_DAYS)]
+
+
+def _parse_hall_day(value: str) -> str | None:
+    """Парсит день недели из русского/английского алиаса."""
+    normalized = value.strip().lower().replace(".", "")
+    return HALL_DAY_ALIASES.get(normalized)
+
+
+def _parse_hall_time(value: str) -> tuple[int, int] | None:
+    """Парсит время HH:MM."""
+    parts = value.strip().split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError:
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
+
+
+def _parse_hall_enabled(value: str) -> int | None:
+    """Парсит признак включения зала."""
+    normalized = value.strip().lower()
+    if normalized in {"1", "yes", "y", "true", "on", "да", "д", "вкл"}:
+        return 1
+    if normalized in {"0", "no", "n", "false", "off", "нет", "н", "выкл"}:
+        return 0
+    return None
+
+
+def _utc_to_msk_day_time(day: str, hour: int, minute: int) -> tuple[str, str]:
+    """Конвертирует день/время UTC в день/время МСК."""
+    total_minutes = hour * 60 + minute + 3 * 60
+    day_shift = total_minutes // (24 * 60)
+    msk_minutes = total_minutes % (24 * 60)
+    if day in HALL_DAYS:
+        day = HALL_DAYS[(HALL_DAYS.index(day) + day_shift) % len(HALL_DAYS)]
+    return day, f"{msk_minutes // 60:02d}:{msk_minutes % 60:02d}"
+
+
+def _msk_to_utc_day_time(day: str, time_text: str) -> tuple[str, int, int]:
+    """Конвертирует день/время МСК в день/время UTC."""
+    parsed_time = _parse_hall_time(time_text)
+    if parsed_time is None:
+        raise ValueError("invalid time")
+    hour, minute = parsed_time
+    total_minutes = hour * 60 + minute - 3 * 60
+    day_shift = total_minutes // (24 * 60)
+    utc_minutes = total_minutes % (24 * 60)
+    if day in HALL_DAYS:
+        day = HALL_DAYS[(HALL_DAYS.index(day) + day_shift) % len(HALL_DAYS)]
+    return day, utc_minutes // 60, utc_minutes % 60
+
+
+def _prepare_hall_template_for_wizard(template: PollTemplate) -> dict[str, object]:
+    """Добавляет в шаблон удобные для UI МСК-поля."""
+    prepared = dict(template)
+    game_day, game_time = _utc_to_msk_day_time(
+        str(template.get("game_day", "mon") or "mon"),
+        int(template.get("game_hour_utc", 0) or 0),
+        int(template.get("game_minute_utc", 0) or 0),
+    )
+    open_day, open_time = _utc_to_msk_day_time(
+        str(template.get("open_day", "mon") or "mon"),
+        int(template.get("open_hour_utc", 0) or 0),
+        int(template.get("open_minute_utc", 0) or 0),
+    )
+    prepared["game_day_msk"] = game_day
+    prepared["game_time_msk"] = game_time
+    prepared["open_day_msk"] = open_day
+    prepared["open_time_msk"] = open_time
+    return prepared
+
+
+def _build_hall_template_for_save(template: dict[str, object]) -> dict[str, object]:
+    """Готовит шаблон мастера к сохранению в БД."""
+    game_day, game_hour, game_minute = _msk_to_utc_day_time(
+        str(template["game_day_msk"]), str(template["game_time_msk"])
+    )
+    open_day, open_hour, open_minute = _msk_to_utc_day_time(
+        str(template["open_day_msk"]), str(template["open_time_msk"])
+    )
+    result = {
+        "name": str(template["name"]).strip(),
+        "place": str(template.get("place") or "").strip(),
+        "message": str(template["message"]).strip(),
+        "game_day": game_day,
+        "game_hour_utc": game_hour,
+        "game_minute_utc": game_minute,
+        "open_day": open_day,
+        "open_hour_utc": open_hour,
+        "open_minute_utc": open_minute,
+        "cost": int(template.get("cost", 0) or 0),
+        "cost_per_game": int(template.get("cost_per_game", 0) or 0),
+        "enabled": int(template.get("enabled", 1) or 0),
+    }
+    if "id" in template:
+        result["id"] = int(template["id"])
+    if "subs" in template:
+        result["subs"] = template["subs"]
+    return result
+
+
+def _format_hall_time_summary(template: PollTemplate | dict[str, object]) -> str:
+    """Форматирует время игры для списков залов."""
+    day, time_text = _utc_to_msk_day_time(
+        str(template.get("game_day", "mon") or "mon"),
+        int(template.get("game_hour_utc", 0) or 0),
+        int(template.get("game_minute_utc", 0) or 0),
+    )
+    return f"{HALL_DAY_LABELS.get(day, day)} {time_text} МСК"
+
+
+def _format_hall_wizard_summary(template: dict[str, object]) -> str:
+    """Форматирует сводку перед сохранением зала."""
+    enabled = "включён" if int(template.get("enabled", 1) or 0) == 1 else "выключен"
+    place = str(template.get("place") or "не указано")
+    return (
+        "🏟 <b>Проверьте зал</b>\n\n"
+        f"Название: <b>{escape_html(str(template.get('name') or ''))}</b>\n"
+        f"Место: {escape_html(place)}\n"
+        f"Игра: {HALL_DAY_LABELS.get(str(template.get('game_day_msk')), str(template.get('game_day_msk')))} "
+        f"{escape_html(str(template.get('game_time_msk')))} МСК\n"
+        f"Опрос: {HALL_DAY_LABELS.get(str(template.get('open_day_msk')), str(template.get('open_day_msk')))} "
+        f"{escape_html(str(template.get('open_time_msk')))} МСК\n"
+        f"Разовая игра: <b>{int(template.get('cost', 0) or 0)} ₽</b>\n"
+        f"Аренда за игру: <b>{int(template.get('cost_per_game', 0) or 0)} ₽</b>\n"
+        f"Текст опроса: {escape_html(str(template.get('message') or ''))}\n"
+        f"Статус: {enabled}"
+    )
 
 
 def register_handlers(dp: Dispatcher, bot: Bot) -> None:
@@ -452,8 +662,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "/player [имя] — информация об одном игроке (по имени, @username или ID)\n"
             "/ball_donate — переключить донат мяча у игрока (reply)\n"
             "/ball_donate [имя] — переключить донат мяча по имени, @username или ID\n"
-            "/poll_off [id|name] — выключить опрос из расписания\n"
-            "/poll_on [id|name] — включить опрос в расписание\n"
+            "/hall — управление залами и расписанием\n"
             "/start — включить бота\n"
             "/stop — выключить бота\n\n"
             "<b>Как пользоваться:</b>\n"
@@ -920,62 +1129,219 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             action_name="reply to /stats",
         )
 
-    async def _set_poll_enabled(message: Message, enabled: bool) -> None:
-        """Переключает состояние шаблона опроса по id или имени."""
+    async def _is_message_admin(message: Message) -> bool:
+        """Проверяет права администратора для message-команды."""
         user = message.from_user
         if user is None:
-            return
+            return False
 
         admin_service: AdminService = dp.workflow_data["admin_service"]
-        is_admin = await admin_service.is_admin(bot, user, message.chat.id)
-        if not is_admin:
-            return
+        return await admin_service.is_admin(bot, user, message.chat.id)
 
-        raw_text = (message.text or "").strip()
-        identifier = raw_text.split(maxsplit=1)[1].strip() if " " in raw_text else ""
+    def _get_hall_by_id(poll_template_id: int) -> PollTemplate | None:
+        """Возвращает шаблон зала по ID."""
+        return next(
+            (
+                template
+                for template in get_poll_templates()
+                if int(template.get("id", 0) or 0) == poll_template_id
+            ),
+            None,
+        )
+
+    def _hall_name_conflicts(name: str, current_id: int | None = None) -> bool:
+        """Проверяет конфликт имени с другим залом."""
+        normalized = name.strip()
+        return any(
+            str(template.get("name", "")).strip() == normalized
+            and int(template.get("id", 0) or 0) != current_id
+            for template in get_poll_templates()
+        )
+
+    async def _refresh_hall_scheduler() -> None:
+        """Обновляет планировщик после изменения залов."""
+        scheduler = dp.workflow_data["scheduler"]
+        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
+        poll_service: PollService = dp.workflow_data["poll_service"]
+        refresh_scheduler(scheduler, bot, bot_state_service, poll_service)
+
+    async def _show_hall_list(message: Message) -> None:
+        """Показывает список залов."""
         poll_templates = get_poll_templates()
-
-        if not identifier:
-            lines = [
-                "❌ Укажите ID или точное название опроса.",
-                "Примеры: <code>/poll_off 3</code>, <code>/poll_on Пятница</code>",
-                "",
-                "<b>Доступные опросы:</b>",
-            ]
-            lines.extend(
-                _format_poll_reference_line(template) for template in poll_templates
-            )
+        if not poll_templates:
             await safe_reply(
                 message,
-                "\n".join(lines),
+                "🏟 Залы пока не настроены.\nДобавьте первый зал: <code>/hall add</code>",
                 parse_mode="HTML",
-                action_name="reply to poll toggle usage",
+                action_name="reply to /hall empty list",
             )
             return
 
-        template, partial_matches = _find_poll_template(identifier)
-        if template is None:
-            if partial_matches:
-                lines = [
-                    f"❌ Найдено несколько опросов по запросу <code>{escape_html(identifier)}</code>.",
-                    "Уточните запрос. Подходящие варианты:",
+        lines = ["🏟 <b>Залы</b>\n"]
+        for template in poll_templates:
+            template_id = int(template.get("id", 0) or 0)
+            name = escape_html(str(template.get("name") or "Без названия"))
+            place = str(template.get("place") or "")
+            place_text = f" ({escape_html(place)})" if place else ""
+            status = _format_poll_status(template)
+            time_text = _format_hall_time_summary(template)
+            cost = int(template.get("cost", 0) or 0)
+            rent = int(template.get("cost_per_game", 0) or 0)
+            lines.append(
+                f"{template_id}. <b>{name}</b>{place_text} — {time_text} — "
+                f"{cost} ₽ / аренда {rent} ₽ — {status}"
+            )
+
+        lines.append(
+            "\nКоманды: <code>/hall add</code>, <code>/hall edit ID</code>, "
+            "<code>/hall on ID</code>, <code>/hall off ID</code>."
+        )
+        await safe_reply(
+            message,
+            "\n".join(lines),
+            parse_mode="HTML",
+            action_name="reply to /hall list",
+        )
+
+    def _hall_step_prompt(field: str, template: dict[str, object], mode: str) -> str:
+        """Возвращает текст вопроса для текущего шага мастера."""
+        keep_text = ""
+        if mode == "edit":
+            current = template.get(field)
+            if field in {"game_day_msk", "open_day_msk"}:
+                current = HALL_DAY_LABELS.get(str(current), str(current))
+            keep_text = f"\nТекущее значение: <b>{escape_html(str(current or ''))}</b>\nОтправьте <code>-</code>, чтобы оставить без изменений."
+
+        default_text = ""
+        if mode == "add":
+            if field == "open_day_msk":
+                game_day = str(template.get("game_day_msk") or "")
+                if game_day in HALL_DAYS:
+                    default_day = HALL_DAY_LABELS[_previous_hall_day(game_day)]
+                else:
+                    default_day = "предыдущий день от дня игры"
+                default_text = f"\nПо умолчанию: <b>{escape_html(default_day)}</b>."
+            elif field == "open_time_msk":
+                default_text = "\nПо умолчанию: <b>19:00</b>."
+            elif field == "message":
+                hall_name = str(template.get("name") or "зал")
+                default_message = f"Играем в {hall_name}?"
+                default_text = (
+                    f"\nПо умолчанию: <b>{escape_html(default_message)}</b>."
+                )
+            elif field == "enabled":
+                default_text = "\nПо умолчанию: <b>да</b>."
+
+        prompts = {
+            "name": "Введите название зала.",
+            "place": "Введите место/адрес зала. Для пустого значения отправьте <code>-</code>.",
+            "game_day_msk": "Введите день игры: Пн, Вт, Ср, Чт, Пт, Сб или Вс.",
+            "game_time_msk": "Введите время игры в МСК в формате <code>HH:MM</code>.",
+            "open_day_msk": "Введите день открытия опроса. Отправьте <code>-</code>, чтобы использовать значение по умолчанию.",
+            "open_time_msk": "Введите время открытия опроса в МСК в формате <code>HH:MM</code>. Отправьте <code>-</code>, чтобы использовать значение по умолчанию.",
+            "cost": "Введите стоимость разовой игры в рублях.",
+            "cost_per_game": "Введите стоимость аренды зала за одну игру в рублях.",
+            "message": "Введите текст вопроса для Telegram-опроса. Отправьте <code>-</code>, чтобы использовать текст по умолчанию.",
+            "enabled": "Включить зал в расписание? Ответьте <code>да</code> или <code>нет</code>. Отправьте <code>-</code>, чтобы использовать значение по умолчанию.",
+        }
+        return (
+            f"{prompts[field]}{default_text}{keep_text}\n\n"
+            "Отмена: <code>/cancel</code>"
+        )
+
+    async def _ask_hall_step(
+        message: Message, state: FSMContext, step_index: int
+    ) -> None:
+        """Задаёт следующий вопрос мастера."""
+        data = await state.get_data()
+        template = dict(data.get("template", {}))
+        mode = str(data.get("mode", "add"))
+        field, state_value = HALL_WIZARD_STEPS[step_index]
+        await state.update_data(step_index=step_index)
+        await state.set_state(state_value)
+        await safe_reply(
+            message,
+            _hall_step_prompt(field, template, mode),
+            parse_mode="HTML",
+            action_name="reply to hall wizard step",
+        )
+
+    async def _show_hall_confirm(message: Message, state: FSMContext) -> None:
+        """Показывает финальную сводку мастера."""
+        data = await state.get_data()
+        template = dict(data.get("template", {}))
+        await state.set_state(HallWizard.confirm)
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="Сохранить", callback_data="hall_save"),
+                    InlineKeyboardButton(text="Отменить", callback_data="hall_cancel"),
                 ]
-                lines.extend(
-                    _format_poll_reference_line(candidate)
-                    for candidate in partial_matches
-                )
-                await safe_reply(
-                    message,
-                    "\n".join(lines),
-                    parse_mode="HTML",
-                    action_name="reply to poll toggle ambiguity",
-                )
-                return
+            ]
+        )
+        await safe_reply(
+            message,
+            _format_hall_wizard_summary(template),
+            reply_markup=keyboard,
+            parse_mode="HTML",
+            action_name="reply to hall wizard confirm",
+        )
+
+    async def _start_hall_add(message: Message, state: FSMContext) -> None:
+        """Запускает мастер добавления зала."""
+        await state.clear()
+        await state.update_data(mode="add", template={}, step_index=0)
+        await _ask_hall_step(message, state, 0)
+
+    async def _start_hall_edit(
+        message: Message, state: FSMContext, poll_template_id: int
+    ) -> None:
+        """Запускает мастер редактирования зала."""
+        template = _get_hall_by_id(poll_template_id)
+        if template is None:
             await safe_reply(
                 message,
-                f"❌ Опрос не найден: <code>{escape_html(identifier)}</code>",
+                f"❌ Зал с ID {poll_template_id} не найден.",
                 parse_mode="HTML",
-                action_name="reply to poll toggle not found",
+                action_name="reply to /hall edit missing",
+            )
+            return
+        await state.clear()
+        await state.update_data(
+            mode="edit",
+            template=_prepare_hall_template_for_wizard(template),
+            step_index=0,
+        )
+        await _ask_hall_step(message, state, 0)
+
+    async def _cancel_hall_wizard(message: Message, state: FSMContext) -> None:
+        """Отменяет мастер зала."""
+        await state.clear()
+        await safe_reply(
+            message,
+            "✅ Действие отменено.",
+            action_name="reply to hall wizard cancel",
+        )
+
+    async def _set_hall_enabled(message: Message, enabled: bool, raw_id: str) -> None:
+        """Включает или выключает зал по ID."""
+        if not raw_id.isdigit():
+            await safe_reply(
+                message,
+                "❌ Укажите числовой ID зала.\nПример: <code>/hall off 3</code>",
+                parse_mode="HTML",
+                action_name="reply to /hall toggle invalid id",
+            )
+            return
+
+        poll_template_id = int(raw_id)
+        template = _get_hall_by_id(poll_template_id)
+        if template is None:
+            await safe_reply(
+                message,
+                f"❌ Зал с ID {poll_template_id} не найден.",
+                parse_mode="HTML",
+                action_name="reply to /hall toggle missing",
             )
             return
 
@@ -993,13 +1359,17 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         template["enabled"] = 1 if enabled else 0
-        save_poll_template(template)
+        create_backup("hall_command")
+        saved_id = save_poll_template(template, match_by="id")
+        if saved_id is None:
+            await safe_reply(
+                message,
+                "❌ Не удалось сохранить изменения зала.",
+                action_name="reply to /hall toggle save failure",
+            )
+            return
 
-        # Обновляем расписание планировщика без перезапуска бота
-        scheduler = dp.workflow_data["scheduler"]
-        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
-        poll_service: PollService = dp.workflow_data["poll_service"]
-        refresh_scheduler(scheduler, bot, bot_state_service, poll_service)
+        await _refresh_hall_scheduler()
 
         result_lines = [
             f"✅ Опрос <b>{escape_html(poll_name)}</b> (ID: {template.get('id')}) теперь {desired_status}.",
@@ -1020,15 +1390,265 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             action_name="reply to poll toggle success",
         )
 
-    @router.message(Command("poll_off"))
-    async def poll_off_handler(message: Message) -> None:
-        """Выключает шаблон опроса из расписания."""
-        await _set_poll_enabled(message, enabled=False)
+    @router.message(Command("hall"))
+    async def hall_handler(message: Message, state: FSMContext) -> None:
+        """Единая команда управления залами."""
+        if not await _is_message_admin(message):
+            return
 
-    @router.message(Command("poll_on"))
-    async def poll_on_handler(message: Message) -> None:
-        """Включает шаблон опроса в расписание."""
-        await _set_poll_enabled(message, enabled=True)
+        raw_text = (message.text or "").strip()
+        parts = raw_text.split(maxsplit=2)
+        action = parts[1].lower() if len(parts) >= 2 else "list"
+
+        if action in {"cancel", "отмена"}:
+            await _cancel_hall_wizard(message, state)
+        elif action in {"list", "список"}:
+            await _show_hall_list(message)
+        elif action == "add":
+            await _start_hall_add(message, state)
+        elif action == "edit":
+            if len(parts) < 3 or not parts[2].strip().isdigit():
+                await safe_reply(
+                    message,
+                    "❌ Укажите ID зала.\nПример: <code>/hall edit 3</code>",
+                    parse_mode="HTML",
+                    action_name="reply to /hall edit usage",
+                )
+                return
+            await _start_hall_edit(message, state, int(parts[2].strip()))
+        elif action == "on":
+            raw_id = parts[2].strip() if len(parts) >= 3 else ""
+            await _set_hall_enabled(message, True, raw_id)
+        elif action == "off":
+            raw_id = parts[2].strip() if len(parts) >= 3 else ""
+            await _set_hall_enabled(message, False, raw_id)
+        else:
+            await safe_reply(
+                message,
+                "🏟 <b>Управление залами</b>\n\n"
+                "<code>/hall</code> или <code>/hall list</code> — список\n"
+                "<code>/hall add</code> — добавить зал\n"
+                "<code>/hall edit ID</code> — редактировать зал\n"
+                "<code>/hall on ID</code> — включить зал\n"
+                "<code>/hall off ID</code> — выключить зал\n"
+                "<code>/hall cancel</code> — отменить мастер",
+                parse_mode="HTML",
+                action_name="reply to /hall usage",
+            )
+
+    @router.message(Command("cancel"))
+    async def cancel_handler(message: Message, state: FSMContext) -> None:
+        """Отменяет активный мастер."""
+        current_state = await state.get_state()
+        if current_state and current_state.startswith("HallWizard:"):
+            await _cancel_hall_wizard(message, state)
+
+    async def _process_hall_wizard_value(
+        message: Message, state: FSMContext
+    ) -> None:
+        """Обрабатывает один ответ мастера add/edit."""
+        if message.text is None:
+            return
+        if not await _is_message_admin(message):
+            return
+
+        raw_value = message.text.strip()
+        if raw_value.lower() in {"/cancel", "/hall cancel", "отмена"}:
+            await _cancel_hall_wizard(message, state)
+            return
+
+        data = await state.get_data()
+        mode = str(data.get("mode", "add"))
+        step_index = int(data.get("step_index", 0) or 0)
+        field, _state_value = HALL_WIZARD_STEPS[step_index]
+        template = dict(data.get("template", {}))
+        is_skip = raw_value in {"-", "skip", "пропустить", "оставить"}
+
+        def fail(text: str) -> None:
+            raise ValueError(text)
+
+        try:
+            if is_skip and mode == "edit":
+                pass
+            elif field == "name":
+                name = raw_value.strip()
+                if not name:
+                    fail("❌ Название не должно быть пустым.")
+                current_id = int(template["id"]) if "id" in template else None
+                if _hall_name_conflicts(name, current_id):
+                    fail("❌ Зал с таким названием уже есть. Введите другое название.")
+                template["name"] = name
+            elif field == "place":
+                template["place"] = "" if is_skip else raw_value
+            elif field in {"game_day_msk", "open_day_msk"}:
+                if is_skip and mode == "add" and field == "open_day_msk":
+                    game_day = str(template.get("game_day_msk") or "")
+                    if game_day not in HALL_DAYS:
+                        fail("❌ Сначала нужен корректный день игры.")
+                    template[field] = _previous_hall_day(game_day)
+                else:
+                    parsed_day = _parse_hall_day(raw_value)
+                    if parsed_day is None:
+                        fail("❌ День не распознан. Используйте Пн, Вт, Ср, Чт, Пт, Сб или Вс.")
+                    template[field] = parsed_day
+            elif field in {"game_time_msk", "open_time_msk"}:
+                if is_skip and mode == "add" and field == "open_time_msk":
+                    template[field] = "19:00"
+                else:
+                    parsed_time = _parse_hall_time(raw_value)
+                    if parsed_time is None:
+                        fail("❌ Время должно быть в формате HH:MM, например 20:30.")
+                    template[field] = f"{parsed_time[0]:02d}:{parsed_time[1]:02d}"
+            elif field in {"cost", "cost_per_game"}:
+                try:
+                    amount = int(raw_value)
+                except ValueError:
+                    fail("❌ Сумма должна быть целым числом.")
+                if amount < 0:
+                    fail("❌ Сумма не может быть отрицательной.")
+                template[field] = amount
+            elif field == "message":
+                if is_skip and mode == "add":
+                    hall_name = str(template.get("name") or "зал")
+                    template["message"] = f"Играем в {hall_name}?"
+                else:
+                    poll_message = raw_value.strip()
+                    if not poll_message:
+                        fail("❌ Текст опроса не должен быть пустым.")
+                    template["message"] = poll_message
+            elif field == "enabled":
+                if is_skip and mode == "add":
+                    template["enabled"] = 1
+                else:
+                    enabled = _parse_hall_enabled(raw_value)
+                    if enabled is None:
+                        fail("❌ Ответьте да или нет.")
+                    template["enabled"] = enabled
+        except ValueError as exc:
+            await safe_reply(
+                message,
+                str(exc),
+                parse_mode="HTML",
+                action_name="reply to hall wizard validation error",
+            )
+            await _ask_hall_step(message, state, step_index)
+            return
+
+        await state.update_data(template=template)
+        next_step = step_index + 1
+        if next_step >= len(HALL_WIZARD_STEPS):
+            await _show_hall_confirm(message, state)
+            return
+        await _ask_hall_step(message, state, next_step)
+
+    @router.message(HallWizard.name)
+    @router.message(HallWizard.place)
+    @router.message(HallWizard.game_day)
+    @router.message(HallWizard.game_time)
+    @router.message(HallWizard.open_day)
+    @router.message(HallWizard.open_time)
+    @router.message(HallWizard.cost)
+    @router.message(HallWizard.cost_per_game)
+    @router.message(HallWizard.message)
+    @router.message(HallWizard.enabled)
+    async def hall_wizard_value_handler(
+        message: Message, state: FSMContext
+    ) -> None:
+        """Обрабатывает ответы мастера залов."""
+        await _process_hall_wizard_value(message, state)
+
+    @router.callback_query(lambda c: c.data in {"hall_save", "hall_cancel"})
+    async def hall_wizard_confirm_handler(
+        callback_query: CallbackQuery, state: FSMContext
+    ) -> None:
+        """Обрабатывает финальное подтверждение мастера залов."""
+        user = callback_query.from_user
+        if user is None or callback_query.message is None:
+            return
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(
+            bot, user, callback_query.message.chat.id
+        )
+        if not is_admin:
+            await safe_answer_callback(
+                callback_query,
+                text="❌ У вас нет прав для этого действия.",
+                show_alert=True,
+                action_name="answer hall wizard forbidden",
+            )
+            return
+
+        current_state = await state.get_state()
+        data = await state.get_data()
+        if current_state != HallWizard.confirm.state or not data.get("template"):
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Мастер уже завершён или устарел.",
+                show_alert=True,
+                action_name="answer hall wizard stale state",
+            )
+            return
+
+        if callback_query.data == "hall_cancel":
+            await state.clear()
+            await safe_edit_message_text(
+                callback_query.message,
+                "✅ Действие отменено.",
+                action_name="edit hall wizard cancel",
+            )
+            await safe_answer_callback(
+                callback_query, action_name="answer hall wizard cancel"
+            )
+            return
+
+        mode = str(data.get("mode", "add"))
+        template = dict(data.get("template", {}))
+        save_template = _build_hall_template_for_save(template)
+        current_id = int(save_template["id"]) if "id" in save_template else None
+        if _hall_name_conflicts(str(save_template["name"]), current_id):
+            await state.set_state(HallWizard.name)
+            await state.update_data(step_index=0)
+            await safe_edit_message_text(
+                callback_query.message,
+                "❌ Зал с таким названием уже есть. Введите другое название.",
+                parse_mode="HTML",
+                action_name="edit hall wizard name conflict",
+            )
+            await safe_answer_callback(
+                callback_query,
+                text="Название уже занято.",
+                show_alert=True,
+                action_name="answer hall wizard name conflict",
+            )
+            return
+
+        create_backup("hall_command")
+        saved_id = save_poll_template(
+            save_template,
+            match_by="id" if mode == "edit" else "name",
+        )
+        if saved_id is None:
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Не удалось сохранить зал.",
+                show_alert=True,
+                action_name="answer hall wizard save failure",
+            )
+            return
+
+        await _refresh_hall_scheduler()
+        await state.clear()
+        action_text = "обновлён" if mode == "edit" else "добавлен"
+        await safe_edit_message_text(
+            callback_query.message,
+            f"✅ Зал <b>{escape_html(str(save_template['name']))}</b> {action_text}. ID: {saved_id}",
+            parse_mode="HTML",
+            action_name="edit hall wizard success",
+        )
+        await safe_answer_callback(
+            callback_query,
+            action_name="answer hall wizard success",
+        )
 
     @router.message(Command("open_monthly"))
     async def open_monthly_handler(message: Message) -> None:

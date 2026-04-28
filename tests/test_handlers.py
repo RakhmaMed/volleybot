@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram import Bot, Dispatcher
-from aiogram.types import Chat, Message, PollAnswer, Update
+from aiogram.types import CallbackQuery, Chat, Message, PollAnswer, Update
 
 from src.db import close_game, create_game, init_db, save_poll_template
 from src.handlers import register_handlers
@@ -386,15 +386,23 @@ class TestSubsCommand:
 
 
 @pytest.mark.asyncio
-class TestPollToggleCommands:
-    """Тесты команд /poll_off и /poll_on."""
+class TestHallCommands:
+    """Тесты команды /hall."""
 
+    @patch("src.handlers.create_backup")
+    @patch("src.handlers.refresh_scheduler")
     @patch("src.handlers.save_poll_template")
     @patch("src.handlers.get_poll_templates")
-    async def test_poll_off_by_id(
-        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
+    async def test_hall_off_by_id(
+        self,
+        mock_get_templates,
+        mock_save_poll_template,
+        mock_refresh_scheduler,
+        mock_create_backup,
+        admin_user,
+        admin_service,
     ):
-        """Команда /poll_off должна выключать шаблон по id."""
+        """Команда /hall off должна выключать зал по id."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
 
@@ -405,6 +413,7 @@ class TestPollToggleCommands:
             "enabled": 1,
         }
         mock_get_templates.return_value = [template]
+        mock_save_poll_template.return_value = 3
 
         dp.workflow_data.update(
             {
@@ -417,29 +426,39 @@ class TestPollToggleCommands:
 
         register_handlers(dp, bot)
 
-        chat = Chat(id=-1001234567890, type="supergroup")
         message = Message(
             message_id=10,
             date=MagicMock(),
-            chat=chat,
+            chat=Chat(id=-1001234567890, type="supergroup"),
             from_user=admin_user,
-            text="/poll_off 3",
+            text="/hall off 3",
         )
 
         await dp.feed_update(bot, Update(update_id=10, message=message))
 
+        mock_create_backup.assert_called_once_with("hall_command")
         mock_save_poll_template.assert_called_once()
+        assert mock_save_poll_template.call_args.kwargs["match_by"] == "id"
         saved_template = mock_save_poll_template.call_args.args[0]
         assert saved_template["enabled"] == 0
+        mock_refresh_scheduler.assert_called_once()
         method = bot.call_args.args[0]
         assert "теперь ⏸️ выключен" in (method.text or "")
 
+    @patch("src.handlers.create_backup")
+    @patch("src.handlers.refresh_scheduler")
     @patch("src.handlers.save_poll_template")
     @patch("src.handlers.get_poll_templates")
-    async def test_poll_on_by_name(
-        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
+    async def test_hall_on_by_id(
+        self,
+        mock_get_templates,
+        mock_save_poll_template,
+        mock_refresh_scheduler,
+        mock_create_backup,
+        admin_user,
+        admin_service,
     ):
-        """Команда /poll_on должна включать шаблон по имени без учёта регистра."""
+        """Команда /hall on должна включать зал по id."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
 
@@ -450,6 +469,7 @@ class TestPollToggleCommands:
             "enabled": 0,
         }
         mock_get_templates.return_value = [template]
+        mock_save_poll_template.return_value = 7
 
         dp.workflow_data.update(
             {
@@ -462,196 +482,31 @@ class TestPollToggleCommands:
 
         register_handlers(dp, bot)
 
-        chat = Chat(id=-1001234567890, type="supergroup")
         message = Message(
             message_id=11,
             date=MagicMock(),
-            chat=chat,
+            chat=Chat(id=-1001234567890, type="supergroup"),
             from_user=admin_user,
-            text="/poll_on test poll",
+            text="/hall on 7",
         )
 
         await dp.feed_update(bot, Update(update_id=11, message=message))
 
+        mock_create_backup.assert_called_once_with("hall_command")
         mock_save_poll_template.assert_called_once()
+        assert mock_save_poll_template.call_args.kwargs["match_by"] == "id"
         saved_template = mock_save_poll_template.call_args.args[0]
         assert saved_template["enabled"] == 1
+        mock_refresh_scheduler.assert_called_once()
         method = bot.call_args.args[0]
         assert "теперь активен" in (method.text or "")
 
     @patch("src.handlers.save_poll_template")
     @patch("src.handlers.get_poll_templates")
-    async def test_poll_off_by_partial_name(
+    async def test_hall_off_requires_numeric_id(
         self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
     ):
-        """Команда /poll_off должна находить опрос по уникальной части имени."""
-        bot = AsyncMock(spec=Bot)
-        dp = Dispatcher()
-
-        template = {
-            "id": 8,
-            "name": "Friday Evening Volleyball",
-            "message": "Msg",
-            "enabled": 1,
-        }
-        mock_get_templates.return_value = [template]
-
-        dp.workflow_data.update(
-            {
-                "admin_service": admin_service,
-                "bot_state_service": MagicMock(spec=BotStateService),
-                "poll_service": MagicMock(spec=PollService),
-                "scheduler": MagicMock(),
-            }
-        )
-
-        register_handlers(dp, bot)
-
-        chat = Chat(id=-1001234567890, type="supergroup")
-        message = Message(
-            message_id=111,
-            date=MagicMock(),
-            chat=chat,
-            from_user=admin_user,
-            text="/poll_off Evening Volleyball",
-        )
-
-        await dp.feed_update(bot, Update(update_id=111, message=message))
-
-        mock_save_poll_template.assert_called_once()
-        saved_template = mock_save_poll_template.call_args.args[0]
-        assert saved_template["enabled"] == 0
-
-    @patch("src.handlers.save_poll_template")
-    @patch("src.handlers.get_poll_templates")
-    async def test_poll_off_partial_name_reports_ambiguity(
-        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
-    ):
-        """Команда должна требовать уточнение при нескольких частичных совпадениях."""
-        bot = AsyncMock(spec=Bot)
-        dp = Dispatcher()
-
-        mock_get_templates.return_value = [
-            {"id": 1, "name": "Friday Morning", "message": "Msg", "enabled": 1},
-            {"id": 2, "name": "Friday Evening", "message": "Msg", "enabled": 1},
-        ]
-
-        dp.workflow_data.update(
-            {
-                "admin_service": admin_service,
-                "bot_state_service": MagicMock(spec=BotStateService),
-                "poll_service": MagicMock(spec=PollService),
-                "scheduler": MagicMock(),
-            }
-        )
-
-        register_handlers(dp, bot)
-
-        chat = Chat(id=-1001234567890, type="supergroup")
-        message = Message(
-            message_id=112,
-            date=MagicMock(),
-            chat=chat,
-            from_user=admin_user,
-            text="/poll_off Friday",
-        )
-
-        await dp.feed_update(bot, Update(update_id=112, message=message))
-
-        mock_save_poll_template.assert_not_called()
-        method = bot.call_args.args[0]
-        text = method.text or ""
-        assert "Найдено несколько опросов" in text
-        assert "1 — Friday Morning" in text
-        assert "2 — Friday Evening" in text
-
-    @patch("src.handlers.save_poll_template")
-    @patch("src.handlers.get_poll_templates")
-    async def test_poll_off_without_args_shows_hint(
-        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
-    ):
-        """Команда без аргументов должна показать подсказку и список шаблонов."""
-        bot = AsyncMock(spec=Bot)
-        dp = Dispatcher()
-
-        mock_get_templates.return_value = [
-            {"id": 1, "name": "Monday", "message": "Msg", "enabled": 1},
-            {"id": 2, "name": "Friday", "message": "Msg", "enabled": 0},
-        ]
-
-        dp.workflow_data.update(
-            {
-                "admin_service": admin_service,
-                "bot_state_service": MagicMock(spec=BotStateService),
-                "poll_service": MagicMock(spec=PollService),
-                "scheduler": MagicMock(),
-            }
-        )
-
-        register_handlers(dp, bot)
-
-        chat = Chat(id=-1001234567890, type="supergroup")
-        message = Message(
-            message_id=12,
-            date=MagicMock(),
-            chat=chat,
-            from_user=admin_user,
-            text="/poll_off",
-        )
-
-        await dp.feed_update(bot, Update(update_id=12, message=message))
-
-        mock_save_poll_template.assert_not_called()
-        method = bot.call_args.args[0]
-        text = method.text or ""
-        assert "Укажите ID или точное название опроса" in text
-        assert "1 — Monday — активен" in text
-        assert "2 — Friday — ⏸️ выключен" in text
-
-    @patch("src.handlers.save_poll_template")
-    @patch("src.handlers.get_poll_templates")
-    async def test_poll_off_already_disabled(
-        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
-    ):
-        """Повторное выключение должно отвечать без ошибки и без сохранения."""
-        bot = AsyncMock(spec=Bot)
-        dp = Dispatcher()
-
-        mock_get_templates.return_value = [
-            {"id": 5, "name": "Disabled Poll", "message": "Msg", "enabled": 0}
-        ]
-
-        dp.workflow_data.update(
-            {
-                "admin_service": admin_service,
-                "bot_state_service": MagicMock(spec=BotStateService),
-                "poll_service": MagicMock(spec=PollService),
-                "scheduler": MagicMock(),
-            }
-        )
-
-        register_handlers(dp, bot)
-
-        chat = Chat(id=-1001234567890, type="supergroup")
-        message = Message(
-            message_id=13,
-            date=MagicMock(),
-            chat=chat,
-            from_user=admin_user,
-            text="/poll_off 5",
-        )
-
-        await dp.feed_update(bot, Update(update_id=13, message=message))
-
-        mock_save_poll_template.assert_not_called()
-        method = bot.call_args.args[0]
-        assert "уже ⏸️ выключен" in (method.text or "")
-
-    @patch("src.handlers.get_poll_templates")
-    async def test_poll_off_as_regular_user(
-        self, mock_get_templates, regular_user, admin_service
-    ):
-        """Команда /poll_off недоступна обычному пользователю."""
+        """Команда /hall off должна принимать только ID."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
 
@@ -670,18 +525,433 @@ class TestPollToggleCommands:
 
         register_handlers(dp, bot)
 
-        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=12,
+            date=MagicMock(),
+            chat=Chat(id=-1001234567890, type="supergroup"),
+            from_user=admin_user,
+            text="/hall off Friday",
+        )
+
+        await dp.feed_update(bot, Update(update_id=12, message=message))
+
+        mock_save_poll_template.assert_not_called()
+        method = bot.call_args.args[0]
+        assert "числовой ID" in (method.text or "")
+
+    @patch("src.handlers.save_poll_template")
+    @patch("src.handlers.get_poll_templates")
+    async def test_hall_off_already_disabled(
+        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
+    ):
+        """Повторное выключение отвечает без сохранения."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_templates.return_value = [
+            {"id": 5, "name": "Disabled Poll", "message": "Msg", "enabled": 0}
+        ]
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+
+        register_handlers(dp, bot)
+
+        message = Message(
+            message_id=13,
+            date=MagicMock(),
+            chat=Chat(id=-1001234567890, type="supergroup"),
+            from_user=admin_user,
+            text="/hall off 5",
+        )
+
+        await dp.feed_update(bot, Update(update_id=13, message=message))
+
+        mock_save_poll_template.assert_not_called()
+        method = bot.call_args.args[0]
+        assert "уже ⏸️ выключен" in (method.text or "")
+
+    @patch("src.handlers.get_poll_templates")
+    async def test_hall_as_regular_user(
+        self, mock_get_templates, regular_user, admin_service
+    ):
+        """Команда /hall недоступна обычному пользователю."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_templates.return_value = [
+            {"id": 3, "name": "Friday Poll", "message": "Msg", "enabled": 1}
+        ]
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+
+        register_handlers(dp, bot)
+
         message = Message(
             message_id=14,
             date=MagicMock(),
-            chat=chat,
+            chat=Chat(id=-1001234567890, type="supergroup"),
             from_user=regular_user,
-            text="/poll_off 3",
+            text="/hall off 3",
         )
 
         await dp.feed_update(bot, Update(update_id=14, message=message))
 
         assert not bot.called
+
+    @patch("src.handlers.get_poll_templates")
+    async def test_hall_list(self, mock_get_templates, admin_user, admin_service):
+        """Команда /hall должна показывать список залов."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+
+        mock_get_templates.return_value = [
+            {
+                "id": 1,
+                "name": "Friday",
+                "place": "Gym",
+                "message": "Msg",
+                "game_day": "fri",
+                "game_hour_utc": 17,
+                "game_minute_utc": 30,
+                "cost": 150,
+                "cost_per_game": 2000,
+                "enabled": 1,
+            }
+        ]
+
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        message = Message(
+            message_id=15,
+            date=MagicMock(),
+            chat=Chat(id=-1001234567890, type="supergroup"),
+            from_user=admin_user,
+            text="/hall",
+        )
+
+        await dp.feed_update(bot, Update(update_id=15, message=message))
+
+        method = bot.call_args.args[0]
+        text = method.text or ""
+        assert "Friday" in text
+        assert "20:30 МСК" in text
+        assert "аренда 2000 ₽" in text
+
+    @patch("src.handlers.create_backup")
+    @patch("src.handlers.refresh_scheduler")
+    @patch("src.handlers.save_poll_template")
+    @patch("src.handlers.get_poll_templates")
+    async def test_hall_add_wizard_saves_after_confirmation(
+        self,
+        mock_get_templates,
+        mock_save_poll_template,
+        mock_refresh_scheduler,
+        mock_create_backup,
+        admin_user,
+        admin_service,
+    ):
+        """Мастер /hall add должен собрать поля и сохранить после подтверждения."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        chat = Chat(id=-1001234567890, type="supergroup")
+
+        mock_get_templates.return_value = []
+        mock_save_poll_template.return_value = 9
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        values = [
+            "/hall add",
+            "Friday",
+            "Gym",
+            "Пт",
+            "20:30",
+            "-",
+            "-",
+            "150",
+            "2000",
+            "-",
+            "да",
+        ]
+        for index, text in enumerate(values, start=20):
+            message = Message(
+                message_id=index,
+                date=MagicMock(),
+                chat=chat,
+                from_user=admin_user,
+                text=text,
+            )
+            await dp.feed_update(bot, Update(update_id=index, message=message))
+
+        confirm_message = Message(
+            message_id=99,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="confirm",
+        )
+        callback_query = CallbackQuery(
+            id="hall-save",
+            from_user=admin_user,
+            chat_instance="1",
+            message=confirm_message,
+            data="hall_save",
+        )
+
+        mock_edit_text = AsyncMock()
+        mock_answer = AsyncMock()
+        with (
+            patch.object(Message, "edit_text", mock_edit_text),
+            patch.object(CallbackQuery, "answer", mock_answer),
+        ):
+            await dp.feed_update(
+                bot, Update(update_id=100, callback_query=callback_query)
+            )
+
+        mock_create_backup.assert_called_once_with("hall_command")
+        mock_save_poll_template.assert_called_once()
+        saved_template = mock_save_poll_template.call_args.args[0]
+        assert mock_save_poll_template.call_args.kwargs["match_by"] == "name"
+        assert saved_template["name"] == "Friday"
+        assert saved_template["game_day"] == "fri"
+        assert saved_template["game_hour_utc"] == 17
+        assert saved_template["game_minute_utc"] == 30
+        assert saved_template["open_day"] == "thu"
+        assert saved_template["open_hour_utc"] == 16
+        assert saved_template["open_minute_utc"] == 0
+        assert saved_template["message"] == "Играем в Friday?"
+        mock_refresh_scheduler.assert_called_once()
+        mock_edit_text.assert_called_once()
+        mock_answer.assert_called_once()
+
+    @patch("src.handlers.save_poll_template")
+    @patch("src.handlers.get_poll_templates")
+    async def test_hall_add_wizard_repeats_invalid_field(
+        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
+    ):
+        """При ошибке мастер должен повторять текущий вопрос."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        chat = Chat(id=-1001234567890, type="supergroup")
+
+        mock_get_templates.return_value = []
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        for update_id, text in [(120, "/hall add"), (121, "Friday"), (122, "Gym"), (123, "wrong-day")]:
+            message = Message(
+                message_id=update_id,
+                date=MagicMock(),
+                chat=chat,
+                from_user=admin_user,
+                text=text,
+            )
+            await dp.feed_update(bot, Update(update_id=update_id, message=message))
+
+        mock_save_poll_template.assert_not_called()
+        texts = [
+            call.args[0].text or ""
+            for call in bot.call_args_list
+            if call.args and hasattr(call.args[0], "text")
+        ]
+        assert any("День не распознан" in text for text in texts)
+        assert texts[-1].startswith("Введите день игры")
+
+    @patch("src.handlers.save_poll_template")
+    @patch("src.handlers.get_poll_templates")
+    async def test_hall_add_wizard_shows_default_values(
+        self, mock_get_templates, mock_save_poll_template, admin_user, admin_service
+    ):
+        """Мастер /hall add должен показывать конкретные дефолты в подсказках."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        chat = Chat(id=-1001234567890, type="supergroup")
+
+        mock_get_templates.return_value = []
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        async def send(update_id: int, text: str) -> str:
+            message = Message(
+                message_id=update_id,
+                date=MagicMock(),
+                chat=chat,
+                from_user=admin_user,
+                text=text,
+            )
+            await dp.feed_update(bot, Update(update_id=update_id, message=message))
+            return bot.call_args.args[0].text or ""
+
+        await send(220, "/hall add")
+        await send(221, "Friday")
+        await send(222, "Gym")
+        await send(223, "Пт")
+        open_day_prompt = await send(224, "20:30")
+        assert "По умолчанию: <b>Чт</b>" in open_day_prompt
+
+        open_time_prompt = await send(225, "-")
+        assert "По умолчанию: <b>19:00</b>" in open_time_prompt
+
+        await send(226, "-")
+        await send(227, "150")
+        message_prompt = await send(228, "2000")
+        assert "По умолчанию: <b>Играем в Friday?</b>" in message_prompt
+
+        enabled_prompt = await send(229, "-")
+        assert "По умолчанию: <b>да</b>" in enabled_prompt
+        assert "Отправьте <code>-</code>" in enabled_prompt
+        mock_save_poll_template.assert_not_called()
+
+    @patch("src.handlers.create_backup")
+    @patch("src.handlers.refresh_scheduler")
+    @patch("src.handlers.save_poll_template")
+    @patch("src.handlers.get_poll_templates")
+    async def test_hall_edit_wizard_saves_by_id(
+        self,
+        mock_get_templates,
+        mock_save_poll_template,
+        mock_refresh_scheduler,
+        mock_create_backup,
+        admin_user,
+        admin_service,
+    ):
+        """Мастер /hall edit должен сохранять существующий зал по id."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        chat = Chat(id=-1001234567890, type="supergroup")
+
+        mock_get_templates.return_value = [
+            {
+                "id": 3,
+                "name": "Friday",
+                "place": "Old Gym",
+                "message": "Old question?",
+                "game_day": "fri",
+                "game_hour_utc": 17,
+                "game_minute_utc": 30,
+                "open_day": "thu",
+                "open_hour_utc": 16,
+                "open_minute_utc": 0,
+                "cost": 150,
+                "cost_per_game": 2000,
+                "enabled": 1,
+                "subs": [123],
+            }
+        ]
+        mock_save_poll_template.return_value = 3
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        values = [
+            "/hall edit 3",
+            "-",
+            "New Gym",
+            "-",
+            "-",
+            "-",
+            "-",
+            "200",
+            "-",
+            "-",
+            "нет",
+        ]
+        for index, text in enumerate(values, start=140):
+            message = Message(
+                message_id=index,
+                date=MagicMock(),
+                chat=chat,
+                from_user=admin_user,
+                text=text,
+            )
+            await dp.feed_update(bot, Update(update_id=index, message=message))
+
+        confirm_message = Message(
+            message_id=199,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="confirm",
+        )
+        callback_query = CallbackQuery(
+            id="hall-edit-save",
+            from_user=admin_user,
+            chat_instance="1",
+            message=confirm_message,
+            data="hall_save",
+        )
+
+        mock_edit_text = AsyncMock()
+        mock_answer = AsyncMock()
+        with (
+            patch.object(Message, "edit_text", mock_edit_text),
+            patch.object(CallbackQuery, "answer", mock_answer),
+        ):
+            await dp.feed_update(
+                bot, Update(update_id=200, callback_query=callback_query)
+            )
+
+        mock_create_backup.assert_called_once_with("hall_command")
+        mock_save_poll_template.assert_called_once()
+        assert mock_save_poll_template.call_args.kwargs["match_by"] == "id"
+        saved_template = mock_save_poll_template.call_args.args[0]
+        assert saved_template["id"] == 3
+        assert saved_template["name"] == "Friday"
+        assert saved_template["place"] == "New Gym"
+        assert saved_template["cost"] == 200
+        assert saved_template["cost_per_game"] == 2000
+        assert saved_template["enabled"] == 0
+        assert saved_template["subs"] == [123]
+        mock_refresh_scheduler.assert_called_once()
 
     async def test_schedule_marks_disabled_poll(self, regular_user, admin_service):
         """Команда /schedule должна помечать выключенный опрос."""
