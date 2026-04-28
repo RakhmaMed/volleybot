@@ -7,7 +7,14 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.types import CallbackQuery, Chat, Message, PollAnswer, Update
 
-from src.db import close_game, create_game, init_db, save_poll_template
+from src.db import (
+    close_game,
+    create_game,
+    ensure_player,
+    get_poll_templates,
+    init_db,
+    save_poll_template,
+)
 from src.handlers import register_handlers
 from src.services import BotStateService, PollService
 
@@ -383,6 +390,313 @@ class TestSubsCommand:
         method = bot.call_args.args[0]
         text = method.text or ""
         assert "⏸️ выключен" in text
+
+    @patch("src.handlers.create_backup")
+    async def test_subs_add_by_username_adds_subscription(
+        self, mock_create_backup, admin_user, regular_user, admin_service
+    ):
+        """/subs add добавляет абонемент по @username."""
+        init_db()
+        ensure_player(
+            user_id=regular_user.id,
+            name=regular_user.username,
+            fullname=regular_user.full_name,
+        )
+        poll_template_id = save_poll_template(
+            {"name": "Пятница", "message": "Играем?", "place": "Зал 1"}
+        )
+
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=10,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text=f"/subs add {poll_template_id} @{regular_user.username}",
+        )
+
+        await dp.feed_update(bot, Update(update_id=10, message=message))
+
+        template = get_poll_templates()[0]
+        assert regular_user.id in template["subs"]
+        mock_create_backup.assert_called_once_with("subs_command")
+        method = bot.call_args.args[0]
+        assert "Абонемент добавлен" in (method.text or "")
+        assert "Пятница" in (method.text or "")
+
+    @patch("src.handlers.create_backup")
+    async def test_subs_add_by_id_adds_subscription(
+        self, mock_create_backup, admin_user, regular_user, admin_service
+    ):
+        """/subs add добавляет абонемент по ID игрока."""
+        init_db()
+        ensure_player(
+            user_id=regular_user.id,
+            name=regular_user.username,
+            fullname=regular_user.full_name,
+        )
+        poll_template_id = save_poll_template({"name": "Среда", "message": "Играем?"})
+
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=11,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text=f"/subs add {poll_template_id} {regular_user.id}",
+        )
+
+        await dp.feed_update(bot, Update(update_id=11, message=message))
+
+        template = get_poll_templates()[0]
+        assert regular_user.id in template["subs"]
+        mock_create_backup.assert_called_once_with("subs_command")
+
+    @patch("src.handlers.create_backup")
+    async def test_subs_add_by_name_adds_subscription(
+        self, mock_create_backup, admin_user, admin_service
+    ):
+        """/subs add добавляет абонемент по имени игрока."""
+        init_db()
+        ensure_player(user_id=222, name="ivan", fullname="Иван Петров")
+        poll_template_id = save_poll_template({"name": "Вторник", "message": "Играем?"})
+
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=12,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text=f"/subs add {poll_template_id} Иван",
+        )
+
+        await dp.feed_update(bot, Update(update_id=12, message=message))
+
+        template = get_poll_templates()[0]
+        assert 222 in template["subs"]
+        mock_create_backup.assert_called_once_with("subs_command")
+
+    @patch("src.handlers.create_backup")
+    async def test_subs_add_ambiguous_name_uses_callback(
+        self, mock_create_backup, admin_user, admin_service
+    ):
+        """При нескольких совпадениях /subs add показывает кнопки, callback добавляет выбранного."""
+        init_db()
+        ensure_player(user_id=301, name="ivan1", fullname="Иван Один")
+        ensure_player(user_id=302, name="ivan2", fullname="Иван Два")
+        poll_template_id = save_poll_template({"name": "Четверг", "message": "Играем?"})
+
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=13,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text=f"/subs add {poll_template_id} Иван",
+        )
+
+        await dp.feed_update(bot, Update(update_id=13, message=message))
+
+        method = bot.call_args.args[0]
+        assert "Найдено несколько игроков" in (method.text or "")
+        assert method.reply_markup is not None
+
+        callback_message = Message(
+            message_id=14,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text="Выберите игрока",
+        )
+        callback_query = CallbackQuery(
+            id="subs-add-select",
+            from_user=admin_user,
+            chat_instance="ci",
+            data=f"subs_add_select:{poll_template_id}:302",
+            message=callback_message,
+        )
+
+        await dp.feed_update(bot, Update(update_id=14, callback_query=callback_query))
+
+        template = get_poll_templates()[0]
+        assert 302 in template["subs"]
+        assert 301 not in template["subs"]
+        mock_create_backup.assert_called_once_with("subs_command")
+
+    @patch("src.handlers.create_backup")
+    async def test_subs_add_duplicate_reports_existing_subscription(
+        self, mock_create_backup, admin_user, regular_user, admin_service
+    ):
+        """Повторное добавление не создает дубль и не делает бэкап."""
+        init_db()
+        ensure_player(
+            user_id=regular_user.id,
+            name=regular_user.username,
+            fullname=regular_user.full_name,
+        )
+        poll_template_id = save_poll_template(
+            {"name": "Пятница", "message": "Играем?", "subs": [regular_user.id]}
+        )
+
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=15,
+            date=MagicMock(),
+            chat=chat,
+            from_user=admin_user,
+            text=f"/subs add {poll_template_id} @{regular_user.username}",
+        )
+
+        await dp.feed_update(bot, Update(update_id=15, message=message))
+
+        template = get_poll_templates()[0]
+        assert template["subs"].count(regular_user.id) == 1
+        mock_create_backup.assert_not_called()
+        method = bot.call_args.args[0]
+        assert "уже есть абонемент" in (method.text or "")
+
+    async def test_subs_add_reports_invalid_inputs(
+        self, admin_user, regular_user, admin_service
+    ):
+        """Неверный ID зала, отсутствующий зал и игрок дают понятные ошибки."""
+        init_db()
+        ensure_player(
+            user_id=regular_user.id,
+            name=regular_user.username,
+            fullname=regular_user.full_name,
+        )
+        poll_template_id = save_poll_template({"name": "Пятница", "message": "Играем?"})
+
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+        chat = Chat(id=-1001234567890, type="supergroup")
+
+        cases = [
+            (20, "/subs add abc @regular_user", "числовой ID зала"),
+            (21, "/subs add 999 @regular_user", "Зал с ID 999 не найден"),
+            (22, f"/subs add {poll_template_id} @missing", "не найден"),
+        ]
+        for message_id, text, expected in cases:
+            message = Message(
+                message_id=message_id,
+                date=MagicMock(),
+                chat=chat,
+                from_user=admin_user,
+                text=text,
+            )
+            await dp.feed_update(bot, Update(update_id=message_id, message=message))
+            method = bot.call_args.args[0]
+            assert expected in (method.text or "")
+
+    @patch("src.handlers.create_backup")
+    async def test_subs_add_as_regular_user_is_ignored(
+        self, mock_create_backup, regular_user, admin_service
+    ):
+        """/subs add недоступен обычному пользователю."""
+        init_db()
+        ensure_player(
+            user_id=regular_user.id,
+            name=regular_user.username,
+            fullname=regular_user.full_name,
+        )
+        poll_template_id = save_poll_template({"name": "Пятница", "message": "Играем?"})
+
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(spec=BotStateService),
+                "poll_service": MagicMock(spec=PollService),
+                "scheduler": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        chat = Chat(id=-1001234567890, type="supergroup")
+        message = Message(
+            message_id=23,
+            date=MagicMock(),
+            chat=chat,
+            from_user=regular_user,
+            text=f"/subs add {poll_template_id} @{regular_user.username}",
+        )
+
+        await dp.feed_update(bot, Update(update_id=23, message=message))
+
+        template = get_poll_templates()[0]
+        assert regular_user.id not in template["subs"]
+        assert not bot.called
+        mock_create_backup.assert_not_called()
 
 
 @pytest.mark.asyncio

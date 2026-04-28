@@ -5,6 +5,7 @@ import pytest
 from src.db import (
     _connect,
     _create_current_schema,
+    add_poll_subscription,
     close_game,
     create_game,
     get_open_game_by_template_id,
@@ -424,6 +425,40 @@ class TestDBPolls:
         assert templates[0]["message"] == "Msg 2"
         assert "subs" in templates[0]
         assert set(templates[0]["subs"]) == {2, 3}
+
+    def test_add_poll_subscription_inserts_subscription(self, temp_db):
+        """add_poll_subscription добавляет игрока в подписчики зала."""
+        init_db()
+        _insert_player(123)
+        template_id = save_poll_template({"name": "Пятница", "message": "Игра"})
+
+        result = add_poll_subscription(int(template_id), 123)
+
+        assert result == "success"
+        template = get_poll_templates()[0]
+        assert template["subs"] == [123]
+
+    def test_add_poll_subscription_returns_duplicate(self, temp_db):
+        """Повторное добавление подписчика возвращает duplicate."""
+        init_db()
+        _insert_player(123)
+        template_id = save_poll_template({"name": "Пятница", "message": "Игра"})
+        assert add_poll_subscription(int(template_id), 123) == "success"
+
+        result = add_poll_subscription(int(template_id), 123)
+
+        assert result == "duplicate"
+        template = get_poll_templates()[0]
+        assert template["subs"] == [123]
+
+    def test_add_poll_subscription_reports_missing_entities(self, temp_db):
+        """Хелпер различает отсутствующий зал и отсутствующего игрока."""
+        init_db()
+        _insert_player(123)
+        template_id = save_poll_template({"name": "Пятница", "message": "Игра"})
+
+        assert add_poll_subscription(999, 123) == "missing_hall"
+        assert add_poll_subscription(int(template_id), 999) == "missing_player"
 
     def test_update_poll_template_by_id_allows_rename(self, temp_db):
         """Обновление по id должно переименовывать шаблон без создания дубля."""

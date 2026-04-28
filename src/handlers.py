@@ -29,6 +29,7 @@ from aiogram.types import (
 )
 
 from .db import (
+    add_poll_subscription,
     create_backup,
     ensure_player,
     find_player_by_name,
@@ -99,7 +100,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="schedule", description="Показать расписание опросов"),
         BotCommand(command="balance", description="Показать долги/балансы и кассу"),
         BotCommand(command="stats", description="Статистика по играм и игрокам"),
-        BotCommand(command="subs", description="Абонементы по дням"),
+        BotCommand(command="subs", description="Абонементы по дням / добавить"),
         BotCommand(command="pay", description="Изменить баланс / оплата зала"),
         BotCommand(command="restore", description="Восстановить баланс (без кассы)"),
         BotCommand(
@@ -653,6 +654,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "<b>Команды для администраторов:</b>\n"
             "/balance — список всех долгов + касса\n"
             "/subs — абонементы по дням\n"
+            "/subs add HALL_ID игрок — добавить абонемент игроку\n"
             "/pay [сумма] — изменить баланс (в ответ на сообщение)\n"
             "/pay [имя] [сумма] — найти игрока и изменить баланс\n"
             "/pay Оплата зала — оплатить аренду зала из кассы\n"
@@ -842,9 +844,194 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 f"⚠️ Сетевая ошибка при ответе на /balance от @{user.username if user else 'unknown'}"
             )
 
+    def _format_subs_add_usage() -> str:
+        """Возвращает подсказку для добавления абонемента."""
+        return (
+            "ℹ️ <b>Добавление абонемента</b>\n\n"
+            "Формат: <code>/subs add HALL_ID игрок</code>\n\n"
+            "Примеры:\n"
+            "<code>/subs add 3 @username</code>\n"
+            "<code>/subs add 3 12345678</code>\n"
+            "<code>/subs add 3 Иван Петров</code>\n\n"
+            "ID зала можно посмотреть командой <code>/hall</code>."
+        )
+
+    def _validate_subs_add_select_callback_data(data: str) -> tuple[int, int] | None:
+        """Парсит callback выбора игрока для /subs add."""
+        parts = data.split(":")
+        if len(parts) != 3 or parts[0] != "subs_add_select":
+            return None
+        _, raw_hall_id, raw_player_id = parts
+
+        try:
+            poll_template_id = int(raw_hall_id)
+            player_id = int(raw_player_id)
+        except ValueError:
+            return None
+
+        if poll_template_id <= 0 or player_id <= 0:
+            return None
+
+        return poll_template_id, player_id
+
+    def _format_hall_label(template: PollTemplate) -> str:
+        """Форматирует название зала с местом для ответа."""
+        poll_name = str(template.get("name") or "Без названия")
+        place = str(template.get("place") or "")
+        label = poll_name
+        if place:
+            label += f" ({place})"
+        return label
+
+    def _add_subscription_result_text(
+        poll_template_id: int, target_user_id: int
+    ) -> str:
+        """Добавляет подписку и возвращает HTML-ответ для пользователя."""
+        hall = _get_hall_by_id(poll_template_id)
+        if hall is None:
+            return f"❌ Зал с ID {poll_template_id} не найден."
+
+        player = get_player_info(target_user_id)
+        if player is None:
+            return f"❌ Игрок с ID {target_user_id} не найден."
+
+        hall_label = escape_html(_format_hall_label(hall))
+        player_link = format_player_link(player, target_user_id)
+        existing_subs = hall.get("subs") or []
+        if target_user_id in existing_subs:
+            return (
+                f"ℹ️ У игрока {player_link} уже есть абонемент на зал "
+                f"<b>{hall_label}</b>."
+            )
+
+        create_backup("subs_command")
+        status = add_poll_subscription(poll_template_id, target_user_id)
+        if status == "success":
+            return (
+                f"✅ Абонемент добавлен.\n"
+                f"Игрок: {player_link}\n"
+                f"Зал: <b>{hall_label}</b>"
+            )
+        if status == "duplicate":
+            return (
+                f"ℹ️ У игрока {player_link} уже есть абонемент на зал "
+                f"<b>{hall_label}</b>."
+            )
+        if status == "missing_hall":
+            return f"❌ Зал с ID {poll_template_id} не найден."
+        if status == "missing_player":
+            return f"❌ Игрок с ID {target_user_id} не найден."
+        return "❌ Не удалось добавить абонемент. Попробуйте ещё раз."
+
+    async def _handle_subs_add(message: Message, args: list[str]) -> None:
+        """Обрабатывает /subs add HALL_ID PLAYER."""
+        if len(args) < 4:
+            await safe_reply(
+                message,
+                _format_subs_add_usage(),
+                parse_mode="HTML",
+                action_name="reply to /subs add usage",
+            )
+            return
+
+        raw_hall_id = args[2].strip()
+        if not raw_hall_id.isdigit() or int(raw_hall_id) <= 0:
+            await safe_reply(
+                message,
+                "❌ Укажите числовой ID зала.\n\n" + _format_subs_add_usage(),
+                parse_mode="HTML",
+                action_name="reply to /subs add invalid hall id",
+            )
+            return
+
+        poll_template_id = int(raw_hall_id)
+        hall = _get_hall_by_id(poll_template_id)
+        if hall is None:
+            await safe_reply(
+                message,
+                f"❌ Зал с ID {poll_template_id} не найден.",
+                parse_mode="HTML",
+                action_name="reply to /subs add missing hall",
+            )
+            return
+
+        search_query = " ".join(args[3:]).strip()
+        if not search_query:
+            await safe_reply(
+                message,
+                _format_subs_add_usage(),
+                parse_mode="HTML",
+                action_name="reply to /subs add missing player query",
+            )
+            return
+
+        target_user_id: int | None = None
+        if search_query.isdigit():
+            target_user_id = int(search_query)
+            if get_player_info(target_user_id) is None:
+                await safe_reply(
+                    message,
+                    f"❌ Игрок с ID {target_user_id} не найден.",
+                    parse_mode="HTML",
+                    action_name="reply to /subs add missing player by id",
+                )
+                return
+        else:
+            clean_query = search_query.lstrip("@")
+            players = find_player_by_name(clean_query)
+            if not players:
+                await safe_reply(
+                    message,
+                    f"❌ Игрок '{escape_html(search_query)}' не найден.",
+                    parse_mode="HTML",
+                    action_name="reply to /subs add missing player by name",
+                )
+                return
+            if len(players) > 1:
+                keyboard = []
+                player_lines = []
+                for player in players[:10]:
+                    p_name = _format_player_choice_label(player)
+                    callback_data = (
+                        f"subs_add_select:{poll_template_id}:{player['id']}"
+                    )
+                    keyboard.append(
+                        [
+                            InlineKeyboardButton(
+                                text=p_name,
+                                callback_data=callback_data,
+                            )
+                        ]
+                    )
+                    player_lines.append(f"• {format_player_link(player)}")
+
+                hall_label = escape_html(_format_hall_label(hall))
+                await safe_reply(
+                    message,
+                    f"❓ Найдено несколько игроков ({len(players)}). "
+                    f"Выберите, кому добавить абонемент на <b>{hall_label}</b>:\n\n"
+                    + "\n".join(player_lines),
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+                    parse_mode="HTML",
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                    action_name="reply to /subs add ambiguity",
+                )
+                return
+
+            target_user_id = int(players[0]["id"])
+
+        result_text = _add_subscription_result_text(poll_template_id, target_user_id)
+        await safe_reply(
+            message,
+            result_text,
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="reply to /subs add result",
+        )
+
     @router.message(Command("subs"))
     async def subscriptions_handler(message: Message) -> None:
-        """Команда для отображения абонементов по дням (только для администратора)."""
+        """Команда для отображения и добавления абонементов (только для администратора)."""
         user = message.from_user
         if user is None:
             return
@@ -861,6 +1048,22 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 await message.reply(rate_limit_error)
             except TelegramNetworkError:
                 logging.warning("⚠️ Сетевая ошибка при отправке rate limit сообщения")
+            return
+
+        args = (message.text or "").split()
+        if len(args) >= 2:
+            action = args[1].lower()
+            if action == "add":
+                await _handle_subs_add(message, args)
+                return
+            await safe_reply(
+                message,
+                "❌ Неизвестное действие для /subs.\n\n"
+                "<code>/subs</code> — список абонементов\n"
+                "<code>/subs add HALL_ID игрок</code> — добавить абонемент",
+                parse_mode="HTML",
+                action_name="reply to /subs unknown action",
+            )
             return
 
         poll_templates = get_poll_templates()
@@ -2340,6 +2543,76 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             parse_mode="HTML",
             link_preview_options=LinkPreviewOptions(is_disabled=True),
             action_name="reply to /ball_donate success",
+        )
+
+    @router.callback_query(
+        lambda c: c.data and c.data.startswith("subs_add_select:")
+    )
+    async def process_subs_add_select(callback_query: CallbackQuery):
+        """Обработка выбора игрока для /subs add."""
+        user = callback_query.from_user
+        if user is None:
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка: нет информации о пользователе",
+                show_alert=True,
+                action_name="answer subs_add_select missing user",
+            )
+            return
+
+        if callback_query.message is None:
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка: сообщение не найдено",
+                show_alert=True,
+                action_name="answer subs_add_select missing message",
+            )
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(
+            bot, user, callback_query.message.chat.id
+        )
+        if not is_admin:
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Нет прав для этого действия.",
+                show_alert=True,
+                action_name="answer subs_add_select forbidden",
+            )
+            return
+
+        if callback_query.data is None:
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка данных.",
+                show_alert=True,
+                action_name="answer subs_add_select missing data",
+            )
+            return
+
+        result = _validate_subs_add_select_callback_data(callback_query.data)
+        if result is None:
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка формата данных.",
+                show_alert=True,
+                action_name="answer subs_add_select invalid format",
+            )
+            return
+
+        poll_template_id, target_user_id = result
+        result_text = _add_subscription_result_text(poll_template_id, target_user_id)
+        await safe_edit_message_text(
+            callback_query.message,
+            result_text,
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="edit subs_add_select result",
+        )
+        await safe_answer_callback(
+            callback_query,
+            action_name="answer subs_add_select success",
         )
 
     @router.callback_query(lambda c: c.data and c.data.startswith("player_select:"))

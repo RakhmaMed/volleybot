@@ -773,6 +773,60 @@ def get_poll_templates() -> list[PollTemplate]:
         return []
 
 
+def add_poll_subscription(
+    poll_template_id: int, user_id: int
+) -> Literal["success", "duplicate", "missing_hall", "missing_player", "error"]:
+    """Добавляет игрока в подписчики конкретного шаблона опроса."""
+    try:
+        init_db()
+        with _connect() as conn:
+            hall_row = conn.execute(
+                "SELECT 1 FROM poll_templates WHERE id = ?",
+                (poll_template_id,),
+            ).fetchone()
+            if hall_row is None:
+                return "missing_hall"
+
+            player_row = conn.execute(
+                "SELECT 1 FROM players WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            if player_row is None:
+                return "missing_player"
+
+            existing_row = conn.execute(
+                """
+                SELECT 1 FROM poll_subscriptions
+                WHERE poll_template_id = ? AND user_id = ?
+                """,
+                (poll_template_id, user_id),
+            ).fetchone()
+            if existing_row is not None:
+                return "duplicate"
+
+            conn.execute(
+                """
+                INSERT INTO poll_subscriptions (poll_template_id, user_id)
+                VALUES (?, ?)
+                """,
+                (poll_template_id, user_id),
+            )
+            conn.commit()
+            return "success"
+    except sqlite3.IntegrityError:
+        logging.exception(
+            "❌ Ошибка целостности при добавлении подписки: "
+            f"poll_template_id={poll_template_id}, user_id={user_id}"
+        )
+        return "error"
+    except sqlite3.Error:
+        logging.exception(
+            "❌ Ошибка при добавлении подписки: "
+            f"poll_template_id={poll_template_id}, user_id={user_id}"
+        )
+        return "error"
+
+
 def save_poll_template(
     template: typing.Mapping[str, typing.Any],
     *,
