@@ -43,14 +43,14 @@ require_flyctl() {
     fi
 }
 
-# Подбираем совместимый Python (<=3.13), чтобы зависимости имели готовые колёса
+# Подбираем Python 3.14, оставляя 3.13 как совместимый запасной вариант
 find_compatible_python() {
     if [ -n "$UV_PYTHON" ]; then
         echo "$UV_PYTHON"
         return
     fi
 
-    local candidates=("python3.12" "python3.13" "python3.11" "python3" "python")
+    local candidates=("python3.14" "python3" "python3.13" "python")
     local chosen=""
 
     for cmd in "${candidates[@]}"; do
@@ -64,7 +64,7 @@ PY
             major=${version%%.*}
             minor=${version#*.}
 
-            if [ "$major" -eq 3 ] && [ "$minor" -le 13 ]; then
+            if [ "$major" -eq 3 ] && [ "$minor" -ge 13 ] && [ "$minor" -le 14 ]; then
                 chosen="$cmd"
                 break
             fi
@@ -208,8 +208,8 @@ setup_environment() {
     # Выбор совместимой версии Python
     PYTHON_BIN=$(find_compatible_python)
     if [ -z "$PYTHON_BIN" ]; then
-        echo -e "${RED}❌ Не найден совместимый Python (нужен 3.12 или 3.13).${NC}"
-        echo -e "${YELLOW}Установите Python 3.12/3.13 или задайте переменную UV_PYTHON с путём до интерпретатора.${NC}"
+        echo -e "${RED}❌ Не найден совместимый Python (нужен 3.14 или 3.13).${NC}"
+        echo -e "${YELLOW}Установите Python 3.14/3.13 или задайте переменную UV_PYTHON с путём до интерпретатора.${NC}"
         exit 1
     fi
     PYTHON_VERSION=$("$PYTHON_BIN" - <<'PY'
@@ -222,7 +222,7 @@ PY
     # Создание виртуального окружения
     echo ""
     echo -e "${YELLOW}[2/4] Создание виртуального окружения...${NC}"
-    UV_PYTHON="$PYTHON_BIN" uv venv
+    UV_PYTHON="$PYTHON_BIN" uv venv --clear
     echo -e "${GREEN}✓ Виртуальное окружение создано${NC}"
 
     # Активация виртуального окружения

@@ -990,7 +990,12 @@ class TestPollIntegration:
 
         register_handlers(dp, bot)
 
-        poll_answer = PollAnswer(poll_id="poll123", user=regular_user, option_ids=[0])
+        poll_answer = PollAnswer(
+            poll_id="poll123",
+            user=regular_user,
+            option_ids=[0],
+            option_persistent_ids=["0"],
+        )
 
         await dp.feed_update(bot, Update(update_id=8, poll_answer=poll_answer))
 

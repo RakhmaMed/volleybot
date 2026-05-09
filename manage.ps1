@@ -14,19 +14,18 @@ $CONTAINER_NAME = "volleybot"
 $IMAGE_NAME = "volleybot:latest"
 $PORT = "127.0.0.1:8443:8443"
 
-# Подбираем совместимый Python (<=3.13), чтобы зависимости ставились без сборки
+# Подбираем Python 3.14, оставляя 3.13 как совместимый запасной вариант
 function Get-CompatiblePython {
     if ($env:UV_PYTHON) {
         return $env:UV_PYTHON
     }
 
     $candidates = @(
-        @{ Cmd = @("py", "-3.12") },
-        @{ Cmd = @("py", "-3.13") },
-        @{ Cmd = @("python3.12") },
-        @{ Cmd = @("python3.13") },
-        @{ Cmd = @("python3.11") },
+        @{ Cmd = @("py", "-3.14") },
+        @{ Cmd = @("python3.14") },
         @{ Cmd = @("python3") },
+        @{ Cmd = @("py", "-3.13") },
+        @{ Cmd = @("python3.13") },
         @{ Cmd = @("python") }
     )
 
@@ -46,7 +45,7 @@ function Get-CompatiblePython {
             $versionOut = & $exe @args "-c" "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
             if ($LASTEXITCODE -ne 0) { continue }
             $parts = $versionOut.Trim().Split(".")
-            if ($parts[0] -eq "3" -and [int]$parts[1] -le 13) {
+            if ($parts[0] -eq "3" -and [int]$parts[1] -ge 13 -and [int]$parts[1] -le 14) {
                 $pathOut = & $exe @args "-c" "import sys; print(sys.executable)"
                 if ($LASTEXITCODE -eq 0 -and $pathOut) {
                     return $pathOut.Trim()
@@ -136,8 +135,8 @@ function Setup-Environment {
     # Выбор совместимой версии Python
     $pythonPath = Get-CompatiblePython
     if (-not $pythonPath) {
-        Write-Host "❌ Не найден совместимый Python (нужен 3.12 или 3.13)." -ForegroundColor Red
-        Write-Host "Установите Python 3.12/3.13 или задайте переменную окружения UV_PYTHON с путём до интерпретатора." -ForegroundColor Yellow
+        Write-Host "❌ Не найден совместимый Python (нужен 3.14 или 3.13)." -ForegroundColor Red
+        Write-Host "Установите Python 3.14/3.13 или задайте переменную окружения UV_PYTHON с путём до интерпретатора." -ForegroundColor Yellow
         exit 1
     }
     $pythonVersion = & $pythonPath "-c" "import sys; print('.'.join(map(str, sys.version_info[:3])))"
@@ -148,7 +147,7 @@ function Setup-Environment {
     # Создание виртуального окружения
     Write-Host ""
     Write-Host "[2/4] Создание виртуального окружения..." -ForegroundColor Yellow
-    uv venv --python $pythonPath
+    uv venv --python $pythonPath --clear
     if ($LASTEXITCODE -ne 0) {
         Write-Host "❌ Ошибка при создании виртуального окружения" -ForegroundColor Red
         exit 1

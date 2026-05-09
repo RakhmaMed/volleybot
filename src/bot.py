@@ -2,7 +2,7 @@
 Telegram-бот для организации опросов.
 Точка входа приложения.
 
-Требования: Python 3.13+, aiogram 3.x
+Требования: Python 3.14, aiogram 3.x
 """
 
 from __future__ import annotations
