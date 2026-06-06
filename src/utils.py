@@ -10,6 +10,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import time
 import traceback
 from collections import defaultdict
@@ -27,6 +28,7 @@ _RATE_LIMIT_CACHE: dict[int, list[float]] = defaultdict(list)
 RATE_LIMIT_WINDOW = 60  # Окно в секундах
 RATE_LIMIT_MAX_REQUESTS = 20  # Максимум запросов в окне
 DEFAULT_GAMES_PER_MONTH = 4
+TELEGRAM_USERNAME_RE = re.compile(r"^(?=.{1,32}$)(?=.*[A-Za-z0-9])[A-Za-z0-9_]+$")
 WEEKDAY_TO_INDEX: dict[str, int] = {
     "mon": 0,
     "tue": 1,
@@ -36,6 +38,19 @@ WEEKDAY_TO_INDEX: dict[str, int] = {
     "sat": 5,
     "sun": 6,
 }
+
+
+def normalize_telegram_username(username: Any) -> str | None:
+    """Возвращает валидный Telegram username без @ или None."""
+    if username is None:
+        return None
+
+    clean_username = str(username).strip().lstrip("@")
+    if not clean_username:
+        return None
+    if not TELEGRAM_USERNAME_RE.fullmatch(clean_username):
+        return None
+    return clean_username
 
 
 def count_games_in_month(
@@ -425,7 +440,7 @@ def format_player_link(
         return f'<a href="tg://user?id={user_id}">ID: {user_id}</a>'
 
     pid = player_data.get("id")
-    username = player_data.get("name")
+    username = normalize_telegram_username(player_data.get("name"))
     fullname = player_data.get("fullname")
 
     # Определяем текст ссылки (что будет видно пользователю)
@@ -437,10 +452,9 @@ def format_player_link(
         display_text = f"ID: {pid}"
 
     # Определяем URL ссылки
-    if username and username.strip():
+    if username:
         # Приоритет: ссылка через username (t.me/username)
-        clean_username = username.strip().lstrip("@")
-        link = f"https://t.me/{clean_username}"
+        link = f"https://t.me/{username}"
     else:
         # Fallback: ссылка через ID (tg://user?id=...)
         link = f"tg://user?id={pid}"

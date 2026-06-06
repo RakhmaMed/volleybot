@@ -33,12 +33,12 @@ class TestDBPlayers:
         assert players[0]["id"] == 123
         assert players[0]["fullname"] == "Test User"
 
-    def test_ensure_player_preserves_existing_data(self, temp_db):
+    def test_ensure_player_updates_username_preserves_fullname(self, temp_db):
         """
-        Проверка что существующие данные НЕ перезаписываются.
+        Проверка что Telegram username актуализируется, а fullname сохраняется.
 
         Важно: это защищает от случайной перезаписи вручную установленных имён,
-        даже если пользователь изменит своё имя в Telegram.
+        но не держит устаревший username после смены в Telegram.
         """
         init_db()
         # Первый вызов: создаём игрока с начальными данными
@@ -47,12 +47,10 @@ class TestDBPlayers:
         # Второй вызов: пытаемся изменить (например, из Telegram пришли новые данные)
         ensure_player(user_id=123, name="new_name", fullname="New Fullname")
 
-        # Проверяем: должны остаться ОРИГИНАЛЬНЫЕ данные
+        # Проверяем: username обновился, а отображаемое имя осталось прежним
         players = get_all_players()
         assert len(players) == 1
-        assert players[0]["name"] == "original_name", (
-            "Name должен остаться оригинальным"
-        )
+        assert players[0]["name"] == "new_name", "Name должен обновиться"
         assert players[0]["fullname"] == "Original Fullname", (
             "Fullname должен остаться оригинальным"
         )
@@ -90,7 +88,7 @@ class TestDBPlayers:
 
         players = get_all_players()
         assert len(players) == 1
-        assert players[0]["name"] == "user_name", "Существующий name должен сохраниться"
+        assert players[0]["name"] == "new_name", "Существующий name должен обновиться"
         assert players[0]["fullname"] == "Added Fullname", (
             "NULL fullname должен заполниться"
         )
@@ -128,8 +126,19 @@ class TestDBPlayers:
 
         players = get_all_players()
         assert len(players) == 1
-        assert players[0]["name"] == "user123", "Существующий name должен сохраниться"
+        assert players[0]["name"] == "new_user123", "Существующий name должен обновиться"
         assert players[0]["fullname"] == "New Name", "NULL fullname должен заполниться"
+
+    def test_ensure_player_invalid_username_preserves_existing_name(self, temp_db):
+        """Невалидный username не должен затирать сохранённый username."""
+        init_db()
+        ensure_player(user_id=204, name="valid_user", fullname="Valid User")
+
+        ensure_player(user_id=204, name="Invalid Username", fullname=None)
+
+        players = get_all_players()
+        assert len(players) == 1
+        assert players[0]["name"] == "valid_user"
 
     def test_ensure_player_real_world_scenario(self, temp_db):
         """

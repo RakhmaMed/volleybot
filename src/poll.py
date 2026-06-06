@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from .config import MAX_PLAYERS, RESERVE_PLAYERS
 from .db import get_player_info
+from .utils import normalize_telegram_username
 
 SUBSCRIPTION_PRIORITY_WINDOW_HOURS = 14
 
@@ -146,7 +147,7 @@ def _render_voter_name(voter: VoterInfo, is_subscriber: bool) -> tuple[str, bool
     ball_donate = False
 
     if player:
-        username = str(player.get("name") or "").replace("@", "").strip()
+        username = normalize_telegram_username(player.get("name")) or ""
         fullname = str(player.get("fullname") or "").strip()
         ball_donate = bool(player.get("ball_donate"))
         if fullname:

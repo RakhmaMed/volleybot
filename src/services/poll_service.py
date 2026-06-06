@@ -41,6 +41,7 @@ from ..db import (
     get_open_games,
     get_open_monthly_game,
     get_player_balance,
+    get_player_info,
     get_poll_templates,
     get_single_game_income_stats,
     load_monthly_votes,
@@ -66,6 +67,7 @@ from ..utils import (
     escape_html,
     format_player_link,
     get_next_month_str,
+    normalize_telegram_username,
     retry_async,
     save_error_dump,
 )
@@ -736,9 +738,28 @@ class PollService:
         return build_regular_poll_roster(data)
 
     @staticmethod
-    def _format_roster_lines(entries: list[Any]) -> str:
+    def _format_roster_entry_name(entry: Any) -> str:
+        player = get_player_info(entry.player_id)
+        if player is None:
+            return escape_html(entry.rendered_name)
+
+        username = normalize_telegram_username(player.get("name"))
+        if username:
+            return escape_html(entry.rendered_name)
+
+        return format_player_link(
+            {
+                "id": entry.player_id,
+                "name": None,
+                "fullname": entry.rendered_name,
+            },
+            entry.player_id,
+        )
+
+    @classmethod
+    def _format_roster_lines(cls, entries: list[Any]) -> str:
         return "\n".join(
-            f"{index}) {escape_html(entry.rendered_name)}"
+            f"{index}) {cls._format_roster_entry_name(entry)}"
             for index, entry in enumerate(entries, start=1)
         )
 

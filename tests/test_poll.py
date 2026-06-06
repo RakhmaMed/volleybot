@@ -12,6 +12,7 @@ from aiogram.methods import SendPoll
 from src.config import MAX_PLAYERS, MIN_PLAYERS, RESERVE_PLAYERS
 from src.db import (
     POLL_STATE_KEY,
+    _connect,
     create_game,
     ensure_player,
     get_game,
@@ -693,6 +694,39 @@ class TestUpdatePlayersList:
         assert f"{len(voters)}/{MIN_PLAYERS}" in call_args.kwargs["text"]
         assert "@user1" in call_args.kwargs["text"]
         assert "@user2" in call_args.kwargs["text"]
+
+    async def test_update_players_list_links_player_without_username(
+        self, mock_bot, temp_db
+    ):
+        """Игрок без username должен выводиться ссылкой на профиль по ID."""
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
+                (11, "Мадя", "Мадя"),
+            )
+            conn.commit()
+
+        service = PollService()
+        poll_id = "test_no_username_link"
+        service._poll_data[poll_id] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=123,
+            info_msg_id=124,
+            yes_voters=[VoterInfo(id=11, name="@Мадя")],
+            last_message_text="",
+            subs=[],
+        )
+        service._update_tasks[poll_id] = None
+
+        mock_bot.edit_message_text = AsyncMock()
+
+        with patch("src.services.poll_service.asyncio.sleep", new_callable=AsyncMock):
+            await service._update_players_list(mock_bot, poll_id)
+
+        text = mock_bot.edit_message_text.call_args.kwargs["text"]
+        assert '<a href="tg://user?id=11">Мадя</a>' in text
+        assert "(@Мадя)" not in text
 
     async def test_update_players_list_with_reserves(self, mock_bot):
         """Тест обновления списка с запасными игроками."""
