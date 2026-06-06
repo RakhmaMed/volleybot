@@ -1451,6 +1451,23 @@ def test_format_subscription_report_sorts_by_name():
     assert report.index("Борис</a> - 200 ₽") < report.index("Марат</a> - 400 ₽")
 
 
+def test_format_hall_summary_adds_three_hall_combo_price():
+    """Сводка абонемента должна показывать тариф для 3 залов."""
+    service = PollService()
+    result = SubscriptionResult(
+        paid_polls=[],
+        subscriber_charges=[],
+        price_per_hall=260,
+        combo_price=440,
+        tier_prices={1: 260, 2: 440, 3: 660},
+    )
+
+    summary = service._format_hall_summary(result)
+
+    assert "Комбо (2 зала): <b>440 ₽</b>" in summary
+    assert "Комбо (3 зала): <b>660 ₽</b>" in summary
+
+
 def test_format_subscription_report_adds_payment_details():
     """Итоговый отчёт должен включать реквизиты для перевода."""
     service = PollService()

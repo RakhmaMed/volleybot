@@ -80,13 +80,26 @@ GAMES_PER_MONTH = 4  # fallback для '*'/некорректного дня
 SAFETY_K = 0.7  # Коэффициент надёжности (риск неявки)
 TARGET_GROWTH = 1000  # Желаемый прирост казны в месяц (руб.)
 SAVINGS_BUFFER = 6000  # Целевая «подушка» казны (руб.)
-COMBO_DISCOUNT_COEFF = 1.7  # Комбо = 1.7× одного зала (скидка ~15%)
+COMBO_DISCOUNT_COEFF = 1.7  # Комбо за 2 зала = 1.7× одного зала (скидка ~15%)
 MIN_SUB_PRICE = 400  # Минимальная цена абонемента за 1 зал
 SUB_PRICE_DISCOUNT_SUBS_THRESHOLD = 18  # После этого порога можно уйти ниже MIN
 DISCOUNTED_MIN_SUB_PRICE = 100  # Абсолютный минимум при высокой загрузке зала
 MAX_SUB_PRICE = 500  # Максимальная цена абонемента за 1 зал
 DEFAULT_SUB_PRICE = 450  # Цена по умолчанию, если нет подписчиков
 PLAYERS_LIST_UPDATE_DELAY_SECONDS = 5  # Задержка перед обновлением списка игроков
+
+
+def _subscription_price_weight(hall_count: int) -> float:
+    """Возвращает вес подписчика в расчёте цены для выбранного числа залов."""
+    if hall_count <= 1:
+        return 1.0
+    discounted_hall_weight = COMBO_DISCOUNT_COEFF / 2
+    return hall_count * discounted_hall_weight
+
+
+def _round_subscription_price(value: float) -> int:
+    """Округляет цену абонемента до 10 рублей."""
+    return round(value / 10) * 10
 
 
 def calculate_subscription(
@@ -102,7 +115,7 @@ def calculate_subscription(
     Держит единую цену абонемента за каждый зал в диапазоне 400-500 руб.,
     но при высокой загрузке хотя бы одного зала может опустить её до 100 руб.
     Недостающая часть аренды покрывается ожидаемым доходом с разовых игроков.
-    Подписчики на 2+ зала получают комбо-скидку (~15%).
+    Подписчики на 2+ зала получают комбо-скидку (~15%) за каждый выбранный зал.
 
     Args:
         paid_polls: шаблоны залов, участвующих в расчёте абонемента.
@@ -148,14 +161,11 @@ def calculate_subscription(
 
     total_rent = sum(h.monthly_rent for h in paid_poll_rows)
 
-    # --- 2. Классифицируем подписчиков: single-hall vs combo ---
+    # --- 2. Классифицируем подписчиков по количеству выбранных залов ---
     user_halls: dict[int, list[str]] = {}
     for hall in paid_poll_rows:
         for uid in votes_by_poll.get(hall.name, set()):
             user_halls.setdefault(uid, []).append(hall.name)
-
-    n_combo = sum(1 for halls in user_halls.values() if len(halls) >= 2)
-    n_single = sum(1 for halls in user_halls.values() if len(halls) == 1)
 
     # --- 3. Прогноз дохода с разовых игроков ---
     # Историческая статистика приходит из БД как средний доход с разовых за одну
@@ -232,7 +242,9 @@ def calculate_subscription(
     needed_from_subs = total_rent + adjustment - expected_singles_income
 
     # --- 6. Расчёт единой цены за 1 зал ---
-    divisor = n_single + (COMBO_DISCOUNT_COEFF * n_combo)
+    divisor = sum(
+        _subscription_price_weight(len(halls)) for halls in user_halls.values()
+    )
 
     if divisor > 0:
         raw_price = needed_from_subs / divisor
@@ -247,10 +259,18 @@ def calculate_subscription(
         else MIN_SUB_PRICE
     )
     price_per_hall = max(min_price, min(MAX_SUB_PRICE, raw_price))
-    price_per_hall = round(price_per_hall / 10) * 10
+    price_per_hall = _round_subscription_price(price_per_hall)
 
-    # --- 7. Комбо-цена ---
-    combo_price = round((price_per_hall * COMBO_DISCOUNT_COEFF) / 10) * 10
+    # --- 7. Тарифы по количеству залов ---
+    max_hall_count = max((len(halls) for halls in user_halls.values()), default=2)
+    max_hall_count = max(max_hall_count, 2)
+    tier_prices = {
+        hall_count: _round_subscription_price(
+            price_per_hall * _subscription_price_weight(hall_count)
+        )
+        for hall_count in range(1, max_hall_count + 1)
+    }
+    combo_price = tier_prices[2]
 
     # --- 8. Заполняем per_person в paid_polls ---
     for h in paid_poll_rows:
@@ -260,8 +280,7 @@ def calculate_subscription(
     # --- 9. Формируем списания ---
     subscriber_charges: list[SubscriberCharge] = []
     for uid, halls in sorted(user_halls.items()):
-        is_combo = len(halls) >= 2
-        total = combo_price if is_combo else price_per_hall
+        total = tier_prices[len(halls)]
         subscriber_charges.append(
             SubscriberCharge(
                 user_id=uid,
@@ -283,6 +302,7 @@ def calculate_subscription(
         combo_price=combo_price,
         expected_singles_income=expected_singles_income,
         projected_savings=projected_savings,
+        tier_prices=tier_prices,
     )
 
 
@@ -1577,12 +1597,32 @@ class PollService:
                 )
         if result.price_per_hall > 0:
             lines.append(f"\n💰 Абонемент на 1 зал: <b>{result.price_per_hall} ₽</b>")
-            lines.append(f"💰 Комбо (2 зала): <b>{result.combo_price} ₽</b>")
+            tier_prices = result.tier_prices or {
+                1: result.price_per_hall,
+                2: result.combo_price,
+            }
+            for hall_count in sorted(tier_prices):
+                if hall_count < 2:
+                    continue
+                halls_label = PollService._format_halls_count(hall_count)
+                lines.append(
+                    f"💰 Комбо ({hall_count} {halls_label}): "
+                    f"<b>{tier_prices[hall_count]} ₽</b>"
+                )
         if result.expected_singles_income > 0:
             lines.append(
                 f"📈 Ожидаемый доход с разовых: {result.expected_singles_income} ₽"
             )
         return "\n".join(lines) if lines else "Платные игры не найдены."
+
+    @staticmethod
+    def _format_halls_count(count: int) -> str:
+        """Возвращает русскую форму слова «зал» для счётчика."""
+        if count % 10 == 1 and count % 100 != 11:
+            return "зал"
+        if count % 10 in {2, 3, 4} and count % 100 not in {12, 13, 14}:
+            return "зала"
+        return "залов"
 
     @staticmethod
     def _format_subscription_report(

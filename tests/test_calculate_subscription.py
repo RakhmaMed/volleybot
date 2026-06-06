@@ -283,7 +283,7 @@ class TestPriceRange:
 
 
 class TestComboDiscount:
-    """Подписчики на 2+ зала получают скидку."""
+    """Подписчики на несколько залов получают скидку."""
 
     def test_combo_cheaper_than_two_singles(self):
         """Комбо дешевле, чем два абонемента по отдельности."""
@@ -354,6 +354,35 @@ class TestComboDiscount:
         for charge in result.subscriber_charges:
             assert charge.total == result.combo_price
             assert len(charge.halls) == 2
+
+    def test_three_hall_subscriber_charged_for_three_halls(self):
+        """Подписчик на 3 зала платит тариф за 3 зала, а не combo_price за 2."""
+        polls = [
+            _make_poll("Понедельник", cost_per_game=1500),
+            _make_poll("Пятница", cost_per_game=1500),
+            _make_poll("Суббота", cost_per_game=1000),
+        ]
+        votes = {
+            "Понедельник": {1, 2},
+            "Пятница": {1, 3},
+            "Суббота": {1, 4},
+        }
+        result = calculate_subscription(polls, votes)
+
+        charges_by_id = {c.user_id: c for c in result.subscriber_charges}
+        expected_three_hall_price = (
+            round(result.price_per_hall * COMBO_DISCOUNT_COEFF / 2 * 3 / 10) * 10
+        )
+
+        assert result.tier_prices[2] == result.combo_price
+        assert result.tier_prices[3] == expected_three_hall_price
+        assert charges_by_id[1].total == result.tier_prices[3]
+        assert charges_by_id[1].total > result.combo_price
+        assert sorted(charges_by_id[1].halls) == [
+            "Понедельник",
+            "Пятница",
+            "Суббота",
+        ]
 
     def test_all_single_hall_subscribers(self):
         """Нет комбо — все платят price_per_hall."""
@@ -687,6 +716,7 @@ class TestResultStructure:
         assert isinstance(result.combo_price, int)
         assert isinstance(result.expected_singles_income, int)
         assert isinstance(result.projected_savings, int)
+        assert isinstance(result.tier_prices, dict)
 
         h = result.paid_polls[0]
         assert isinstance(h.poll_template_id, int)
