@@ -550,7 +550,10 @@ class TestSendPollSpec:
         )
         mock_bot.send_message = AsyncMock()
 
-        with patch("src.services.poll_service.save_error_dump") as mock_save:
+        with (
+            patch("src.services.poll_service.ADMIN_USER_ID", 777),
+            patch("src.services.poll_service.save_error_dump") as mock_save,
+        ):
             result = await service.send_poll_spec(
                 mock_bot,
                 chat_id=-1001234567890,
@@ -561,6 +564,10 @@ class TestSendPollSpec:
             assert result == -1001234567890
             mock_save.assert_called_once()
             mock_bot.send_message.assert_called_once()
+            assert mock_bot.send_message.call_args.kwargs["chat_id"] == 777
+            assert "chat_id: <code>-1001234567890</code>" in (
+                mock_bot.send_message.call_args.kwargs["text"]
+            )
 
     async def test_send_poll_spec_notifies_admin_when_db_save_fails(
         self, mock_bot

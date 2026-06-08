@@ -977,17 +977,19 @@ class PollService:
 
             try:
                 error_msg = (
-                    f'❌ *Ошибка при создании опроса "{poll_name}"*\n\n'
-                    f"Не удалось создать опрос. Пожалуйста, проверьте логи и файл дампа для подробностей."
+                    f'❌ <b>Ошибка при создании опроса "{escape_html(poll_name)}"</b>\n\n'
+                    f"chat_id: <code>{chat_id}</code>\n"
+                    f"Ошибка Telegram: <code>{escape_html(str(e))}</code>\n\n"
+                    "Проверьте, что бот добавлен в этот чат и видит его."
                 )
                 await self._safe_send_message(
                     bot,
-                    chat_id=chat_id,
+                    chat_id=ADMIN_USER_ID,
                     text=error_msg,
-                    parse_mode="Markdown",
-                    action_name="notify poll creation error",
+                    parse_mode="HTML",
+                    action_name="notify admin about poll creation error",
                 )
-                logging.debug("✅ Уведомление об ошибке отправлено в чат")
+                logging.debug("✅ Уведомление об ошибке отправлено админу")
             except (
                 TelegramAPIError,
                 TelegramNetworkError,
@@ -995,7 +997,8 @@ class PollService:
                 OSError,
             ):
                 logging.exception(
-                    f"❌ Не удалось отправить уведомление об ошибке в чат {chat_id}"
+                    "❌ Не удалось отправить админу уведомление об ошибке "
+                    f"создания опроса в чат {chat_id}"
                 )
 
             return chat_id
