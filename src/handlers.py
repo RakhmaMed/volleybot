@@ -136,16 +136,53 @@ async def setup_bot_commands(bot: Bot) -> None:
     logging.info("✅ Команды бота зарегистрированы в меню Telegram")
 
 
-def _format_player_detail(p: dict) -> str:
+def _format_player_subscription_labels(
+    player_id: int, poll_templates: list[PollTemplate] | None = None
+) -> list[str]:
+    """Возвращает названия залов, где у игрока есть абонемент."""
+    if poll_templates is None:
+        poll_templates = get_poll_templates()
+
+    labels: list[str] = []
+    for template in poll_templates:
+        subs = template.get("subs") or []
+        if player_id not in subs:
+            continue
+
+        poll_name = str(template.get("name") or "Без названия")
+        place = str(template.get("place") or "").strip()
+        label = poll_name
+        if place:
+            label += f" ({place})"
+        labels.append(label)
+    return labels
+
+
+def _format_player_subscription_text(
+    player_id: int, poll_templates: list[PollTemplate] | None = None
+) -> str:
+    """Форматирует абонементы игрока для HTML-ответа."""
+    labels = _format_player_subscription_labels(player_id, poll_templates)
+    if not labels:
+        return "нет"
+    return ", ".join(escape_html(label) for label in labels)
+
+
+def _format_player_detail(
+    p: dict, poll_templates: list[PollTemplate] | None = None
+) -> str:
     """Форматирует подробную информацию об одном игроке (HTML)."""
     link = format_player_link(p)
+    player_id = int(p["id"])
     lines = [
         f"👤 {link}",
-        f"ID: {p['id']}",
+        f"ID: {player_id}",
     ]
     if p.get("name") and str(p["name"]).strip():
         lines.append(f"🪪 @{escape_html(str(p['name']).strip())}")
     lines.append(f"💰 Баланс: {p.get('balance', 0)} ₽")
+    subscription_text = _format_player_subscription_text(player_id, poll_templates)
+    lines.append(f"🎟 Абонемент: {subscription_text}")
     ball = "да" if p.get("ball_donate") else "нет"
     lines.append(f"🏐 Донат: {ball}")
     return "\n".join(lines)
@@ -2435,11 +2472,17 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         lines = ["👥 <b>Игроки</b> ({}) — кратко:\n".format(len(all_players))]
+        poll_templates = get_poll_templates()
         for p in all_players:
             link = format_player_link(p)
             balance = p.get("balance", 0)
+            subscriptions = _format_player_subscription_text(
+                int(p["id"]), poll_templates
+            )
             ball = "да" if p.get("ball_donate") else "нет"
-            lines.append(f"• {link} — {balance} ₽, мяч: {ball}")
+            lines.append(
+                f"• {link} — {balance} ₽, абонемент: {subscriptions}, мяч: {ball}"
+            )
         text = "\n".join(lines)
         if len(text) > 4000:
             text = (

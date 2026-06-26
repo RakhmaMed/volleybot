@@ -439,8 +439,11 @@ class TestPlayerCommand:
         assert "100 ₽" in method.text
         assert "донат" in method.text.lower()
 
+    @patch("src.handlers.get_poll_templates")
     @patch("src.handlers.get_player_info")
-    async def test_player_by_id(self, mock_get_info, admin_user, admin_service):
+    async def test_player_by_id(
+        self, mock_get_info, mock_get_templates, admin_user, admin_service
+    ):
         """Тест /player по числовому ID."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -452,6 +455,20 @@ class TestPlayerCommand:
             "ball_donate": True,
             "balance": 0,
         }
+        mock_get_templates.return_value = [
+            {
+                "id": 1,
+                "name": "Пятница",
+                "place": "Зал №1",
+                "subs": [12345],
+            },
+            {
+                "id": 2,
+                "name": "Среда",
+                "place": "",
+                "subs": [],
+            },
+        ]
 
         dp.workflow_data.update(
             {
@@ -478,6 +495,7 @@ class TestPlayerCommand:
         assert bot.called
         method = bot.call_args.args[0]
         assert "ID Player" in method.text
+        assert "Абонемент: Пятница (Зал №1)" in method.text
         assert "Донат: да" in method.text
 
     @patch("src.handlers.get_player_info")
@@ -573,9 +591,10 @@ class TestPlayerCommand:
         assert buttons[0][0].callback_data == "player_select:1"
         assert buttons[1][0].callback_data == "player_select:2"
 
+    @patch("src.handlers.get_poll_templates")
     @patch("src.handlers.get_all_players")
     async def test_player_no_args_list_all(
-        self, mock_get_all, admin_user, admin_service
+        self, mock_get_all, mock_get_templates, admin_user, admin_service
     ):
         """Тест /player без аргументов — список всех игроков."""
         bot = AsyncMock(spec=Bot)
@@ -596,6 +615,14 @@ class TestPlayerCommand:
                 "ball_donate": True,
                 "balance": 0,
             },
+        ]
+        mock_get_templates.return_value = [
+            {
+                "id": 1,
+                "name": "Пятница",
+                "place": "Зал №1",
+                "subs": [2],
+            }
         ]
 
         dp.workflow_data.update(
@@ -625,6 +652,8 @@ class TestPlayerCommand:
         assert "Игроки" in method.text
         assert "User One" in method.text or "u1" in method.text
         assert "-100" in method.text
+        assert "абонемент: нет" in method.text
+        assert "абонемент: Пятница (Зал №1)" in method.text
         assert "мяч" in method.text.lower()
 
     @patch("src.handlers.get_all_players")
