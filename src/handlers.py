@@ -61,6 +61,7 @@ from .utils import (
     count_games_in_month,
     escape_html,
     format_player_link,
+    normalize_telegram_username,
     rate_limit_check,
     retry_async,
     validate_balance_callback_data,
@@ -797,7 +798,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     text += "🔴 <b>Отрицательный баланс:</b>\n\n"
                     for p in debtor_players:
                         balance = p["balance"]
-                        username = str(p.get("name") or "").strip().lstrip("@")
+                        username = normalize_telegram_username(p.get("name"))
                         if username:
                             fullname = str(p.get("fullname") or "").strip()
                             username_mention = f"@{escape_html(username)}"

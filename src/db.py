@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .types import PollTemplate
+from .utils import normalize_telegram_username
 
 # Ключи хранения в kv_store
 BOT_STATE_KEY = "bot_state"
@@ -710,21 +711,13 @@ def ensure_player(
     Гарантирует наличие игрока в базе данных.
 
     При конфликте (игрок уже существует):
-    - Если в БД уже есть name или fullname, они НЕ перезаписываются
-    - Обновляются только пустые (NULL) поля
+    - name обновляется свежим Telegram username, если он валидный и не пустой
+    - fullname обновляется только если поле в БД пустое (NULL)
 
-    Это предотвращает случайную перезапись вручную установленных имён.
+    Это сохраняет вручную установленные отображаемые имена, но не держит
+    устаревшие Telegram username.
     """
-    # Нормализуем username: если содержит пробелы или другие недопустимые символы, очищаем
-    if name and name.strip():
-        normalized_name = name.strip()
-        # Username в Telegram не может содержать пробелы
-        if " " in normalized_name or "\t" in normalized_name or "\n" in normalized_name:
-            name = None
-        else:
-            name = normalized_name
-    else:
-        name = None
+    name = normalize_telegram_username(name)
 
     try:
         with _connect() as conn:
@@ -733,7 +726,7 @@ def ensure_player(
                 INSERT INTO players (id, name, fullname)
                 VALUES (?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                    name = COALESCE(players.name, excluded.name),
+                    name = COALESCE(excluded.name, players.name),
                     fullname = COALESCE(players.fullname, excluded.fullname)
                 """,
                 (user_id, name, fullname),

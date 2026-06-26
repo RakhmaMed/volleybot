@@ -636,15 +636,15 @@ class TestFormatPlayerLink:
             result == '<a href="https://t.me/testuser">Test &lt;User&gt; &amp; Co.</a>'
         )
 
-    def test_format_player_link_escapes_html_in_username(self):
-        """HTML-символы в username экранируются (хотя username обычно не содержит таких символов)."""
+    def test_format_player_link_invalid_username_uses_id_link(self):
+        """Невалидное значение в name считается отсутствующим username."""
         player_data = {
             "id": 123456789,
             "name": "test<user>",
-            "fullname": None,
+            "fullname": "Test User",
         }
         result = format_player_link(player_data)
-        assert result == '<a href="https://t.me/test<user>">@test&lt;user&gt;</a>'
+        assert result == '<a href="tg://user?id=123456789">Test User</a>'
 
     def test_format_player_link_username_with_at_sign(self):
         """Username с символом @ в начале обрабатывается корректно."""

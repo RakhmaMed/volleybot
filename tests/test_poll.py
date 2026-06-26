@@ -12,6 +12,7 @@ from aiogram.methods import SendPoll
 from src.config import MAX_PLAYERS, MIN_PLAYERS, RESERVE_PLAYERS
 from src.db import (
     POLL_STATE_KEY,
+    _connect,
     create_game,
     ensure_player,
     get_game,
@@ -549,7 +550,10 @@ class TestSendPollSpec:
         )
         mock_bot.send_message = AsyncMock()
 
-        with patch("src.services.poll_service.save_error_dump") as mock_save:
+        with (
+            patch("src.services.poll_service.ADMIN_USER_ID", 777),
+            patch("src.services.poll_service.save_error_dump") as mock_save,
+        ):
             result = await service.send_poll_spec(
                 mock_bot,
                 chat_id=-1001234567890,
@@ -560,6 +564,10 @@ class TestSendPollSpec:
             assert result == -1001234567890
             mock_save.assert_called_once()
             mock_bot.send_message.assert_called_once()
+            assert mock_bot.send_message.call_args.kwargs["chat_id"] == 777
+            assert "chat_id: <code>-1001234567890</code>" in (
+                mock_bot.send_message.call_args.kwargs["text"]
+            )
 
     async def test_send_poll_spec_notifies_admin_when_db_save_fails(
         self, mock_bot
@@ -693,6 +701,39 @@ class TestUpdatePlayersList:
         assert f"{len(voters)}/{MIN_PLAYERS}" in call_args.kwargs["text"]
         assert "@user1" in call_args.kwargs["text"]
         assert "@user2" in call_args.kwargs["text"]
+
+    async def test_update_players_list_links_player_without_username(
+        self, mock_bot, temp_db
+    ):
+        """Игрок без username должен выводиться ссылкой на профиль по ID."""
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
+                (11, "Мадя", "Мадя"),
+            )
+            conn.commit()
+
+        service = PollService()
+        poll_id = "test_no_username_link"
+        service._poll_data[poll_id] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=123,
+            info_msg_id=124,
+            yes_voters=[VoterInfo(id=11, name="@Мадя")],
+            last_message_text="",
+            subs=[],
+        )
+        service._update_tasks[poll_id] = None
+
+        mock_bot.edit_message_text = AsyncMock()
+
+        with patch("src.services.poll_service.asyncio.sleep", new_callable=AsyncMock):
+            await service._update_players_list(mock_bot, poll_id)
+
+        text = mock_bot.edit_message_text.call_args.kwargs["text"]
+        assert '<a href="tg://user?id=11">Мадя</a>' in text
+        assert "(@Мадя)" not in text
 
     async def test_update_players_list_with_reserves(self, mock_bot):
         """Тест обновления списка с запасными игроками."""
@@ -1449,6 +1490,23 @@ def test_format_subscription_report_sorts_by_name():
 
     assert report.index("Алим</a> - 300 ₽") < report.index("Борис</a> - 200 ₽")
     assert report.index("Борис</a> - 200 ₽") < report.index("Марат</a> - 400 ₽")
+
+
+def test_format_hall_summary_adds_three_hall_combo_price():
+    """Сводка абонемента должна показывать тариф для 3 залов."""
+    service = PollService()
+    result = SubscriptionResult(
+        paid_polls=[],
+        subscriber_charges=[],
+        price_per_hall=260,
+        combo_price=440,
+        tier_prices={1: 260, 2: 440, 3: 660},
+    )
+
+    summary = service._format_hall_summary(result)
+
+    assert "Комбо (2 зала): <b>440 ₽</b>" in summary
+    assert "Комбо (3 зала): <b>660 ₽</b>" in summary
 
 
 def test_format_subscription_report_adds_payment_details():

@@ -124,7 +124,7 @@ show_help() {
 pull_db_from_fly() {
     require_flyctl
 
-    local app_name remote_path local_path backup_path
+    local app_name remote_path local_path backup_dir backup_path
     app_name=$(get_fly_app)
     local_path="${1:-data/volleybot.db}"
     remote_path="${2:-$DEFAULT_REMOTE_DB_PATH}"
@@ -140,9 +140,11 @@ pull_db_from_fly() {
     echo ""
 
     if [ -f "$local_path" ]; then
-        backup_path="${local_path}.$(date +%Y%m%d_%H%M%S).bak"
-        cp "$local_path" "$backup_path"
-        echo -e "${YELLOW}Сделан локальный бэкап: ${backup_path}${NC}"
+        backup_dir="$(dirname "$local_path")/backup"
+        mkdir -p "$backup_dir"
+        backup_path="${backup_dir}/$(basename "$local_path").$(date +%Y%m%d_%H%M%S).bak"
+        mv "$local_path" "$backup_path"
+        echo -e "${YELLOW}Текущая локальная БД перенесена в бэкап: ${backup_path}${NC}"
     fi
 
     FLY_NO_UPDATE_CHECK=1 fly ssh sftp get "$remote_path" "$local_path" -a "$app_name"

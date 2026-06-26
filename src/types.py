@@ -81,6 +81,8 @@ class SubscriptionResult:
     paid_polls: list[HallBreakdown]
     subscriber_charges: list[SubscriberCharge]
     price_per_hall: int = 0          # Единая цена абонемента за 1 зал
-    combo_price: int = 0             # Комбо-цена (2+ зала, со скидкой)
+    combo_price: int = 0             # Комбо-цена за 2 зала, со скидкой
     expected_singles_income: int = 0  # Прогнозируемый доход с разовых игроков
     projected_savings: int = 0       # Прогноз казны на конец месяца
+    # Цена абонемента по количеству выбранных залов: hall_count -> price.
+    tier_prices: dict[int, int] = field(default_factory=dict)
