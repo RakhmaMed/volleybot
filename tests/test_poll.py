@@ -1438,6 +1438,62 @@ class TestHtmlEscapingInPollTexts:
         assert "TСберk" in text
         assert "+79990000000" in text
 
+    async def test_close_poll_includes_charge_summary_and_subscriber_unchanged(
+        self, mock_bot, temp_db
+    ):
+        """Финальный текст должен показывать списание и баланс только для разовых игроков."""
+        init_db()
+        poll_name = "Пятница в Академии"
+        save_poll_template(
+            {
+                "name": poll_name,
+                "message": "Текст",
+                "cost": 150,
+            }
+        )
+        ensure_player(1, "regular_user", "Regular User")
+        ensure_player(2, "sub_user", "Sub User")
+        update_player_balance(2, 300)
+
+        service = PollService()
+        service._poll_data[poll_name] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=123,
+            info_msg_id=124,
+            yes_voters=[
+                VoterInfo(id=1, name="Regular User (@regular_user)", update_id=1),
+                VoterInfo(id=2, name="Sub User (@sub_user)", update_id=2),
+            ],
+            last_message_text="",
+            subs=[2],
+        )
+        service._update_tasks[poll_name] = None
+
+        mock_bot.stop_poll = AsyncMock()
+        mock_bot.send_message = AsyncMock()
+        mock_bot.delete_message = AsyncMock()
+
+        with patch.object(service, "_send_admin_report", new_callable=AsyncMock):
+            await service.close_poll(mock_bot, poll_name)
+
+        mock_bot.send_message.assert_called_once()
+        text = mock_bot.send_message.call_args.kwargs["text"]
+        print("---------------------")
+        print(text)
+        print("---------------------")
+        assert "💰 <b>Стоимость:</b> 150₽" in text
+        assert "<b>Списано по 150₽ с 1 игроков:</b>" in text
+        assert "1. Regular User (@regular_user) 🔴 (баланс: -150₽)" in text
+        assert "<b>Итого списано:</b> 150₽" in text
+        assert "Sub User (@sub_user) 🔴 (баланс:" not in text
+
+        regular = get_player_balance(1)
+        subscriber = get_player_balance(2)
+        assert regular is not None
+        assert subscriber is not None
+        assert regular["balance"] == -150
+        assert subscriber["balance"] == 300
+
     async def test_close_poll_escapes_payment_details(self, mock_bot, temp_db):
         """Реквизиты в финальном тексте должны экранироваться."""
         service = PollService()

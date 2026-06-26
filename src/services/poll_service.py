@@ -833,6 +833,45 @@ class PollService:
 
         return text + "\n\n⭐️ — абонемент\n🏐 — донат на мяч"
 
+    @staticmethod
+    def _format_charge_summary(charge_rows: list[dict[str, Any]]) -> str:
+        """Форматирует финансовый блок для финального сообщения regular-опроса."""
+        charged_rows = [
+            row
+            for row in charge_rows
+            if row.get("charge_source") == "single_game"
+            and int(row.get("charged_amount", 0) or 0) > 0
+        ]
+        if not charged_rows:
+            return ""
+
+        charged_amounts = {
+            int(row.get("charged_amount", 0) or 0) for row in charged_rows
+        }
+        total_charged = sum(
+            int(row.get("charged_amount", 0) or 0) for row in charged_rows
+        )
+
+        text = ""
+        if len(charged_amounts) == 1:
+            cost = next(iter(charged_amounts))
+            text += f"💰 <b>Стоимость:</b> {cost}₽\n\n"
+            text += f"<b>Списано по {cost}₽ с {len(charged_rows)} игроков:</b>\n"
+        else:
+            text += f"💰 <b>Итого списано:</b> {total_charged}₽\n\n"
+            text += f"<b>Списано с {len(charged_rows)} игроков:</b>\n"
+
+        for i, row in enumerate(charged_rows, 1):
+            balance_after = int(row.get("balance_after", 0) or 0)
+            balance_emoji = "🔴" if balance_after < 0 else "🟢"
+            text += (
+                f"{i}. {escape_html(str(row.get('name', 'Игрок')))} "
+                f"{balance_emoji} (баланс: {balance_after}₽)\n"
+            )
+
+        text += f"\n<b>Итого списано:</b> {total_charged}₽"
+        return text
+
     def update_voters(
         self,
         poll_id: str,
@@ -1275,7 +1314,14 @@ class PollService:
             return
 
         roster = self._build_regular_roster(data)
+
+        # Обработка списания средств для платных залов
+        charge_rows = await self._process_payment_deduction(bot, poll_name, roster)
+
         final_text = self._build_final_roster_text(roster)
+        charge_summary = self._format_charge_summary(charge_rows)
+        if charge_summary:
+            final_text += f"\n\n{charge_summary}"
 
         # Добавляем реквизиты для перевода
         payment_lines = [
@@ -1290,9 +1336,6 @@ class PollService:
         if payment_lines:
             final_text += "\n\n<b>Реквизиты для перевода:</b>\n"
             final_text += "\n".join(payment_lines)
-
-        # Обработка списания средств для платных залов
-        charge_rows = await self._process_payment_deduction(bot, poll_name, roster)
 
         # Отправляем финальный список новым сообщением с ответом на голосовалку
         info_msg_id = data.info_msg_id
