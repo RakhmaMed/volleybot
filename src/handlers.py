@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, Router
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -35,6 +35,7 @@ from .db import (
     find_player_by_name,
     get_all_players,
     get_fund_balance,
+    get_guest_players,
     get_open_monthly_game,
     get_player_balance,
     get_player_info,
@@ -49,6 +50,7 @@ from .db import (
     save_monthly_vote,
     save_poll_template,
     save_state,
+    set_player_guest,
     toggle_player_ball_donate,
     update_player_and_fund_balance_atomic,
     update_player_and_transaction_atomic,
@@ -111,6 +113,7 @@ async def setup_bot_commands(bot: Bot) -> None:
             command="close_monthly", description="Тест: закрыть опрос абонемента"
         ),
         BotCommand(command="player", description="Подробная информация об игроках"),
+        BotCommand(command="guest", description="Управление гостями"),
         BotCommand(
             command="ball_donate", description="Переключить донат мяча у игрока"
         ),
@@ -185,6 +188,8 @@ def _format_player_detail(
     lines.append(f"🎟 Абонемент: {subscription_text}")
     ball = "да" if p.get("ball_donate") else "нет"
     lines.append(f"🏐 Донат: {ball}")
+    guest = "да" if p.get("is_guest") else "нет"
+    lines.append(f"🙋 Гость: {guest}")
     return "\n".join(lines)
 
 
@@ -192,7 +197,8 @@ def _format_player_choice_label(p: dict) -> str:
     """Форматирует игрока для списков выбора с указанием баланса."""
     display_name = p.get("fullname") or p.get("name") or f"ID: {p['id']}"
     balance = int(p.get("balance", 0) or 0)
-    return f"{display_name} (ID: {p['id']}, баланс: {balance} ₽)"
+    guest = ", гость" if p.get("is_guest") else ""
+    return f"{display_name} (ID: {p['id']}, баланс: {balance} ₽{guest})"
 
 
 def _is_poll_enabled(template: PollTemplate) -> bool:
@@ -515,6 +521,42 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         )
         return result is not None
 
+    async def _resolve_group_membership(chat_id: int, user_id: int) -> bool | None:
+        """Возвращает True/False для членства в группе или None при неясном ответе."""
+        try:
+            member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
+            logging.exception(
+                "⚠️ Не удалось проверить членство пользователя %s в чате %s",
+                user_id,
+                chat_id,
+            )
+            return None
+
+        raw_status = getattr(member, "status", None)
+        status_value = getattr(raw_status, "value", raw_status)
+        status_text = str(status_value).lower()
+
+        if "left" in status_text or "kicked" in status_text:
+            return False
+        if "restricted" in status_text and getattr(member, "is_member", True) is False:
+            return False
+        if any(
+            marker in status_text
+            for marker in ("creator", "administrator", "member", "restricted")
+        ):
+            return True
+        return None
+
+    async def _is_guest_vote(chat_id: int, user_id: int) -> bool:
+        """Определяет гостевой статус голоса по ручному флагу и членству в группе."""
+        player = get_player_info(user_id)
+        manual_guest = bool(player and player.get("is_guest"))
+        membership = await _resolve_group_membership(chat_id, user_id)
+        if membership is None:
+            return manual_guest
+        return manual_guest or not membership
+
     @router.message(Command("losiento"))
     async def losiento_handler(message: Message) -> None:
         """Отправляет видео 'lo siento' по очереди из списка."""
@@ -700,6 +742,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "/restore [имя] [сумма] — найти игрока и восстановить баланс\n"
             "/player — список всех игроков с подробной информацией\n"
             "/player [имя] — информация об одном игроке (по имени, @username или ID)\n"
+            "/guest — список гостей / добавить / убрать гостя\n"
             "/ball_donate — переключить донат мяча у игрока (reply)\n"
             "/ball_donate [имя] — переключить донат мяча по имени, @username или ID\n"
             "/hall — управление залами и расписанием\n"
@@ -2480,8 +2523,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 int(p["id"]), poll_templates
             )
             ball = "да" if p.get("ball_donate") else "нет"
+            guest = ", гость" if p.get("is_guest") else ""
             lines.append(
-                f"• {link} — {balance} ₽, абонемент: {subscriptions}, мяч: {ball}"
+                f"• {link} — {balance} ₽, абонемент: {subscriptions}, мяч: {ball}{guest}"
             )
         text = "\n".join(lines)
         if len(text) > 4000:
@@ -2494,6 +2538,176 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             parse_mode="HTML",
             link_preview_options=LinkPreviewOptions(is_disabled=True),
             action_name="reply to /player list",
+        )
+
+    def _format_guest_usage() -> str:
+        return (
+            "🙋 <b>Гости</b>\n\n"
+            "<code>/guest</code> — список ручных гостей\n"
+            "<code>/guest add PLAYER</code> — пометить гостем\n"
+            "<code>/guest remove PLAYER</code> — снять гостевой флаг\n\n"
+            "PLAYER: ответ на сообщение, ID, @username или имя из базы."
+        )
+
+    def _validate_guest_set_callback_data(data: str) -> tuple[bool, int] | None:
+        parts = data.split(":")
+        if len(parts) != 3 or parts[0] != "guest_set":
+            return None
+        raw_value, raw_player_id = parts[1], parts[2]
+        if raw_value not in {"0", "1"}:
+            return None
+        try:
+            player_id = int(raw_player_id)
+        except ValueError:
+            return None
+        if player_id <= 0:
+            return None
+        return raw_value == "1", player_id
+
+    async def _resolve_guest_target(
+        message: Message, query: str, is_guest: bool
+    ) -> int | None:
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target_user = message.reply_to_message.from_user
+            ensure_player(
+                user_id=target_user.id,
+                name=target_user.username,
+                fullname=target_user.full_name,
+            )
+            return target_user.id
+
+        search_query = query.strip()
+        if not search_query:
+            await safe_reply(
+                message,
+                _format_guest_usage(),
+                parse_mode="HTML",
+                action_name="reply to /guest usage missing target",
+            )
+            return None
+
+        if search_query.isdigit():
+            player_id = int(search_query)
+            if get_player_info(player_id) is None:
+                await safe_reply(
+                    message,
+                    f"❌ Игрок с ID {player_id} не найден.",
+                    parse_mode="HTML",
+                    action_name="reply to /guest missing id",
+                )
+                return None
+            return player_id
+
+        players = find_player_by_name(search_query.lstrip("@"))
+        if not players:
+            await safe_reply(
+                message,
+                f"❌ Игрок '{escape_html(search_query)}' не найден.",
+                parse_mode="HTML",
+                action_name="reply to /guest missing player",
+            )
+            return None
+
+        if len(players) == 1:
+            return int(players[0]["id"])
+
+        keyboard = []
+        player_lines = []
+        raw_value = "1" if is_guest else "0"
+        for player in players[:10]:
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        text=_format_player_choice_label(player),
+                        callback_data=f"guest_set:{raw_value}:{player['id']}",
+                    )
+                ]
+            )
+            player_lines.append(f"• {format_player_link(player)}")
+
+        await safe_reply(
+            message,
+            f"❓ Найдено несколько игроков ({len(players)}). Выберите нужного:\n\n"
+            + "\n".join(player_lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="reply to /guest ambiguity",
+        )
+        return None
+
+    def _set_guest_status_result_text(player_id: int, is_guest: bool) -> str:
+        player = get_player_info(player_id)
+        if player is None:
+            return f"❌ Игрок с ID {player_id} не найден."
+
+        create_backup("guest_command")
+        if not set_player_guest(player_id, is_guest):
+            return "❌ Не удалось изменить гостевой статус."
+
+        updated = get_player_info(player_id) or player
+        player_link = format_player_link(updated, player_id)
+        if is_guest:
+            return f"✅ Игрок {player_link} помечен как гость."
+        return f"✅ С игрока {player_link} снят гостевой флаг."
+
+    @router.message(Command("guest"))
+    async def guest_handler(message: Message) -> None:
+        """Команда управления гостями (только для администратора)."""
+        if not await _is_message_admin(message):
+            return
+
+        if message.text is None:
+            return
+
+        parts = message.text.split(maxsplit=2)
+        action = parts[1].lower() if len(parts) >= 2 else "list"
+
+        if action in {"list", "список"}:
+            guests = get_guest_players()
+            if not guests:
+                await safe_reply(
+                    message,
+                    _format_guest_usage() + "\n\nСейчас ручных гостей нет.",
+                    parse_mode="HTML",
+                    action_name="reply to /guest empty list",
+                )
+                return
+
+            lines = ["🙋 <b>Ручные гости</b>\n"]
+            for player in guests:
+                lines.append(f"• {format_player_link(player)}")
+            lines.append("\n" + _format_guest_usage())
+            await safe_reply(
+                message,
+                "\n".join(lines),
+                parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+                action_name="reply to /guest list",
+            )
+            return
+
+        if action not in {"add", "remove", "rm", "del", "убрать", "добавить"}:
+            await safe_reply(
+                message,
+                _format_guest_usage(),
+                parse_mode="HTML",
+                action_name="reply to /guest usage unknown action",
+            )
+            return
+
+        is_guest = action in {"add", "добавить"}
+        query = parts[2] if len(parts) >= 3 else ""
+        target_user_id = await _resolve_guest_target(message, query, is_guest)
+        if target_user_id is None:
+            return
+
+        await safe_reply(
+            message,
+            _set_guest_status_result_text(target_user_id, is_guest),
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="reply to /guest set result",
         )
 
     @router.message(Command("ball_donate"))
@@ -2587,6 +2801,64 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             parse_mode="HTML",
             link_preview_options=LinkPreviewOptions(is_disabled=True),
             action_name="reply to /ball_donate success",
+        )
+
+    @router.callback_query(lambda c: c.data and c.data.startswith("guest_set:"))
+    async def process_guest_set(callback_query: CallbackQuery):
+        """Обработка выбора игрока для /guest add/remove."""
+        user = callback_query.from_user
+        if user is None or callback_query.message is None:
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка данных.",
+                show_alert=True,
+                action_name="answer guest_set missing context",
+            )
+            return
+
+        admin_service: AdminService = dp.workflow_data["admin_service"]
+        is_admin = await admin_service.is_admin(
+            bot, user, callback_query.message.chat.id
+        )
+        if not is_admin:
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Нет прав для этого действия.",
+                show_alert=True,
+                action_name="answer guest_set forbidden",
+            )
+            return
+
+        if callback_query.data is None:
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка данных.",
+                show_alert=True,
+                action_name="answer guest_set missing data",
+            )
+            return
+
+        result = _validate_guest_set_callback_data(callback_query.data)
+        if result is None:
+            await safe_answer_callback(
+                callback_query,
+                text="❌ Ошибка формата данных.",
+                show_alert=True,
+                action_name="answer guest_set invalid data",
+            )
+            return
+
+        is_guest, player_id = result
+        await safe_edit_message_text(
+            callback_query.message,
+            _set_guest_status_result_text(player_id, is_guest),
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="edit guest_set result",
+        )
+        await safe_answer_callback(
+            callback_query,
+            action_name="answer guest_set success",
         )
 
     @router.callback_query(
@@ -3058,6 +3330,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             else (user.full_name or "Неизвестный")
         )
         voted_at = datetime.now(timezone.utc).isoformat()
+        is_guest = await _is_guest_vote(data.chat_id, user.id)
 
         # Обновляем список голосующих
         yes_voters = poll_service.update_voters(
@@ -3067,6 +3340,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             update_id=update_id,
             voted_at=voted_at,
             voted_yes=voted_yes,
+            is_guest=is_guest,
         )
         logging.debug(
             f"Обновленный список голосующих за опрос {poll_id}: {len(yes_voters)} чел."

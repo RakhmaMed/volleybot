@@ -1,6 +1,7 @@
 """Тесты для модуля poll и PollService."""
 
 import json
+from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,12 +14,14 @@ from src.config import MAX_PLAYERS, MIN_PLAYERS, RESERVE_PLAYERS
 from src.db import (
     POLL_STATE_KEY,
     _connect,
+    close_game,
     create_game,
     ensure_player,
     get_game,
     get_player_balance,
     init_db,
     load_state,
+    save_game_participants,
     save_state,
     save_poll_template,
     update_player_balance,
@@ -38,6 +41,7 @@ def _build_roster(
     *,
     subs: list[int] | None = None,
     opened_at: str = "2026-04-01T10:00:00+00:00",
+    now: Any | None = None,
 ) -> Any:
     return build_regular_poll_roster(
         PollData(
@@ -47,7 +51,8 @@ def _build_roster(
             yes_voters=yes_voters,
             subs=subs or [],
             opened_at=opened_at,
-        )
+        ),
+        now=now,
     )
 
 
@@ -154,6 +159,65 @@ def test_build_regular_poll_roster_keeps_early_subscriber_place_after_window():
 
     assert [entry.player_id for entry in first_roster.entries] == [2, 1]
     assert [entry.player_id for entry in second_roster.entries] == [2, 1]
+
+
+def test_build_regular_poll_roster_keeps_guests_in_reserve_before_9_msk():
+    roster = _build_roster(
+        [
+            VoterInfo(id=1, name="Member", update_id=1),
+            VoterInfo(id=2, name="Guest", update_id=2, is_guest=True),
+        ],
+        opened_at="2026-04-01T16:00:00+00:00",
+        now=datetime.fromisoformat("2026-04-02T05:59:00+00:00"),
+    )
+
+    member = next(entry for entry in roster.entries if entry.player_id == 1)
+    guest = next(entry for entry in roster.entries if entry.player_id == 2)
+    assert member.roster_bucket == "main"
+    assert guest.roster_bucket == "reserve"
+    assert guest.sort_order == MAX_PLAYERS + 1
+
+
+def test_build_regular_poll_roster_lets_guests_fill_main_after_9_msk():
+    roster = _build_roster(
+        [
+            VoterInfo(id=1, name="Member", update_id=1),
+            VoterInfo(id=2, name="Guest", update_id=2, is_guest=True),
+        ],
+        opened_at="2026-04-01T16:00:00+00:00",
+        now=datetime.fromisoformat("2026-04-02T06:00:00+00:00"),
+    )
+
+    assert [entry.player_id for entry in roster.main_entries] == [1, 2]
+    assert roster.entries[1].is_guest is True
+
+
+def test_build_regular_poll_roster_guest_subscriber_does_not_beat_group_member():
+    roster = _build_roster(
+        [
+            VoterInfo(id=1, name="Member", update_id=2),
+            VoterInfo(id=2, name="Guest Subscriber", update_id=1, is_guest=True),
+        ],
+        subs=[2],
+        opened_at="2026-04-01T16:00:00+00:00",
+        now=datetime.fromisoformat("2026-04-02T06:00:00+00:00"),
+    )
+
+    assert [entry.player_id for entry in roster.entries] == [1, 2]
+
+
+def test_build_regular_poll_roster_guests_wait_when_group_has_18_players():
+    voters = [VoterInfo(id=i, name=f"Member {i}", update_id=i) for i in range(1, 19)]
+    voters.append(VoterInfo(id=100, name="Guest", update_id=1, is_guest=True))
+    roster = _build_roster(
+        voters,
+        opened_at="2026-04-01T16:00:00+00:00",
+        now=datetime.fromisoformat("2026-04-02T06:00:00+00:00"),
+    )
+
+    guest = next(entry for entry in roster.entries if entry.player_id == 100)
+    assert len(roster.main_entries) == MAX_PLAYERS
+    assert guest.roster_bucket == "reserve"
 
 
 class TestPollService:
@@ -790,7 +854,7 @@ class TestUpdatePlayersList:
         """Тест пропуска обновления при неизменном тексте."""
         service = PollService()
         poll_id = "test_poll_id"
-        text = "⏳ Идёт сбор голосов...\n\n⭐️ — абонемент\n🏐 — донат на мяч"
+        text = "⏳ Идёт сбор голосов...\n\n⭐️ — абонемент\n🏐 — донат на мяч\n🙋 — гость"
         service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
@@ -1075,6 +1139,168 @@ class TestProcessPaymentDeduction:
         assert booked_row["charge_source"] == "none"
         assert booked_row["balance_before"] is None
         assert booked_row["balance_after"] is None
+        mock_report.assert_called_once()
+
+    async def test_guest_first_four_games_are_free(self, mock_bot, temp_db):
+        init_db()
+        save_poll_template(
+            {
+                "name": "Платный гостевой зал",
+                "message": "Текст",
+                "cost": 150,
+            }
+        )
+        ensure_player(200, "guest")
+        update_player_balance(200, 500)
+
+        service = PollService()
+        roster = _build_roster(
+            [VoterInfo(id=200, name="@guest", is_guest=True)],
+            now=datetime.fromisoformat("2026-04-02T06:00:00+00:00"),
+        )
+
+        with patch.object(
+            service, "_send_admin_report", new_callable=AsyncMock
+        ) as mock_report:
+            finance_rows = await service._process_payment_deduction(
+                mock_bot, "Платный гостевой зал", roster
+            )
+
+        data = get_player_balance(200)
+        assert data is not None
+        assert data["balance"] == 500
+        guest_row = next(row for row in finance_rows if row["player_id"] == 200)
+        assert guest_row["is_guest"] is True
+        assert guest_row["guest_free_reason"] == "first_games"
+        assert guest_row["charged_amount"] == 0
+        mock_report.assert_not_called()
+
+    async def test_guest_filling_min_players_is_free_after_four_games(
+        self, mock_bot, temp_db
+    ):
+        init_db()
+        save_poll_template(
+            {
+                "name": "Платный добор",
+                "message": "Текст",
+                "cost": 150,
+            }
+        )
+        ensure_player(201, "guest201")
+        update_player_balance(201, 500)
+        for game_index in range(4):
+            create_game(
+                poll_id=f"guest201-{game_index}",
+                kind="regular",
+                status="open",
+                poll_template_id=1,
+                poll_name_snapshot="Платный добор",
+                question_snapshot="Играем?",
+                chat_id=1,
+                poll_message_id=game_index + 1,
+                opened_at="2026-03-01T10:00:00+00:00",
+            )
+            close_game(
+                f"guest201-{game_index}",
+                closed_at="2026-03-01T12:00:00+00:00",
+                final_message_id=100 + game_index,
+            )
+            save_game_participants(
+                f"guest201-{game_index}",
+                [
+                    {
+                        "player_id": 201,
+                        "roster_bucket": "main",
+                        "sort_order": 1,
+                        "is_guest": True,
+                        "guest_free_reason": "first_games",
+                    }
+                ],
+            )
+
+        service = PollService()
+        roster = _build_roster(
+            [VoterInfo(id=201, name="@guest201", is_guest=True)],
+            now=datetime.fromisoformat("2026-04-02T06:00:00+00:00"),
+        )
+
+        with patch.object(
+            service, "_send_admin_report", new_callable=AsyncMock
+        ) as mock_report:
+            finance_rows = await service._process_payment_deduction(
+                mock_bot, "Платный добор", roster
+            )
+
+        data = get_player_balance(201)
+        assert data is not None
+        assert data["balance"] == 500
+        guest_row = next(row for row in finance_rows if row["player_id"] == 201)
+        assert guest_row["guest_free_reason"] == "fill_min_players"
+        mock_report.assert_not_called()
+
+    async def test_guest_after_four_games_outside_min_players_is_charged(
+        self, mock_bot, temp_db
+    ):
+        init_db()
+        save_poll_template(
+            {
+                "name": "Платный полный зал",
+                "message": "Текст",
+                "cost": 150,
+            }
+        )
+        ensure_player(202, "guest202")
+        update_player_balance(202, 500)
+        for game_index in range(4):
+            create_game(
+                poll_id=f"guest202-{game_index}",
+                kind="regular",
+                status="open",
+                poll_template_id=1,
+                poll_name_snapshot="Платный полный зал",
+                question_snapshot="Играем?",
+                chat_id=1,
+                poll_message_id=game_index + 1,
+                opened_at="2026-03-01T10:00:00+00:00",
+            )
+            close_game(
+                f"guest202-{game_index}",
+                closed_at="2026-03-01T12:00:00+00:00",
+                final_message_id=100 + game_index,
+            )
+            save_game_participants(
+                f"guest202-{game_index}",
+                [
+                    {
+                        "player_id": 202,
+                        "roster_bucket": "main",
+                        "sort_order": 1,
+                        "is_guest": True,
+                    }
+                ],
+            )
+
+        service = PollService()
+        voters = [VoterInfo(id=i, name=f"@member{i}") for i in range(1, MIN_PLAYERS + 1)]
+        voters.append(VoterInfo(id=202, name="@guest202", is_guest=True))
+        roster = _build_roster(
+            voters,
+            now=datetime.fromisoformat("2026-04-02T06:00:00+00:00"),
+        )
+
+        with patch.object(
+            service, "_send_admin_report", new_callable=AsyncMock
+        ) as mock_report:
+            finance_rows = await service._process_payment_deduction(
+                mock_bot, "Платный полный зал", roster
+            )
+
+        data = get_player_balance(202)
+        assert data is not None
+        assert data["balance"] == 350
+        guest_row = next(row for row in finance_rows if row["player_id"] == 202)
+        assert guest_row["guest_free_reason"] == "none"
+        assert guest_row["charged_amount"] == 150
         mock_report.assert_called_once()
 
 

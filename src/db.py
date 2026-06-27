@@ -20,7 +20,7 @@ from .utils import normalize_telegram_username
 BOT_STATE_KEY = "bot_state"
 POLL_STATE_KEY = "poll_state"
 FUND_BALANCE_KEY = "fund_balance"
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 BACKUP_RETENTION_DAYS = 10
 
 
@@ -126,6 +126,7 @@ def init_db() -> None:
 
     with _connect() as conn:
         _create_base_tables(conn)
+        _ensure_base_schema(conn)
         _ensure_current_schema(conn)
         conn.commit()
     logging.debug(f"✅ База данных инициализирована: {db_path}")
@@ -149,10 +150,21 @@ def _create_base_tables(conn: sqlite3.Connection) -> None:
             name TEXT,
             fullname TEXT,
             ball_donate INTEGER DEFAULT 0,
+            is_guest INTEGER NOT NULL DEFAULT 0 CHECK (is_guest IN (0, 1)),
             balance INTEGER DEFAULT 0,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
         """
+    )
+
+
+def _ensure_base_schema(conn: sqlite3.Connection) -> None:
+    """Доводит базовые таблицы до актуального вида."""
+    _ensure_column(
+        conn,
+        "players",
+        "is_guest",
+        "ALTER TABLE players ADD COLUMN is_guest INTEGER NOT NULL DEFAULT 0 CHECK (is_guest IN (0, 1))",
     )
 
 
@@ -257,6 +269,9 @@ def _create_current_schema(conn: sqlite3.Connection) -> None:
             roster_bucket TEXT NOT NULL CHECK (roster_bucket IN ('main', 'reserve', 'booked')),
             sort_order INTEGER NOT NULL,
             is_subscriber INTEGER NOT NULL DEFAULT 0,
+            is_guest INTEGER NOT NULL DEFAULT 0,
+            guest_free_reason TEXT NOT NULL DEFAULT 'none'
+                CHECK (guest_free_reason IN ('first_games', 'fill_min_players', 'none')),
             charged_amount INTEGER NOT NULL DEFAULT 0,
             charge_source TEXT NOT NULL DEFAULT 'none'
                 CHECK (charge_source IN ('single_game', 'subscription', 'none')),
@@ -354,6 +369,8 @@ EXPECTED_TABLE_COLUMNS: dict[str, set[str]] = {
         "roster_bucket",
         "sort_order",
         "is_subscriber",
+        "is_guest",
+        "guest_free_reason",
         "charged_amount",
         "charge_source",
         "balance_before",
@@ -394,11 +411,45 @@ def _ensure_current_schema(conn: sqlite3.Connection) -> None:
             f"present={present}; missing={missing}"
         )
 
+    _migrate_schema(conn)
+
     mismatches = _validate_schema_strict(conn)
     if mismatches:
         raise sqlite3.DatabaseError("Incompatible DB schema: " + "; ".join(mismatches))
 
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Применяет совместимые миграции поверх предыдущей актуальной схемы."""
+    _ensure_column(
+        conn,
+        "players",
+        "is_guest",
+        "ALTER TABLE players ADD COLUMN is_guest INTEGER NOT NULL DEFAULT 0 CHECK (is_guest IN (0, 1))",
+    )
+    _ensure_column(
+        conn,
+        "game_participants",
+        "is_guest",
+        "ALTER TABLE game_participants ADD COLUMN is_guest INTEGER NOT NULL DEFAULT 0",
+    )
+    _ensure_column(
+        conn,
+        "game_participants",
+        "guest_free_reason",
+        "ALTER TABLE game_participants ADD COLUMN guest_free_reason TEXT NOT NULL DEFAULT 'none' CHECK (guest_free_reason IN ('first_games', 'fill_min_players', 'none'))",
+    )
+
+
+def _ensure_column(
+    conn: sqlite3.Connection, table_name: str, column_name: str, alter_sql: str
+) -> None:
+    columns = {
+        row[1] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    if column_name not in columns:
+        conn.execute(alter_sql)
 
 
 def _validate_schema_strict(conn: sqlite3.Connection) -> list[str]:
@@ -582,13 +633,14 @@ def get_all_players() -> list[dict[str, Any]]:
         with _connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
-                "SELECT id, name, fullname, ball_donate, balance FROM players"
+                "SELECT id, name, fullname, ball_donate, is_guest, balance FROM players"
             )
             players = []
             for row in cursor.fetchall():
                 player = dict(row)
                 # Преобразуем 0/1 в bool для совместимости с логикой, ожидавшей JSON
                 player["ball_donate"] = bool(player["ball_donate"])
+                player["is_guest"] = bool(player["is_guest"])
                 players.append(player)
             return players
     except sqlite3.Error:
@@ -626,18 +678,19 @@ def get_player_balance(user_id: int) -> dict[str, Any] | None:
 
 
 def get_player_info(user_id: int) -> dict[str, Any] | None:
-    """Возвращает полную информацию об игроке (id, name, fullname, ball_donate, balance)."""
+    """Возвращает полную информацию об игроке."""
     try:
         with _connect() as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT id, name, fullname, ball_donate, balance FROM players WHERE id = ?",
+                "SELECT id, name, fullname, ball_donate, is_guest, balance FROM players WHERE id = ?",
                 (user_id,),
             ).fetchone()
             if row is None:
                 return None
             player = dict(row)
             player["ball_donate"] = bool(player["ball_donate"])
+            player["is_guest"] = bool(player["is_guest"])
             return player
     except sqlite3.Error:
         logging.exception(f"❌ Ошибка при получении информации об игроке {user_id}")
@@ -688,6 +741,51 @@ def toggle_player_ball_donate(user_id: int) -> bool | None:
         return None
 
 
+def set_player_guest(user_id: int, is_guest: bool) -> bool:
+    """Устанавливает ручной гостевой флаг игрока."""
+    try:
+        with _connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE players
+                SET is_guest = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (1 if is_guest else 0, user_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при изменении гостевого статуса игрока {user_id}")
+        return False
+
+
+def get_guest_players() -> list[dict[str, Any]]:
+    """Возвращает игроков с ручным гостевым флагом."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                """
+                SELECT id, name, fullname, ball_donate, is_guest, balance
+                FROM players
+                WHERE is_guest = 1
+                ORDER BY COALESCE(fullname, name, id)
+                """
+            )
+            players = []
+            for row in cursor.fetchall():
+                player = dict(row)
+                player["ball_donate"] = bool(player["ball_donate"])
+                player["is_guest"] = bool(player["is_guest"])
+                players.append(player)
+            return players
+    except sqlite3.Error:
+        logging.exception("❌ Ошибка при получении списка гостей")
+        return []
+
+
 def find_player_by_name(query: str) -> list[dict[str, Any]]:
     """Ищет игроков по части имени или fullname."""
     try:
@@ -695,10 +793,15 @@ def find_player_by_name(query: str) -> list[dict[str, Any]]:
             conn.row_factory = sqlite3.Row
             pattern = f"%{query}%"
             cursor = conn.execute(
-                "SELECT id, name, fullname, balance FROM players WHERE name LIKE ? OR fullname LIKE ? ORDER BY fullname ASC",
+                "SELECT id, name, fullname, is_guest, balance FROM players WHERE name LIKE ? OR fullname LIKE ? ORDER BY fullname ASC",
                 (pattern, pattern),
             )
-            return [dict(row) for row in cursor.fetchall()]
+            players = []
+            for row in cursor.fetchall():
+                player = dict(row)
+                player["is_guest"] = bool(player["is_guest"])
+                players.append(player)
+            return players
     except sqlite3.Error:
         logging.exception(f"❌ Ошибка при поиске игрока: {query}")
         return []
@@ -727,7 +830,8 @@ def ensure_player(
                 VALUES (?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name = COALESCE(excluded.name, players.name),
-                    fullname = COALESCE(players.fullname, excluded.fullname)
+                    fullname = COALESCE(players.fullname, excluded.fullname),
+                    updated_at = CURRENT_TIMESTAMP
                 """,
                 (user_id, name, fullname),
             )
@@ -1655,9 +1759,9 @@ def save_game_participants(
                     """
                     INSERT INTO game_participants (
                         game_poll_id, player_id, roster_bucket, sort_order,
-                        is_subscriber, charged_amount, charge_source,
-                        balance_before, balance_after
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        is_subscriber, is_guest, guest_free_reason,
+                        charged_amount, charge_source, balance_before, balance_after
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         game_poll_id,
@@ -1665,6 +1769,8 @@ def save_game_participants(
                         participant["roster_bucket"],
                         participant["sort_order"],
                         1 if participant.get("is_subscriber") else 0,
+                        1 if participant.get("is_guest") else 0,
+                        participant.get("guest_free_reason", "none"),
                         int(participant.get("charged_amount", 0) or 0),
                         participant.get("charge_source", "none"),
                         participant.get("balance_before"),
@@ -1676,6 +1782,31 @@ def save_game_participants(
         logging.exception(
             f"❌ Ошибка при сохранении участников игры game_poll_id={game_poll_id}"
         )
+
+
+def count_player_regular_participations(player_id: int) -> int:
+    """Считает прошлые участия игрока в regular-играх в main/reserve."""
+    try:
+        init_db()
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM game_participants gp
+                JOIN games g ON g.poll_id = gp.game_poll_id
+                WHERE gp.player_id = ?
+                  AND g.kind = 'regular'
+                  AND g.status = 'closed'
+                  AND gp.roster_bucket IN ('main', 'reserve')
+                """,
+                (player_id,),
+            ).fetchone()
+            return int(row[0] or 0) if row else 0
+    except sqlite3.Error:
+        logging.exception(
+            f"❌ Ошибка при подсчёте участий игрока {player_id}"
+        )
+        return 0
 
 
 def _month_bounds(month: str | None) -> tuple[str | None, str | None]:

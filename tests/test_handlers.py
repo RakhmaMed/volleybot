@@ -11,11 +11,14 @@ from src.db import (
     close_game,
     create_game,
     ensure_player,
+    get_player_info,
     get_poll_templates,
     init_db,
     save_poll_template,
+    set_player_guest,
 )
 from src.handlers import register_handlers
+from src.poll import PollData
 from src.services import BotStateService, PollService
 
 
@@ -1353,6 +1356,157 @@ class TestChatIdCommand:
 
 
 @pytest.mark.asyncio
+class TestGuestCommand:
+    async def test_guest_add_by_username_marks_player(
+        self, admin_user, admin_service, temp_db
+    ):
+        init_db()
+        ensure_player(111, "guest_user", "Guest User")
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": PollService(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        message = Message(
+            message_id=1,
+            date=datetime.now(),
+            chat=Chat(id=-1001234567890, type="supergroup"),
+            from_user=admin_user,
+            text="/guest add @guest_user",
+        )
+        await dp.feed_update(bot, Update(update_id=1, message=message))
+
+        player = get_player_info(111)
+        assert player is not None
+        assert player["is_guest"] is True
+
+    async def test_guest_remove_by_id_clears_player(
+        self, admin_user, admin_service, temp_db
+    ):
+        init_db()
+        ensure_player(112, "guest_user2", "Guest User 2")
+        set_player_guest(112, True)
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": PollService(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        message = Message(
+            message_id=1,
+            date=datetime.now(),
+            chat=Chat(id=-1001234567890, type="supergroup"),
+            from_user=admin_user,
+            text="/guest remove 112",
+        )
+        await dp.feed_update(bot, Update(update_id=2, message=message))
+
+        player = get_player_info(112)
+        assert player is not None
+        assert player["is_guest"] is False
+
+    async def test_guest_list_shows_manual_guest(
+        self, admin_user, admin_service, temp_db
+    ):
+        init_db()
+        ensure_player(113, "guest_user3", "Guest User 3")
+        set_player_guest(113, True)
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": PollService(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        message = Message(
+            message_id=1,
+            date=datetime.now(),
+            chat=Chat(id=-1001234567890, type="supergroup"),
+            from_user=admin_user,
+            text="/guest",
+        )
+        await dp.feed_update(bot, Update(update_id=3, message=message))
+
+        method = bot.call_args.args[0]
+        assert "Guest User 3" in (method.text or "")
+
+    async def test_guest_ambiguous_search_shows_keyboard(
+        self, admin_user, admin_service, temp_db
+    ):
+        init_db()
+        ensure_player(114, "same_one", "Same Player")
+        ensure_player(115, "same_two", "Same Player Two")
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": PollService(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        message = Message(
+            message_id=1,
+            date=datetime.now(),
+            chat=Chat(id=-1001234567890, type="supergroup"),
+            from_user=admin_user,
+            text="/guest add Same",
+        )
+        await dp.feed_update(bot, Update(update_id=4, message=message))
+
+        method = bot.call_args.args[0]
+        assert "Найдено несколько игроков" in (method.text or "")
+        assert method.reply_markup is not None
+
+    async def test_guest_regular_user_ignored(
+        self, regular_user, admin_service, temp_db
+    ):
+        init_db()
+        ensure_player(116, "guest_user4", "Guest User 4")
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": PollService(),
+            }
+        )
+        register_handlers(dp, bot)
+
+        message = Message(
+            message_id=1,
+            date=datetime.now(),
+            chat=Chat(id=-1001234567890, type="supergroup"),
+            from_user=regular_user,
+            text="/guest add @guest_user4",
+        )
+        await dp.feed_update(bot, Update(update_id=5, message=message))
+
+        player = get_player_info(116)
+        assert player is not None
+        assert player["is_guest"] is False
+        assert not bot.called
+
+
+@pytest.mark.asyncio
 class TestPollAnswerHandler:
     """Тесты для обработчика ответов на опросы."""
 
@@ -1392,6 +1546,137 @@ class TestPollAnswerHandler:
 
         # Проверяем, что опрос существует
         assert poll_service.has_poll("test_poll_id")
+
+    async def test_poll_answer_marks_left_user_as_guest(
+        self, regular_user, admin_service, temp_db
+    ):
+        init_db()
+        bot = AsyncMock(spec=Bot)
+        bot.get_chat_member.return_value = MagicMock(status="left")
+        dp = Dispatcher()
+        poll_service = PollService()
+        poll_service.create_update_task = MagicMock()
+        poll_service.cancel_update_task = MagicMock()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": poll_service,
+            }
+        )
+        register_handlers(dp, bot)
+        poll_service._poll_data["guest-poll"] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=1,
+            info_msg_id=2,
+            yes_voters=[],
+            subs=[],
+        )
+
+        await dp.feed_update(
+            bot,
+            Update(
+                update_id=1,
+                poll_answer=PollAnswer(
+                    poll_id="guest-poll",
+                    user=regular_user,
+                    option_ids=[0],
+                    option_persistent_ids=["0"],
+                ),
+            ),
+        )
+
+        data = poll_service.get_poll_data("guest-poll")
+        assert data is not None
+        assert data.yes_voters[0].is_guest is True
+
+    async def test_poll_answer_keeps_member_as_non_guest(
+        self, regular_user, admin_service, temp_db
+    ):
+        init_db()
+        bot = AsyncMock(spec=Bot)
+        bot.get_chat_member.return_value = MagicMock(status="member")
+        dp = Dispatcher()
+        poll_service = PollService()
+        poll_service.create_update_task = MagicMock()
+        poll_service.cancel_update_task = MagicMock()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": poll_service,
+            }
+        )
+        register_handlers(dp, bot)
+        poll_service._poll_data["member-poll"] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=1,
+            info_msg_id=2,
+            yes_voters=[],
+            subs=[],
+        )
+
+        await dp.feed_update(
+            bot,
+            Update(
+                update_id=2,
+                poll_answer=PollAnswer(
+                    poll_id="member-poll",
+                    user=regular_user,
+                    option_ids=[0],
+                    option_persistent_ids=["0"],
+                ),
+            ),
+        )
+
+        data = poll_service.get_poll_data("member-poll")
+        assert data is not None
+        assert data.yes_voters[0].is_guest is False
+
+    async def test_poll_answer_uses_manual_guest_on_membership_error(
+        self, regular_user, admin_service, temp_db
+    ):
+        init_db()
+        ensure_player(regular_user.id, regular_user.username, regular_user.full_name)
+        set_player_guest(regular_user.id, True)
+        bot = AsyncMock(spec=Bot)
+        bot.get_chat_member.side_effect = OSError("network")
+        dp = Dispatcher()
+        poll_service = PollService()
+        poll_service.create_update_task = MagicMock()
+        poll_service.cancel_update_task = MagicMock()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": poll_service,
+            }
+        )
+        register_handlers(dp, bot)
+        poll_service._poll_data["fallback-poll"] = PollData(
+            chat_id=-1001234567890,
+            poll_msg_id=1,
+            info_msg_id=2,
+            yes_voters=[],
+            subs=[],
+        )
+
+        await dp.feed_update(
+            bot,
+            Update(
+                update_id=3,
+                poll_answer=PollAnswer(
+                    poll_id="fallback-poll",
+                    user=regular_user,
+                    option_ids=[0],
+                    option_persistent_ids=["0"],
+                ),
+            ),
+        )
+
+        data = poll_service.get_poll_data("fallback-poll")
+        assert data is not None
+        assert data.yes_voters[0].is_guest is True
 
 
 @pytest.mark.asyncio

@@ -84,6 +84,16 @@ class TestDBPolls:
             assert "poll_template_id" in sub_columns
             game_columns = {row[1] for row in conn.execute("PRAGMA table_info(games)")}
             assert "cost_per_game_snapshot" in game_columns
+            player_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(players)")
+            }
+            participant_columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(game_participants)")
+            }
+            assert "is_guest" in player_columns
+            assert "is_guest" in participant_columns
+            assert "guest_free_reason" in participant_columns
 
     def test_create_and_close_game(self, temp_db):
         init_db()
@@ -119,6 +129,72 @@ class TestDBPolls:
             ).fetchone()
             assert row["status"] == "closed"
             assert row["final_message_id"] == 12
+
+    def test_init_db_migrates_guest_columns_from_previous_schema(self, temp_db):
+        init_db()
+        with _connect() as conn:
+            conn.execute("ALTER TABLE game_participants DROP COLUMN guest_free_reason")
+            conn.execute("ALTER TABLE game_participants DROP COLUMN is_guest")
+            conn.execute("ALTER TABLE players DROP COLUMN is_guest")
+            conn.execute("PRAGMA user_version = 8")
+            conn.commit()
+
+        init_db()
+
+        with _connect() as conn:
+            player_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(players)")
+            }
+            participant_columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(game_participants)")
+            }
+            user_version = conn.execute("PRAGMA user_version").fetchone()[0]
+            assert "is_guest" in player_columns
+            assert "is_guest" in participant_columns
+            assert "guest_free_reason" in participant_columns
+            assert user_version == 9
+
+    def test_save_game_participants_persists_guest_fields(self, temp_db):
+        init_db()
+        save_poll_template({"name": "Пятница", "message": "Игра"})
+        _insert_player(123)
+        create_game(
+            poll_id="regular-guest",
+            kind="regular",
+            status="open",
+            poll_template_id=1,
+            poll_name_snapshot="Пятница",
+            question_snapshot="Играем?",
+            chat_id=1,
+            poll_message_id=1,
+            opened_at="2026-03-01T10:00:00+00:00",
+        )
+        save_game_participants(
+            "regular-guest",
+            [
+                {
+                    "player_id": 123,
+                    "roster_bucket": "main",
+                    "sort_order": 1,
+                    "is_guest": True,
+                    "guest_free_reason": "first_games",
+                    "charged_amount": 0,
+                    "charge_source": "none",
+                }
+            ],
+        )
+
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT is_guest, guest_free_reason
+                FROM game_participants
+                WHERE game_poll_id = ? AND player_id = ?
+                """,
+                ("regular-guest", 123),
+            ).fetchone()
+            assert row == (1, "first_games")
 
     def test_monthly_votes_and_stats(self, temp_db):
         init_db()

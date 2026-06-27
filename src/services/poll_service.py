@@ -32,6 +32,7 @@ from ..db import (
     POLL_STATE_KEY,
     add_transaction,
     close_game,
+    count_player_regular_participations,
     create_backup,
     create_game,
     ensure_player,
@@ -89,6 +90,7 @@ DISCOUNTED_MIN_SUB_PRICE = 100  # Абсолютный минимум при в�
 MAX_SUB_PRICE = 500  # Максимальная цена абонемента за 1 зал
 DEFAULT_SUB_PRICE = 450  # Цена по умолчанию, если нет подписчиков
 PLAYERS_LIST_UPDATE_DELAY_SECONDS = 5  # Задержка перед обновлением списка игроков
+GUEST_FREE_FIRST_GAMES = 4
 
 
 def _subscription_price_weight(hall_count: int) -> float:
@@ -766,7 +768,7 @@ class PollService:
     def _build_live_roster_text(self, roster: PollRoster) -> str:
         """Строит промежуточный текст списка игроков из готового состава."""
         if roster.total == 0:
-            return "⏳ Идёт сбор голосов...\n\n⭐️ — абонемент\n🏐 — донат на мяч"
+            return self._append_roster_legend("⏳ Идёт сбор голосов...")
 
         if roster.total < MIN_PLAYERS:
             text = (
@@ -790,7 +792,7 @@ class PollService:
             text += "\n\n🎫 <b>Лист ожидания:</b>\n"
             text += self._format_roster_lines(roster.booked_entries)
 
-        return text + "\n\n⭐️ — абонемент\n🏐 — донат на мяч"
+        return self._append_roster_legend(text)
 
     def _build_final_roster_text(self, roster: PollRoster) -> str:
         """Строит финальный текст regular-опроса из готового состава."""
@@ -831,7 +833,11 @@ class PollService:
                 "Игроков в листе ожидания просим остаться дома и не нарушать правила."
             )
 
-        return text + "\n\n⭐️ — абонемент\n🏐 — донат на мяч"
+        return self._append_roster_legend(text)
+
+    @staticmethod
+    def _append_roster_legend(text: str) -> str:
+        return text + "\n\n⭐️ — абонемент\n🏐 — донат на мяч\n🙋 — гость"
 
     @staticmethod
     def _format_charge_summary(charge_rows: list[dict[str, Any]]) -> str:
@@ -880,6 +886,7 @@ class PollService:
         update_id: int,
         voted_at: str,
         voted_yes: bool,
+        is_guest: bool = False,
     ) -> list[VoterInfo]:
         """
         Обновить raw-список голосующих.
@@ -909,6 +916,7 @@ class PollService:
                     name=user_name,
                     update_id=update_id,
                     voted_at=voted_at,
+                    is_guest=is_guest,
                 )
             )
         return data.yes_voters
@@ -1421,6 +1429,13 @@ class PollService:
                     "is_subscriber": bool(
                         charge.get("is_subscriber", entry.is_subscriber)
                     ),
+                    "is_guest": bool(charge.get("is_guest", entry.is_guest)),
+                    "guest_free_reason": str(
+                        charge.get(
+                            "guest_free_reason",
+                            entry.guest_free_reason or "none",
+                        )
+                    ),
                     "charged_amount": int(charge.get("charged_amount", 0) or 0),
                     "charge_source": str(charge.get("charge_source", "none")),
                     "balance_before": charge.get("balance_before"),
@@ -1809,6 +1824,8 @@ class PollService:
                     "player_id": entry.player_id,
                     "name": entry.rendered_name,
                     "is_subscriber": entry.is_subscriber,
+                    "is_guest": entry.is_guest,
+                    "guest_free_reason": "none",
                     "charged_amount": 0,
                     "charge_source": "none",
                     "balance_before": None,
@@ -1831,6 +1848,8 @@ class PollService:
             entry: Any,
             *,
             is_subscriber: bool,
+            is_guest: bool | None = None,
+            guest_free_reason: str = "none",
             charged_amount: int = 0,
             charge_source: str = "none",
             balance_before: int | None = None,
@@ -1841,6 +1860,8 @@ class PollService:
                     "player_id": entry.player_id,
                     "name": entry.rendered_name,
                     "is_subscriber": is_subscriber,
+                    "is_guest": entry.is_guest if is_guest is None else is_guest,
+                    "guest_free_reason": guest_free_reason,
                     "charged_amount": charged_amount,
                     "charge_source": charge_source,
                     "balance_before": balance_before,
@@ -1873,6 +1894,32 @@ class PollService:
                     f"  ⏭️  Игрок {entry.rendered_name} (ID: {entry.player_id}) с подпиской, списание пропущено"
                 )
                 continue
+
+            if entry.is_guest:
+                previous_games = count_player_regular_participations(entry.player_id)
+                guest_free_reason = "none"
+                if previous_games < GUEST_FREE_FIRST_GAMES:
+                    guest_free_reason = "first_games"
+                elif (
+                    entry.roster_bucket == "main"
+                    and 1 <= int(entry.sort_order) <= MIN_PLAYERS
+                ):
+                    guest_free_reason = "fill_min_players"
+
+                if guest_free_reason != "none":
+                    append_participant_finance_row(
+                        entry,
+                        is_subscriber=False,
+                        is_guest=True,
+                        guest_free_reason=guest_free_reason,
+                    )
+                    logging.info(
+                        "  ⏭️  Гость %s (ID: %s) играет бесплатно, причина: %s",
+                        entry.rendered_name,
+                        entry.player_id,
+                        guest_free_reason,
+                    )
+                    continue
 
             # Убеждаемся, что игрок есть в БД
             ensure_player(entry.player_id, entry.rendered_name)
@@ -1907,6 +1954,7 @@ class PollService:
             append_participant_finance_row(
                 entry,
                 is_subscriber=False,
+                guest_free_reason="none",
                 charged_amount=cost,
                 charge_source="single_game",
                 balance_before=old_balance,

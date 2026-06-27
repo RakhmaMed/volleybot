@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +12,8 @@ from .db import get_player_info
 from .utils import normalize_telegram_username
 
 SUBSCRIPTION_PRIORITY_WINDOW_HOURS = 14
+GUEST_RELEASE_HOUR_MSK = 9
+MSK_TZ = ZoneInfo("Europe/Moscow")
 
 
 class VoterInfo(BaseModel):
@@ -20,6 +23,7 @@ class VoterInfo(BaseModel):
     name: str = Field(..., description="Имя пользователя")
     update_id: int = Field(default=0, description="ID обновления для сортировки")
     voted_at: str = Field(default="", description="Время голоса в UTC ISO-формате")
+    is_guest: bool = Field(default=False, description="Гость ли игрок")
 
     model_config = {"frozen": False}  # Разрешаем изменение полей
 
@@ -36,6 +40,10 @@ class PollRosterEntry(BaseModel):
         default=False, description="Получил ли временный приоритет абонемента"
     )
     has_ball_donate: bool = Field(default=False, description="Есть ли донат на мяч")
+    is_guest: bool = Field(default=False, description="Гость ли игрок")
+    guest_free_reason: str = Field(
+        default="none", description="Причина бесплатного гостевого участия"
+    )
     roster_bucket: str = Field(
         default="booked", description="main, reserve или booked"
     )
@@ -130,7 +138,7 @@ def _strip_voter_status_prefix(name: str) -> str:
     changed = True
     while changed:
         changed = False
-        for prefix in ("⭐️", "⭐", "🏐"):
+        for prefix in ("⭐️", "⭐", "🏐", "🙋"):
             if cleaned.startswith(prefix):
                 cleaned = cleaned[len(prefix) :].lstrip()
                 changed = True
@@ -178,7 +186,22 @@ def _resolve_voter_datetime(voter: VoterInfo, opened_at: str) -> tuple[datetime 
     return _parse_iso_datetime(voted_at), voted_at
 
 
-def build_regular_poll_roster(data: PollData) -> PollRoster:
+def _guest_release_deadline(opened_at: str) -> datetime | None:
+    opened_dt = _parse_iso_datetime(opened_at)
+    if opened_dt is None:
+        return None
+    opened_msk = opened_dt.astimezone(MSK_TZ)
+    release_date = opened_msk.date() + timedelta(days=1)
+    return datetime.combine(
+        release_date,
+        time(hour=GUEST_RELEASE_HOUR_MSK),
+        tzinfo=MSK_TZ,
+    ).astimezone(timezone.utc)
+
+
+def build_regular_poll_roster(
+    data: PollData, now: datetime | None = None
+) -> PollRoster:
     """Собирает единый состав игроков для regular-опроса."""
     opened_dt = _parse_iso_datetime(data.opened_at)
     priority_deadline = None
@@ -186,6 +209,14 @@ def build_regular_poll_roster(data: PollData) -> PollRoster:
         priority_deadline = opened_dt + timedelta(
             hours=SUBSCRIPTION_PRIORITY_WINDOW_HOURS
         )
+    guest_release_deadline = _guest_release_deadline(data.opened_at)
+    current_dt = now or datetime.now(timezone.utc)
+    if current_dt.tzinfo is None:
+        current_dt = current_dt.replace(tzinfo=timezone.utc)
+    current_dt = current_dt.astimezone(timezone.utc)
+    guests_released = (
+        guest_release_deadline is None or current_dt >= guest_release_deadline
+    )
 
     subs = set(data.subs)
     prepared: list[tuple[PollRosterEntry, datetime | None]] = []
@@ -200,6 +231,8 @@ def build_regular_poll_roster(data: PollData) -> PollRoster:
             and voted_dt <= priority_deadline
         )
         rendered_name, has_ball_donate = _render_voter_name(voter, is_subscriber)
+        if voter.is_guest:
+            rendered_name = f"🙋 {rendered_name}"
         prepared.append(
             (
                 PollRosterEntry(
@@ -210,29 +243,67 @@ def build_regular_poll_roster(data: PollData) -> PollRoster:
                     is_subscriber=is_subscriber,
                     has_subscription_priority=has_priority,
                     has_ball_donate=has_ball_donate,
+                    is_guest=voter.is_guest,
                 ),
                 voted_dt,
             )
         )
 
-    prepared.sort(
-        key=lambda item: (
+    def sort_key(item: tuple[PollRosterEntry, datetime | None]) -> tuple[object, ...]:
+        return (
             not item[0].has_subscription_priority,
             item[0].update_id,
             item[1] or datetime.min.replace(tzinfo=timezone.utc),
             item[0].player_id,
         )
-    )
+
+    group_players = [item for item in prepared if not item[0].is_guest]
+    guest_players = [item for item in prepared if item[0].is_guest]
+    group_players.sort(key=sort_key)
+    guest_players.sort(key=sort_key)
+
+    ordered_items = group_players + guest_players
 
     entries: list[PollRosterEntry] = []
-    for index, (entry, _) in enumerate(prepared, start=1):
+
+    def bucket_for_index(index: int) -> str:
         if index <= MAX_PLAYERS:
-            bucket = "main"
-        elif index <= MAX_PLAYERS + RESERVE_PLAYERS:
-            bucket = "reserve"
-        else:
-            bucket = "booked"
-        entries.append(entry.model_copy(update={"roster_bucket": bucket, "sort_order": index}))
+            return "main"
+        if index <= MAX_PLAYERS + RESERVE_PLAYERS:
+            return "reserve"
+        return "booked"
+
+    if guests_released:
+        for index, (entry, _) in enumerate(ordered_items, start=1):
+            entries.append(
+                entry.model_copy(
+                    update={
+                        "roster_bucket": bucket_for_index(index),
+                        "sort_order": index,
+                    }
+                )
+            )
+    else:
+        for index, (entry, _) in enumerate(group_players, start=1):
+            entries.append(
+                entry.model_copy(
+                    update={
+                        "roster_bucket": bucket_for_index(index),
+                        "sort_order": index,
+                    }
+                )
+            )
+        guest_start = max(MAX_PLAYERS, len(group_players)) + 1
+        for offset, (entry, _) in enumerate(guest_players):
+            sort_order = guest_start + offset
+            entries.append(
+                entry.model_copy(
+                    update={
+                        "roster_bucket": bucket_for_index(sort_order),
+                        "sort_order": sort_order,
+                    }
+                )
+            )
 
     return PollRoster(entries=entries)
 
