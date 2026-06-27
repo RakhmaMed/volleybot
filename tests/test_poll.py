@@ -950,6 +950,21 @@ class TestClosePoll:
         self, mock_bot, temp_db
     ):
         """Для листа ожидания бот должен явно сообщать, что мест не осталось."""
+        init_db()
+        save_poll_template(
+            {
+                "name": "test_poll_id",
+                "message": "Текст",
+                "cost": 100,
+            }
+        )
+        reserve_id = MAX_PLAYERS + 1
+        booked_id = MAX_PLAYERS + RESERVE_PLAYERS + 1
+        ensure_player(reserve_id, f"user{reserve_id}")
+        ensure_player(booked_id, f"user{booked_id}")
+        update_player_balance(reserve_id, 250)
+        update_player_balance(booked_id, 400)
+
         service = PollService()
         poll_id = "test_poll_id"
         voters: list[VoterInfo] = [
@@ -970,11 +985,19 @@ class TestClosePoll:
         mock_bot.send_message = AsyncMock()
         mock_bot.delete_message = AsyncMock()
 
-        await service.close_poll(mock_bot, poll_id)
+        with patch.object(service, "_send_admin_report", new_callable=AsyncMock):
+            await service.close_poll(mock_bot, poll_id)
 
         call_args = mock_bot.send_message.call_args
-        assert "Лист ожидания" in call_args.kwargs["text"]
-        assert "Игроков в листе ожидания просим остаться дома и не нарушать правила." in call_args.kwargs["text"]
+        text = call_args.kwargs["text"]
+        assert "Лист ожидания" in text
+        assert "Игроков в листе ожидания просим остаться дома и не нарушать правила." in text
+        assert f"@user{reserve_id} (150₽)" in text
+        assert f"@user{booked_id} (400₽)" in text
+        assert "💰 <b>Стоимость разового посещения:</b> 100₽" in text
+        assert text.index("🙋 — гость") < text.index(
+            "💰 <b>Стоимость разового посещения:</b> 100₽"
+        )
 
 
 @pytest.mark.asyncio
@@ -1704,14 +1727,15 @@ class TestHtmlEscapingInPollTexts:
 
         mock_bot.send_message.assert_called_once()
         text = mock_bot.send_message.call_args.kwargs["text"]
-        print("---------------------")
-        print(text)
-        print("---------------------")
-        assert "💰 <b>Стоимость:</b> 150₽" in text
-        assert "<b>Списано по 150₽ с 1 игроков:</b>" in text
-        assert "1. Regular User (@regular_user) 🔴 (баланс: -150₽)" in text
+        assert "1) Regular User (@regular_user) (-150₽)" in text
+        assert "2) ⭐️ Sub User (@sub_user) (300₽)" in text
+        assert "<b>Списано по 150₽" not in text
+        assert "🔴 (баланс:" not in text
+        assert "💰 <b>Стоимость разового посещения:</b> 150₽" in text
         assert "<b>Итого списано:</b> 150₽" in text
-        assert "Sub User (@sub_user) 🔴 (баланс:" not in text
+        assert text.index("🙋 — гость") < text.index(
+            "💰 <b>Стоимость разового посещения:</b> 150₽"
+        )
 
         regular = get_player_balance(1)
         subscriber = get_player_balance(2)

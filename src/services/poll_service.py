@@ -765,6 +765,37 @@ class PollService:
             for index, entry in enumerate(entries, start=1)
         )
 
+    @classmethod
+    def _format_roster_lines_with_balances(
+        cls, entries: list[Any], charge_by_player: dict[int, dict[str, Any]]
+    ) -> str:
+        return "\n".join(
+            f"{index}) {cls._format_roster_entry_with_balance(entry, charge_by_player)}"
+            for index, entry in enumerate(entries, start=1)
+        )
+
+    @classmethod
+    def _format_roster_entry_with_balance(
+        cls, entry: Any, charge_by_player: dict[int, dict[str, Any]]
+    ) -> str:
+        name = cls._format_roster_entry_name(entry)
+        balance = cls._get_final_balance_for_entry(entry, charge_by_player)
+        return f"{name} ({balance}₽)"
+
+    @staticmethod
+    def _get_final_balance_for_entry(
+        entry: Any, charge_by_player: dict[int, dict[str, Any]]
+    ) -> int:
+        charge = charge_by_player.get(int(entry.player_id), {})
+        balance_after = charge.get("balance_after")
+        if balance_after is not None:
+            return int(balance_after)
+
+        player = get_player_balance(entry.player_id)
+        if player is None:
+            return 0
+        return int(player.get("balance", 0) or 0)
+
     def _build_live_roster_text(self, roster: PollRoster) -> str:
         """Строит промежуточный текст списка игроков из готового состава."""
         if roster.total == 0:
@@ -794,41 +825,45 @@ class PollService:
 
         return self._append_roster_legend(text)
 
-    def _build_final_roster_text(self, roster: PollRoster) -> str:
+    def _build_final_roster_text(
+        self, roster: PollRoster, charge_rows: list[dict[str, Any]]
+    ) -> str:
         """Строит финальный текст regular-опроса из готового состава."""
         if roster.total == 0:
             return "📊 <b>Голосование завершено</b>\n\nНикто не записался."
+
+        charge_by_player = {int(row["player_id"]): row for row in charge_rows}
 
         if roster.total < MIN_PLAYERS:
             text = (
                 f"📊 <b>Голосование завершено:</b> {roster.total}/{MIN_PLAYERS}\n\n"
                 "<b>Записались:</b>\n"
-                f"{self._format_roster_lines(roster.entries)}"
+                f"{self._format_roster_lines_with_balances(roster.entries, charge_by_player)}"
                 "\n\n⚠️ <b>Не хватает игроков!</b>"
             )
         elif not roster.reserve_entries and not roster.booked_entries:
             text = (
                 "📊 <b>Голосование завершено</b> ✅\n\n"
                 f"<b>Основной состав ({len(roster.main_entries)}):</b>\n"
-                f"{self._format_roster_lines(roster.main_entries)}"
+                f"{self._format_roster_lines_with_balances(roster.main_entries, charge_by_player)}"
             )
         elif not roster.booked_entries:
             text = (
                 "📊 <b>Голосование завершено</b> ✅\n\n"
                 f"<b>Основной состав ({len(roster.main_entries)}):</b>\n"
-                f"{self._format_roster_lines(roster.main_entries)}"
+                f"{self._format_roster_lines_with_balances(roster.main_entries, charge_by_player)}"
                 f"\n\n🕗 <b>Запасные ({len(roster.reserve_entries)}):</b>\n"
-                f"{self._format_roster_lines(roster.reserve_entries)}"
+                f"{self._format_roster_lines_with_balances(roster.reserve_entries, charge_by_player)}"
             )
         else:
             text = (
                 "📊 <b>Голосование завершено</b> ✅\n\n"
                 f"<b>Основной состав ({len(roster.main_entries)}):</b>\n"
-                f"{self._format_roster_lines(roster.main_entries)}"
+                f"{self._format_roster_lines_with_balances(roster.main_entries, charge_by_player)}"
                 f"\n\n🕗 <b>Запасные ({len(roster.reserve_entries)}):</b>\n"
-                f"{self._format_roster_lines(roster.reserve_entries)}"
+                f"{self._format_roster_lines_with_balances(roster.reserve_entries, charge_by_player)}"
                 f"\n\n🎫 <b>Лист ожидания ({len(roster.booked_entries)}):</b>\n"
-                f"{self._format_roster_lines(roster.booked_entries)}"
+                f"{self._format_roster_lines_with_balances(roster.booked_entries, charge_by_player)}"
                 "\n\n⚠️ <b>Превышен лимит игроков!</b>\n"
                 "Игроков в листе ожидания просим остаться дома и не нарушать правила."
             )
@@ -840,43 +875,32 @@ class PollService:
         return text + "\n\n⭐️ — абонемент\n🏐 — донат на мяч\n🙋 — гость"
 
     @staticmethod
-    def _format_charge_summary(charge_rows: list[dict[str, Any]]) -> str:
+    def _get_single_game_cost(poll_name: str) -> int:
+        poll_templates = get_poll_templates()
+        poll_config = next((p for p in poll_templates if p["name"] == poll_name), None)
+        if not poll_config:
+            return 0
+        return int(poll_config.get("cost", 0) or 0)
+
+    @staticmethod
+    def _format_charge_summary(charge_rows: list[dict[str, Any]], cost: int) -> str:
         """Форматирует финансовый блок для финального сообщения regular-опроса."""
+        if cost <= 0:
+            return ""
+
         charged_rows = [
             row
             for row in charge_rows
             if row.get("charge_source") == "single_game"
             and int(row.get("charged_amount", 0) or 0) > 0
         ]
-        if not charged_rows:
-            return ""
-
-        charged_amounts = {
-            int(row.get("charged_amount", 0) or 0) for row in charged_rows
-        }
         total_charged = sum(
             int(row.get("charged_amount", 0) or 0) for row in charged_rows
         )
-
-        text = ""
-        if len(charged_amounts) == 1:
-            cost = next(iter(charged_amounts))
-            text += f"💰 <b>Стоимость:</b> {cost}₽\n\n"
-            text += f"<b>Списано по {cost}₽ с {len(charged_rows)} игроков:</b>\n"
-        else:
-            text += f"💰 <b>Итого списано:</b> {total_charged}₽\n\n"
-            text += f"<b>Списано с {len(charged_rows)} игроков:</b>\n"
-
-        for i, row in enumerate(charged_rows, 1):
-            balance_after = int(row.get("balance_after", 0) or 0)
-            balance_emoji = "🔴" if balance_after < 0 else "🟢"
-            text += (
-                f"{i}. {escape_html(str(row.get('name', 'Игрок')))} "
-                f"{balance_emoji} (баланс: {balance_after}₽)\n"
-            )
-
-        text += f"\n<b>Итого списано:</b> {total_charged}₽"
-        return text
+        return (
+            f"💰 <b>Стоимость разового посещения:</b> {cost}₽\n"
+            f"<b>Итого списано:</b> {total_charged}₽"
+        )
 
     def update_voters(
         self,
@@ -1326,8 +1350,9 @@ class PollService:
         # Обработка списания средств для платных залов
         charge_rows = await self._process_payment_deduction(bot, poll_name, roster)
 
-        final_text = self._build_final_roster_text(roster)
-        charge_summary = self._format_charge_summary(charge_rows)
+        final_text = self._build_final_roster_text(roster, charge_rows)
+        single_game_cost = self._get_single_game_cost(poll_name)
+        charge_summary = self._format_charge_summary(charge_rows, single_game_cost)
         if charge_summary:
             final_text += f"\n\n{charge_summary}"
 
