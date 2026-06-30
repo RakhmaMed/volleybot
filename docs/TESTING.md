@@ -73,6 +73,7 @@ ADMIN_USER_ID=...
 /balance
 /subs
 /player
+/stats
 ```
 
 Ожидания:
@@ -80,6 +81,7 @@ ADMIN_USER_ID=...
 - `/balance` показывает кассу и балансы игроков для администратора
 - `/subs` показывает предзаполненные подписки по дням
 - `/player` показывает игроков и подробные балансы
+- `/stats` показывает сводку, если команда запущена администратором
 
 ## Финансовые сценарии
 
@@ -191,31 +193,107 @@ ADMIN_USER_ID=...
 
 ## Автоматические тесты
 
+Сейчас pytest собирает 335 тестов.
+
 ### Полный набор
 
 ```bash
-uv run pytest -q
+./manage.sh test
+```
+
+Или напрямую через уже созданное окружение:
+
+```bash
+.venv/bin/pytest
 ```
 
 ### Только БД и финансы
 
 ```bash
-uv run pytest tests/test_db_polls.py tests/test_fund_and_subscriptions.py -q
+.venv/bin/pytest tests/test_db_polls.py tests/test_fund_and_subscriptions.py
 ```
 
 ### Только обработчики
 
 ```bash
-uv run pytest tests/test_handlers.py tests/test_balance_handlers.py -q
+.venv/bin/pytest tests/test_handlers.py tests/test_balance_handlers.py
 ```
 
 ### С покрытием
 
 ```bash
-uv run pytest tests/ --cov=src --cov-report=html
+./manage.sh test --coverage
 ```
 
 Отчёт будет в `htmlcov/index.html`.
+
+## Админские команды для ручной проверки
+
+### Статистика
+
+```text
+/stats
+/stats month YYYY-MM
+/stats poll 1
+/stats player @username
+```
+
+Ожидание:
+- `/stats` показывает месячную сводку
+- `poll` показывает статистику выбранного зала
+- `player` показывает участие игрока, разовые списания и текущий баланс
+
+### Абонементы
+
+```text
+/hall
+/subs
+/subs add 1 Алиса
+/subs
+```
+
+Ожидание:
+- `HALL_ID` берётся из `/hall`
+- при неоднозначном имени бот предлагает inline-выбор игрока
+- повторное добавление существующего абонемента не создаёт дубль
+
+### Залы
+
+```text
+/hall
+/hall off 1
+/schedule
+/hall on 1
+```
+
+Ожидание:
+- выключенный зал помечается как неактивный
+- планировщик обновляется после включения/выключения
+- `/schedule` показывает статус зала
+
+Пошаговый мастер:
+
+```text
+/hall add
+/hall edit 1
+/hall cancel
+```
+
+Проверьте, что мастер принимает день недели, время, стоимости, текст сообщения и финальное подтверждение через inline-кнопки.
+
+### Донат мяча и гости
+
+```text
+/ball_donate Алиса
+/player Алиса
+/guest add Борис
+/guest
+/guest remove Борис
+```
+
+Ожидание:
+- `/player` показывает актуальные флаги игрока
+- ручной гостевой флаг влияет на определение гостя, если Telegram API не может однозначно проверить членство
 
 ## Отладка
 
@@ -263,7 +341,7 @@ VOLLEYBOT_DB_PATH=data/test.db python -m src.bot
 
 - используйте `test_bot.py` для быстрого ручного тестирования
 - тестируйте финансовые сценарии в отдельной группе
-- прогоняйте `uv run pytest -q` перед важными изменениями
+- прогоняйте `./manage.sh test` перед важными изменениями
 - проверяйте `/balance` до и после `/pay`, `/restore`, `/pay Оплата зала`
 - для месячного опроса проверяйте и голосование, и финальные списания
 
@@ -275,6 +353,6 @@ VOLLEYBOT_DB_PATH=data/test.db python -m src.bot
 
 ## Связанные документы
 
-- [Краткая шпаргалка](../TESTING_QUICKSTART.md)
+- [Краткая шпаргалка](TESTING_QUICKSTART.md)
 - [Основная документация](../README.md)
 - [Конфигурация](CONFIGURATION.md)

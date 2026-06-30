@@ -37,6 +37,7 @@ uv run python test_bot.py
 /balance
 /subs
 /player
+/stats
 ```
 
 Ожидания:
@@ -44,6 +45,7 @@ uv run python test_bot.py
 - `/balance` показывает долги и кассу, если вы админ
 - `/subs` показывает предзаполненные подписки
 - `/player` показывает игроков и их балансы
+- `/stats` показывает сводку по текущему месяцу, если вы админ
 
 ## Финансовые сценарии
 
@@ -123,6 +125,24 @@ uv run python test_bot.py
 
 ## Что ещё стоит проверить
 
+### Статистика и управление данными
+
+```text
+/stats
+/stats poll 1
+/stats player Алиса
+/subs add 1 Алиса
+/hall off 1
+/hall on 1
+/ball_donate Алиса
+```
+
+Ожидание:
+- статистика открывается только администратору
+- `/subs add` не создаёт дубль, если абонемент уже есть
+- `/hall on/off` меняет статус зала в `/schedule`
+- `/ball_donate` меняет флаг игрока в `/player`
+
 ### Webhook/updates
 
 ```text
@@ -152,6 +172,7 @@ uv run python test_bot.py
 /schedule
 /subs
 /player
+/stats
 /balance
 /pay Алиса 300
 /restore Борис 150
@@ -173,14 +194,16 @@ uv run python test_bot.py
 ## Автотесты
 
 ```bash
-uv run pytest -q
+./manage.sh test
 ```
 
 Если нужен только набор, связанный с финансами и БД:
 
 ```bash
-uv run pytest tests/test_db_polls.py tests/test_fund_and_subscriptions.py -q
+.venv/bin/pytest tests/test_db_polls.py tests/test_fund_and_subscriptions.py
 ```
+
+Сейчас pytest собирает 335 тестов.
 
 ## Примечания
 
