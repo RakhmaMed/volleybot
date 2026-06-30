@@ -163,7 +163,7 @@ function Setup-Environment {
     # Установка зависимостей
     Write-Host ""
     Write-Host "[4/4] Установка зависимостей..." -ForegroundColor Yellow
-    uv pip install -r requirements.txt
+    uv sync --locked
     if ($LASTEXITCODE -ne 0) {
         Write-Host "❌ Ошибка при установке зависимостей" -ForegroundColor Red
         exit 1

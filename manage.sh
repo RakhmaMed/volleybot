@@ -236,7 +236,7 @@ PY
     # Установка зависимостей
     echo ""
     echo -e "${YELLOW}[4/4] Установка зависимостей...${NC}"
-    UV_PYTHON=".venv/bin/python" uv pip install -r requirements.txt
+    UV_PYTHON=".venv/bin/python" uv sync --locked
     echo -e "${GREEN}✓ Зависимости установлены${NC}"
 
     echo ""
