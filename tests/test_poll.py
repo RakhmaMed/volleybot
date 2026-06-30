@@ -704,7 +704,10 @@ class TestSendPollSpec:
             )
 
         assert result == -1001234567890
-        spec = mock_send.await_args.args[2]
+        mock_send.assert_awaited_once()
+        await_args = mock_send.await_args
+        assert await_args is not None
+        spec = await_args.args[2]
         assert isinstance(spec, PollCreationSpec)
         assert spec.question == "Новый текст"
         assert spec.subs == (2, 3)

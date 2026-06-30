@@ -52,7 +52,8 @@ logging.basicConfig(
 
 async def _notify_admin(bot: Bot, text: str) -> None:
     """Отправляет служебное уведомление админу, если он настроен."""
-    if ADMIN_USER_ID is None:
+    admin_user_id = ADMIN_USER_ID
+    if admin_user_id is None:
         logging.debug("ADMIN_USER_ID не задан, служебное уведомление пропущено")
         return
 
@@ -64,7 +65,7 @@ async def _notify_admin(bot: Bot, text: str) -> None:
         max_delay=8.0,
     )
     async def send_with_retry() -> None:
-        await bot.send_message(chat_id=ADMIN_USER_ID, text=text)
+        await bot.send_message(chat_id=admin_user_id, text=text)
 
     try:
         await send_with_retry()
@@ -80,9 +81,7 @@ def _find_inconsistent_poll_templates() -> list[str]:
         cost_per_game = int(template.get("cost_per_game", 0) or 0)
         if cost_per_game == 0 and cost != 0:
             name = str(template.get("name", ""))
-            inconsistent.append(
-                f"• {name}: cost={cost}, cost_per_game={cost_per_game}"
-            )
+            inconsistent.append(f"• {name}: cost={cost}, cost_per_game={cost_per_game}")
     return inconsistent
 
 

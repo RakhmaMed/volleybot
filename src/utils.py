@@ -40,6 +40,18 @@ WEEKDAY_TO_INDEX: dict[str, int] = {
 }
 
 
+def to_int(value: object, default: int = 0) -> int:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return int(value)
+    return default
+
+
 def normalize_telegram_username(username: Any) -> str | None:
     """Возвращает валидный Telegram username без @ или None."""
     if username is None:
@@ -515,9 +527,7 @@ def validate_balance_callback_data(
     return player_id, amount
 
 
-def validate_player_select_callback_data(
-    data: str, expected_prefix: str
-) -> int | None:
+def validate_player_select_callback_data(data: str, expected_prefix: str) -> int | None:
     """
     Парсит и валидирует callback data для выбора игрока.
 

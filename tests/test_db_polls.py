@@ -20,6 +20,7 @@ from src.db import (
     save_monthly_vote,
     save_poll_template,
 )
+from src.utils import to_int
 
 
 def _insert_player(player_id: int) -> None:
@@ -88,8 +89,7 @@ class TestDBPolls:
                 row[1] for row in conn.execute("PRAGMA table_info(players)")
             }
             participant_columns = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(game_participants)")
+                row[1] for row in conn.execute("PRAGMA table_info(game_participants)")
             }
             assert "is_guest" in player_columns
             assert "is_guest" in participant_columns
@@ -146,8 +146,7 @@ class TestDBPolls:
                 row[1] for row in conn.execute("PRAGMA table_info(players)")
             }
             participant_columns = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(game_participants)")
+                row[1] for row in conn.execute("PRAGMA table_info(game_participants)")
             }
             user_version = conn.execute("PRAGMA user_version").fetchone()[0]
             assert "is_guest" in player_columns
@@ -508,10 +507,11 @@ class TestDBPolls:
         _insert_player(123)
         template_id = save_poll_template({"name": "Пятница", "message": "Игра"})
 
-        result = add_poll_subscription(int(template_id), 123)
+        result = add_poll_subscription(to_int(template_id), 123)
 
         assert result == "success"
         template = get_poll_templates()[0]
+        assert "subs" in template
         assert template["subs"] == [123]
 
     def test_add_poll_subscription_returns_duplicate(self, temp_db):
@@ -519,12 +519,13 @@ class TestDBPolls:
         init_db()
         _insert_player(123)
         template_id = save_poll_template({"name": "Пятница", "message": "Игра"})
-        assert add_poll_subscription(int(template_id), 123) == "success"
+        assert add_poll_subscription(to_int(template_id), 123) == "success"
 
-        result = add_poll_subscription(int(template_id), 123)
+        result = add_poll_subscription(to_int(template_id), 123)
 
         assert result == "duplicate"
         template = get_poll_templates()[0]
+        assert "subs" in template
         assert template["subs"] == [123]
 
     def test_add_poll_subscription_reports_missing_entities(self, temp_db):
@@ -534,7 +535,7 @@ class TestDBPolls:
         template_id = save_poll_template({"name": "Пятница", "message": "Игра"})
 
         assert add_poll_subscription(999, 123) == "missing_hall"
-        assert add_poll_subscription(int(template_id), 999) == "missing_player"
+        assert add_poll_subscription(to_int(template_id), 999) == "missing_player"
 
     def test_update_poll_template_by_id_allows_rename(self, temp_db):
         """Обновление по id должно переименовывать шаблон без создания дубля."""
@@ -558,8 +559,11 @@ class TestDBPolls:
         assert len(templates) == 1
         assert templates[0]["name"] == "New"
         assert templates[0]["message"] == "Msg 2"
+        assert "cost" in templates[0]
         assert templates[0]["cost"] == 200
+        assert "cost_per_game" in templates[0]
         assert templates[0]["cost_per_game"] == 2500
+        assert "enabled" in templates[0]
         assert templates[0]["enabled"] == 0
 
     def test_update_poll_template_by_id_does_not_insert_missing_id(self, temp_db):

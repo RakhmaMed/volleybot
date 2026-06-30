@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from typing import Never
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
@@ -66,6 +67,7 @@ from .utils import (
     normalize_telegram_username,
     rate_limit_check,
     retry_async,
+    to_int,
     validate_balance_callback_data,
     validate_hall_pay_callback_data,
     validate_player_select_callback_data,
@@ -422,12 +424,12 @@ def _build_hall_template_for_save(template: dict[str, object]) -> dict[str, obje
         "open_day": open_day,
         "open_hour_utc": open_hour,
         "open_minute_utc": open_minute,
-        "cost": int(template.get("cost", 0) or 0),
-        "cost_per_game": int(template.get("cost_per_game", 0) or 0),
-        "enabled": int(template.get("enabled", 1) or 0),
+        "cost": to_int(template.get("cost", 0) or 0),
+        "cost_per_game": to_int(template.get("cost_per_game", 0) or 0),
+        "enabled": to_int(template.get("enabled", 1) or 0),
     }
     if "id" in template:
-        result["id"] = int(template["id"])
+        result["id"] = to_int(template["id"])
     if "subs" in template:
         result["subs"] = template["subs"]
     return result
@@ -437,15 +439,15 @@ def _format_hall_time_summary(template: PollTemplate | dict[str, object]) -> str
     """Форматирует время игры для списков залов."""
     day, time_text = _utc_to_msk_day_time(
         str(template.get("game_day", "mon") or "mon"),
-        int(template.get("game_hour_utc", 0) or 0),
-        int(template.get("game_minute_utc", 0) or 0),
+        to_int(template.get("game_hour_utc", 0) or 0),
+        to_int(template.get("game_minute_utc", 0) or 0),
     )
     return f"{HALL_DAY_LABELS.get(day, day)} {time_text} МСК"
 
 
 def _format_hall_wizard_summary(template: dict[str, object]) -> str:
     """Форматирует сводку перед сохранением зала."""
-    enabled = "включён" if int(template.get("enabled", 1) or 0) == 1 else "выключен"
+    enabled = "включён" if to_int(template.get("enabled", 1) or 0) == 1 else "выключен"
     place = str(template.get("place") or "не указано")
     return (
         "🏟 <b>Проверьте зал</b>\n\n"
@@ -455,8 +457,8 @@ def _format_hall_wizard_summary(template: dict[str, object]) -> str:
         f"{escape_html(str(template.get('game_time_msk')))} МСК\n"
         f"Опрос: {HALL_DAY_LABELS.get(str(template.get('open_day_msk')), str(template.get('open_day_msk')))} "
         f"{escape_html(str(template.get('open_time_msk')))} МСК\n"
-        f"Разовая игра: <b>{int(template.get('cost', 0) or 0)} ₽</b>\n"
-        f"Аренда за игру: <b>{int(template.get('cost_per_game', 0) or 0)} ₽</b>\n"
+        f"Разовая игра: <b>{to_int(template.get('cost', 0) or 0)} ₽</b>\n"
+        f"Аренда за игру: <b>{to_int(template.get('cost_per_game', 0) or 0)} ₽</b>\n"
         f"Текст опроса: {escape_html(str(template.get('message') or ''))}\n"
         f"Статус: {enabled}"
     )
@@ -1073,9 +1075,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 player_lines = []
                 for player in players[:10]:
                     p_name = _format_player_choice_label(player)
-                    callback_data = (
-                        f"subs_add_select:{poll_template_id}:{player['id']}"
-                    )
+                    callback_data = f"subs_add_select:{poll_template_id}:{player['id']}"
                     keyboard.append(
                         [
                             InlineKeyboardButton(
@@ -1510,9 +1510,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             elif field == "message":
                 hall_name = str(template.get("name") or "зал")
                 default_message = f"Играем в {hall_name}?"
-                default_text = (
-                    f"\nПо умолчанию: <b>{escape_html(default_message)}</b>."
-                )
+                default_text = f"\nПо умолчанию: <b>{escape_html(default_message)}</b>."
             elif field == "enabled":
                 default_text = "\nПо умолчанию: <b>да</b>."
 
@@ -1529,8 +1527,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "enabled": "Включить зал в расписание? Ответьте <code>да</code> или <code>нет</code>. Отправьте <code>-</code>, чтобы использовать значение по умолчанию.",
         }
         return (
-            f"{prompts[field]}{default_text}{keep_text}\n\n"
-            "Отмена: <code>/cancel</code>"
+            f"{prompts[field]}{default_text}{keep_text}\n\nОтмена: <code>/cancel</code>"
         )
 
     async def _ask_hall_step(
@@ -1727,9 +1724,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         if current_state and current_state.startswith("HallWizard:"):
             await _cancel_hall_wizard(message, state)
 
-    async def _process_hall_wizard_value(
-        message: Message, state: FSMContext
-    ) -> None:
+    async def _process_hall_wizard_value(message: Message, state: FSMContext) -> None:
         """Обрабатывает один ответ мастера add/edit."""
         if message.text is None:
             return
@@ -1748,7 +1743,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         template = dict(data.get("template", {}))
         is_skip = raw_value in {"-", "skip", "пропустить", "оставить"}
 
-        def fail(text: str) -> None:
+        def fail(text: str) -> Never:
             raise ValueError(text)
 
         try:
@@ -1773,7 +1768,9 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 else:
                     parsed_day = _parse_hall_day(raw_value)
                     if parsed_day is None:
-                        fail("❌ День не распознан. Используйте Пн, Вт, Ср, Чт, Пт, Сб или Вс.")
+                        fail(
+                            "❌ День не распознан. Используйте Пн, Вт, Ср, Чт, Пт, Сб или Вс."
+                        )
                     template[field] = parsed_day
             elif field in {"game_time_msk", "open_time_msk"}:
                 if is_skip and mode == "add" and field == "open_time_msk":
@@ -1786,11 +1783,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             elif field in {"cost", "cost_per_game"}:
                 try:
                     amount = int(raw_value)
+                    if amount < 0:
+                        fail("❌ Сумма не может быть отрицательной.")
+                    template[field] = amount
                 except ValueError:
                     fail("❌ Сумма должна быть целым числом.")
-                if amount < 0:
-                    fail("❌ Сумма не может быть отрицательной.")
-                template[field] = amount
             elif field == "message":
                 if is_skip and mode == "add":
                     hall_name = str(template.get("name") or "зал")
@@ -1835,9 +1832,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
     @router.message(HallWizard.cost_per_game)
     @router.message(HallWizard.message)
     @router.message(HallWizard.enabled)
-    async def hall_wizard_value_handler(
-        message: Message, state: FSMContext
-    ) -> None:
+    async def hall_wizard_value_handler(message: Message, state: FSMContext) -> None:
         """Обрабатывает ответы мастера залов."""
         await _process_hall_wizard_value(message, state)
 
@@ -1888,7 +1883,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         mode = str(data.get("mode", "add"))
         template = dict(data.get("template", {}))
         save_template = _build_hall_template_for_save(template)
-        current_id = int(save_template["id"]) if "id" in save_template else None
+        current_id = to_int(save_template["id"]) if "id" in save_template else None
         if _hall_name_conflicts(str(save_template["name"]), current_id):
             await state.set_state(HallWizard.name)
             await state.update_data(step_index=0)
@@ -2233,10 +2228,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
         description = f"Оплата (admin: {admin_name})"
-        
-        if update_player_and_fund_balance_atomic(
-            target_user_id, amount, description
-        ):
+
+        if update_player_and_fund_balance_atomic(target_user_id, amount, description):
             new_balance_data = get_player_balance(target_user_id)
             new_balance = (
                 new_balance_data["balance"] if new_balance_data else "неизвестно"
@@ -2351,10 +2344,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         admin_name = f"@{user.username}" if user.username else f"ID:{user.id}"
         description = f"Восстановление (admin: {admin_name})"
-        
-        if update_player_and_transaction_atomic(
-            target_user_id, amount, description
-        ):
+
+        if update_player_and_transaction_atomic(target_user_id, amount, description):
             new_balance_data = get_player_balance(target_user_id)
             new_balance = (
                 new_balance_data["balance"] if new_balance_data else "неизвестно"
@@ -2759,8 +2750,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                     )
                     await safe_reply(
                         message,
-                        "❌ Найдено несколько игроков. Уточните запрос:\n"
-                        f"{matches}",
+                        f"❌ Найдено несколько игроков. Уточните запрос:\n{matches}",
                         parse_mode="HTML",
                         link_preview_options=LinkPreviewOptions(is_disabled=True),
                         action_name="reply to /ball_donate ambiguity",
@@ -2861,9 +2851,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             action_name="answer guest_set success",
         )
 
-    @router.callback_query(
-        lambda c: c.data and c.data.startswith("subs_add_select:")
-    )
+    @router.callback_query(lambda c: c.data and c.data.startswith("subs_add_select:"))
     async def process_subs_add_select(callback_query: CallbackQuery):
         """Обработка выбора игрока для /subs add."""
         user = callback_query.from_user
@@ -3325,9 +3313,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         voted_yes = 0 in selected  # Да
         name = (
-            f"@{user.username}"
-            if user.username
-            else (user.full_name or "Неизвестный")
+            f"@{user.username}" if user.username else (user.full_name or "Неизвестный")
         )
         voted_at = datetime.now(timezone.utc).isoformat()
         is_guest = await _is_guest_vote(data.chat_id, user.id)

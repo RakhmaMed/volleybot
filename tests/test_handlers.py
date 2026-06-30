@@ -433,6 +433,7 @@ class TestSubsCommand:
         await dp.feed_update(bot, Update(update_id=10, message=message))
 
         template = get_poll_templates()[0]
+        assert "subs" in template
         assert regular_user.id in template["subs"]
         mock_create_backup.assert_called_once_with("subs_command")
         method = bot.call_args.args[0]
@@ -476,6 +477,7 @@ class TestSubsCommand:
         await dp.feed_update(bot, Update(update_id=11, message=message))
 
         template = get_poll_templates()[0]
+        assert "subs" in template
         assert regular_user.id in template["subs"]
         mock_create_backup.assert_called_once_with("subs_command")
 
@@ -512,6 +514,7 @@ class TestSubsCommand:
         await dp.feed_update(bot, Update(update_id=12, message=message))
 
         template = get_poll_templates()[0]
+        assert "subs" in template
         assert 222 in template["subs"]
         mock_create_backup.assert_called_once_with("subs_command")
 
@@ -570,6 +573,7 @@ class TestSubsCommand:
         await dp.feed_update(bot, Update(update_id=14, callback_query=callback_query))
 
         template = get_poll_templates()[0]
+        assert "subs" in template
         assert 302 in template["subs"]
         assert 301 not in template["subs"]
         mock_create_backup.assert_called_once_with("subs_command")
@@ -613,6 +617,7 @@ class TestSubsCommand:
         await dp.feed_update(bot, Update(update_id=15, message=message))
 
         template = get_poll_templates()[0]
+        assert "subs" in template
         assert template["subs"].count(regular_user.id) == 1
         mock_create_backup.assert_not_called()
         method = bot.call_args.args[0]
@@ -697,6 +702,7 @@ class TestSubsCommand:
         await dp.feed_update(bot, Update(update_id=23, message=message))
 
         template = get_poll_templates()[0]
+        assert "subs" in template
         assert regular_user.id not in template["subs"]
         assert not bot.called
         mock_create_backup.assert_not_called()
@@ -1091,7 +1097,12 @@ class TestHallCommands:
         )
         register_handlers(dp, bot)
 
-        for update_id, text in [(120, "/hall add"), (121, "Friday"), (122, "Gym"), (123, "wrong-day")]:
+        for update_id, text in [
+            (120, "/hall add"),
+            (121, "Friday"),
+            (122, "Gym"),
+            (123, "wrong-day"),
+        ]:
             message = Message(
                 message_id=update_id,
                 date=MagicMock(),
@@ -1760,9 +1771,7 @@ class TestMonthlyAndStatsHandlers:
         await dp.feed_update(bot, Update(update_id=1, message=message))
         poll_service.close_poll.assert_called_once_with(bot, "monthly-1")
 
-    async def test_stats_summary_command(
-        self, admin_user, admin_service, temp_db
-    ):
+    async def test_stats_summary_command(self, admin_user, admin_service, temp_db):
         init_db()
         save_poll_template({"name": "Пятница", "message": "Игра"})
         template_id = 1
@@ -1777,7 +1786,9 @@ class TestMonthlyAndStatsHandlers:
             poll_message_id=1,
             opened_at="2026-03-01T10:00:00+00:00",
         )
-        close_game("regular-1", closed_at="2026-03-02T10:00:00+00:00", final_message_id=2)
+        close_game(
+            "regular-1", closed_at="2026-03-02T10:00:00+00:00", final_message_id=2
+        )
 
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()

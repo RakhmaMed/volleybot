@@ -206,7 +206,7 @@ def calculate_subscription(
         hall_games_count = (
             int(hall_stats.get("games_count", 0) or 0) if hall_stats else 0
         )
-        if hall_games_count >= HALL_SINGLE_GAME_STATS_MIN_GAMES:
+        if hall_stats and hall_games_count >= HALL_SINGLE_GAME_STATS_MIN_GAMES:
             avg_income_per_game = float(
                 hall_stats.get("avg_income_per_game", 0.0) or 0.0
             )
