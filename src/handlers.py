@@ -867,20 +867,24 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             else:
                 positive_players = [p for p in players if p.get("balance", 0) > 0]
                 debtor_players = [p for p in players if p.get("balance", 0) < 0]
+                positive_balance = 0
+                negative_balance = 0
 
                 if positive_players:
                     text += "🟢 <b>Положительный баланс:</b>\n\n"
                     for p in positive_players:
                         balance = p["balance"]
+                        positive_balance += balance
                         player_link = format_player_link(p)
                         text += f"🟢 {player_link}: <b>{balance} ₽</b>\n"
-                    text += "\n"
+                    text += f"\n<b>Итого: {positive_balance} ₽</b>\n\n"
 
                 if debtor_players:
                     text += "🔴 <b>Отрицательный баланс:</b>\n\n"
                     for p in debtor_players:
                         balance = p["balance"]
                         username = normalize_telegram_username(p.get("name"))
+                        negative_balance += balance
                         if username:
                             fullname = str(p.get("fullname") or "").strip()
                             username_mention = f"@{escape_html(username)}"
@@ -893,6 +897,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                         else:
                             debtor_ref = format_player_link(p)
                         text += f"🔴 {debtor_ref}: <b>{balance} ₽</b>\n"
+                    text += f"\n<b>Итого: {negative_balance} ₽</b>"
             text += transfer_details_note
         else:
             # Обычный пользователь видит только свой баланс

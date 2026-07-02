@@ -37,6 +37,8 @@ class TestBalanceCommand:
         mock_get_players.return_value = [
             {"id": 1, "name": "user1", "fullname": "User One", "balance": -500},
             {"id": 2, "name": "user2", "fullname": "User Two", "balance": 100},
+            {"id": 3, "name": "user3", "fullname": "User Three", "balance": 200},
+            {"id": 4, "name": "user4", "fullname": "User Four", "balance": -300},
         ]
 
         dp.workflow_data.update(
@@ -69,6 +71,8 @@ class TestBalanceCommand:
         assert '<a href="https://t.me/user2">User Two</a>: <b>100 ₽</b>' in method.text
         # Для отрицательного баланса отображаются и имя, и @username
         assert "User One (@user1): <b>-500 ₽</b>" in method.text
+        assert "Итого: 300 ₽" in method.text
+        assert "Итого: -800 ₽" in method.text
         assert "Реквизиты для перевода" in method.text
 
     @patch("src.handlers.get_player_balance")
@@ -963,9 +967,7 @@ class TestBallDonateCommand:
         assert "донат мяча выключен" in method.text.lower()
         assert "Донат: <b>нет</b>" in method.text
 
-    async def test_ball_donate_regular_user_ignored(
-        self, regular_user, admin_service
-    ):
+    async def test_ball_donate_regular_user_ignored(self, regular_user, admin_service):
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
 
