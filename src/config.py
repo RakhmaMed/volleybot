@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     payment_bank: str = Field(default="", validation_alias="PAYMENT_BANK")
     payment_phone: str = Field(default="", validation_alias="PAYMENT_PHONE")
 
+    # GEMINI Token
+    gemini_token: str = Field(default="", validation_alias="GEMINI_TOKEN")
+
     # Настройка Pydantic Settings
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
@@ -104,6 +107,7 @@ LOG_LEVEL: str = settings.log_level
 PAYMENT_NAME: str = settings.payment_name
 PAYMENT_BANK: str = settings.payment_bank
 PAYMENT_PHONE: str = settings.payment_phone
+GEMINI_TOKEN: str = settings.gemini_token
 
 # Webhook настройки
 WEBHOOK_HOST: str = settings.webhook_host

@@ -428,17 +428,11 @@ class PollService:
         dt_moscow = dt_utc.astimezone(moscow_tz)
         return f"{name} — {dt_moscow.strftime('%H:%M')} МСК"
 
-    def build_regular_poll_spec(
-        self, poll_template_id: int
-    ) -> PollCreationSpec | None:
+    def build_regular_poll_spec(self, poll_template_id: int) -> PollCreationSpec | None:
         """Собирает spec обычного опроса из актуальных данных БД."""
         poll_templates = get_poll_templates()
         template = next(
-            (
-                p
-                for p in poll_templates
-                if int(p.get("id", 0) or 0) == poll_template_id
-            ),
+            (p for p in poll_templates if int(p.get("id", 0) or 0) == poll_template_id),
             None,
         )
         if template is None:
@@ -486,9 +480,9 @@ class PollService:
             self._format_monthly_option(poll, utc_tz=utc_tz, moscow_tz=moscow_tz)
             for poll in paid_polls
         ) + ("Смотреть результат",)
-        option_poll_names = tuple(str(poll.get("name") or "") for poll in paid_polls) + (
-            None,
-        )
+        option_poll_names = tuple(
+            str(poll.get("name") or "") for poll in paid_polls
+        ) + (None,)
         target_month_snapshot = get_next_month_str(datetime.now(timezone.utc))
 
         return PollCreationSpec(
@@ -542,7 +536,9 @@ class PollService:
 
         spec = self.build_monthly_subscription_poll_spec()
         if spec is None:
-            logging.info("ℹ️ Платные опросы не найдены, открытие месячного опроса пропущено")
+            logging.info(
+                "ℹ️ Платные опросы не найдены, открытие месячного опроса пропущено"
+            )
             return chat_id
         return await self.send_poll_spec(bot, chat_id, spec, bot_enabled)
 
@@ -1130,7 +1126,7 @@ class PollService:
 
         opened_dt = datetime.now(timezone.utc)
         opened_at = opened_dt.isoformat()
-        
+
         if not create_game(
             poll_id=poll_message.poll.id,
             kind=spec.kind,
@@ -1165,7 +1161,7 @@ class PollService:
             )
             # Не создаём PollData, чтобы бот не управлял несохранённым опросом
             return chat_id
-        
+
         update_game_info_message(
             poll_message.poll.id,
             info_message_id=info_message.message_id if info_message else None,
@@ -1897,9 +1893,7 @@ class PollService:
         for entry in roster.entries:
             if entry.roster_bucket == "booked":
                 booked_count += 1
-                append_participant_finance_row(
-                    entry, is_subscriber=entry.is_subscriber
-                )
+                append_participant_finance_row(entry, is_subscriber=entry.is_subscriber)
                 logging.info(
                     "  ⏭️  Игрок %s (ID: %s) в листе ожидания, списание пропущено",
                     entry.rendered_name,

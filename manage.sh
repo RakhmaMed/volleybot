@@ -17,6 +17,9 @@ IMAGE_NAME="volleybot:latest"
 PORT="127.0.0.1:8443:8443"
 DEFAULT_REMOTE_DB_PATH="/app/data/volleybot.db"
 
+# Использовать современный сборщик Docker (BuildKit)
+export DOCKER_BUILDKIT=1
+
 # Определяем Fly app: приоритет у переменной окружения FLY_APP, затем fly.toml
 get_fly_app() {
     if [ -n "${FLY_APP:-}" ]; then
@@ -352,7 +355,7 @@ build_image() {
     # Сборка образа
     echo ""
     echo -e "${YELLOW}[3/3] Сборка образа...${NC}"
-    if docker build -t $IMAGE_NAME .; then
+    if docker build --network=host -t $IMAGE_NAME .; then
         echo ""
         echo -e "${CYAN}========================================${NC}"
         echo -e "${GREEN}✓ Образ успешно собран: $IMAGE_NAME${NC}"
@@ -402,7 +405,7 @@ deploy_container() {
     # Пересборка образа
     echo ""
     echo -e "${YELLOW}[4/6] Пересборка образа...${NC}"
-    if docker build -t $IMAGE_NAME .; then
+    if docker build --network=host -t $IMAGE_NAME .; then
         echo -e "${GREEN}✓ Образ успешно собран${NC}"
     else
         echo -e "${RED}✗ Ошибка при сборке образа${NC}"

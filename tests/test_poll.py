@@ -22,8 +22,8 @@ from src.db import (
     init_db,
     load_state,
     save_game_participants,
-    save_state,
     save_poll_template,
+    save_state,
     update_player_balance,
 )
 from src.poll import (
@@ -394,32 +394,37 @@ class TestPollService:
         """Spec месячного опроса должен включать только enabled платные залы."""
         service = PollService()
 
-        with patch(
-            "src.services.poll_service.get_poll_templates",
-            return_value=[
-                {
-                    "name": "Понедельник",
-                    "game_hour_utc": 15,
-                    "game_minute_utc": 30,
-                    "cost": 100,
-                    "enabled": 1,
-                },
-                {
-                    "name": "Выключенный",
-                    "game_hour_utc": 16,
-                    "game_minute_utc": 0,
-                    "cost": 100,
-                    "enabled": 0,
-                },
-                {
-                    "name": "Бесплатный",
-                    "game_hour_utc": 17,
-                    "game_minute_utc": 0,
-                    "cost": 0,
-                    "enabled": 1,
-                },
-            ],
-        ), patch("src.services.poll_service.get_next_month_str", return_value="2026-05"):
+        with (
+            patch(
+                "src.services.poll_service.get_poll_templates",
+                return_value=[
+                    {
+                        "name": "Понедельник",
+                        "game_hour_utc": 15,
+                        "game_minute_utc": 30,
+                        "cost": 100,
+                        "enabled": 1,
+                    },
+                    {
+                        "name": "Выключенный",
+                        "game_hour_utc": 16,
+                        "game_minute_utc": 0,
+                        "cost": 100,
+                        "enabled": 0,
+                    },
+                    {
+                        "name": "Бесплатный",
+                        "game_hour_utc": 17,
+                        "game_minute_utc": 0,
+                        "cost": 0,
+                        "enabled": 1,
+                    },
+                ],
+            ),
+            patch(
+                "src.services.poll_service.get_next_month_str", return_value="2026-05"
+            ),
+        ):
             spec = service.build_monthly_subscription_poll_spec()
 
         assert spec is not None
@@ -629,13 +634,12 @@ class TestSendPollSpec:
             mock_save.assert_called_once()
             mock_bot.send_message.assert_called_once()
             assert mock_bot.send_message.call_args.kwargs["chat_id"] == 777
-            assert "chat_id: <code>-1001234567890</code>" in (
-                mock_bot.send_message.call_args.kwargs["text"]
+            assert (
+                "chat_id: <code>-1001234567890</code>"
+                in (mock_bot.send_message.call_args.kwargs["text"])
             )
 
-    async def test_send_poll_spec_notifies_admin_when_db_save_fails(
-        self, mock_bot
-    ):
+    async def test_send_poll_spec_notifies_admin_when_db_save_fails(self, mock_bot):
         """При сбое create_game бот оставляет poll в чате и уведомляет админа."""
         service = PollService()
 
@@ -857,7 +861,9 @@ class TestUpdatePlayersList:
         """Тест пропуска обновления при неизменном тексте."""
         service = PollService()
         poll_id = "test_poll_id"
-        text = "⏳ Идёт сбор голосов...\n\n⭐️ — абонемент\n🏐 — донат на мяч\n🙋 — гость"
+        text = (
+            "⏳ Идёт сбор голосов...\n\n⭐️ — абонемент\n🏐 — донат на мяч\n🙋 — гость"
+        )
         service._poll_data[poll_id] = PollData(
             chat_id=-1001234567890,
             poll_msg_id=123,
@@ -994,7 +1000,10 @@ class TestClosePoll:
         call_args = mock_bot.send_message.call_args
         text = call_args.kwargs["text"]
         assert "Лист ожидания" in text
-        assert "Игроков в листе ожидания просим остаться дома и не нарушать правила." in text
+        assert (
+            "Игроков в листе ожидания просим остаться дома и не нарушать правила."
+            in text
+        )
         assert f"@user{reserve_id} (150₽)" in text
         assert f"@user{booked_id} (400₽)" in text
         assert "💰 <b>Стоимость разового посещения:</b> 100₽" in text
@@ -1015,7 +1024,9 @@ class TestProcessPaymentDeduction:
         with patch.object(
             service, "_send_admin_report", new_callable=AsyncMock
         ) as mock_report:
-            await service._process_payment_deduction(mock_bot, "Несуществующий опрос", roster)
+            await service._process_payment_deduction(
+                mock_bot, "Несуществующий опрос", roster
+            )
         mock_report.assert_not_called()
         # Баланс не должен меняться (игрок мог не быть в БД)
         data = get_player_balance(1)
@@ -1088,7 +1099,9 @@ class TestProcessPaymentDeduction:
         with patch.object(
             service, "_send_admin_report", new_callable=AsyncMock
         ) as mock_report:
-            await service._process_payment_deduction(mock_bot, "Зал с подпиской", roster)
+            await service._process_payment_deduction(
+                mock_bot, "Зал с подпиской", roster
+            )
         data = get_player_balance(10)
         assert data is not None
         assert data["balance"] == 200
@@ -1307,7 +1320,9 @@ class TestProcessPaymentDeduction:
             )
 
         service = PollService()
-        voters = [VoterInfo(id=i, name=f"@member{i}") for i in range(1, MIN_PLAYERS + 1)]
+        voters = [
+            VoterInfo(id=i, name=f"@member{i}") for i in range(1, MIN_PLAYERS + 1)
+        ]
         voters.append(VoterInfo(id=202, name="@guest202", is_guest=True))
         roster = _build_roster(
             voters,

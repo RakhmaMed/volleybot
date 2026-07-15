@@ -48,6 +48,7 @@ def _seed_test_data() -> None:
         (1001, "alice", "Алиса Тестова"),
         (1002, "bob", "Борис Тестов"),
         (1003, "carol", "Карина Тестова"),
+        (5013132836, "TwinkleDev55", "Рахма")
     ]
     for pid, name, fullname in test_players:
         ensure_player(user_id=pid, name=name, fullname=fullname)

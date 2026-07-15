@@ -297,6 +297,18 @@ def _create_current_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS messages (
+            message_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            date INTEGER NOT NULL DEFAULT (unixepoch()),
+            PRIMARY KEY (message_id, chat_id)
+        )
+        """
+    )
     _create_indexes(conn)
 
 
@@ -308,6 +320,7 @@ EXPECTED_BUSINESS_TABLES = {
     "games",
     "game_participants",
     "monthly_poll_votes",
+    "messages"
 }
 
 EXPECTED_TABLE_COLUMNS: dict[str, set[str]] = {
@@ -383,6 +396,13 @@ EXPECTED_TABLE_COLUMNS: dict[str, set[str]] = {
         "option_ids_json",
         "updated_at",
     },
+    "messages": {
+        "message_id",
+        "chat_id",
+        "user_id",
+        "text",
+        "date",
+    }
 }
 
 EXPECTED_PRIMARY_KEYS: dict[str, list[str]] = {
@@ -536,6 +556,12 @@ def _create_indexes(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_game_participants_game_bucket_sort
         ON game_participants(game_poll_id, roster_bucket, sort_order)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_messages_chat_created_at
+        ON messages(chat_id, date DESC)
         """
     )
 
@@ -2223,3 +2249,48 @@ def get_player_stats(player_id: int, month: str | None = None) -> dict[str, Any]
             "single_game_sum": 0,
             "balance": int(balance["balance"]) if balance else 0,
         }
+
+
+# --- Messages
+
+def get_messages(chat_id: int, limit: int = 100) -> list[dict[str, Any]]:
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT
+                    m.message_id,
+                    m.chat_id,
+                    m.user_id,
+                    m.text,
+                    m.date,
+                    COALESCE(p.name, 'unknown') AS username
+                FROM messages m
+                LEFT JOIN players p ON m.user_id = p.id
+                WHERE m.chat_id = ?
+                ORDER BY m.date DESC
+                LIMIT ?
+                """,
+                (chat_id, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при получении сообщений чата {chat_id}")
+        return []
+
+def insert_message(message_id: int, chat_id: int, user_id: int, text: str, date: int) -> None:
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO messages (message_id, chat_id, user_id, text, date)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (message_id, chat_id, user_id, text, date),
+            )
+            conn.commit()
+    except sqlite3.Error:
+        logging.exception(f"❌ Ошибка при вставке сообщения в чат {text[:50]}")

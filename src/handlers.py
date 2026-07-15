@@ -28,6 +28,7 @@ from aiogram.types import (
     Update,
     User,
 )
+from google import genai
 
 from .db import (
     add_poll_subscription,
@@ -55,6 +56,8 @@ from .db import (
     toggle_player_ball_donate,
     update_player_and_fund_balance_atomic,
     update_player_and_transaction_atomic,
+    insert_message,
+    get_messages
 )
 from .scheduler import refresh_scheduler
 from .services import AdminService, BotStateService, PollService
@@ -72,6 +75,26 @@ from .utils import (
     validate_hall_pay_callback_data,
     validate_player_select_callback_data,
 )
+from .config import GEMINI_TOKEN
+
+emoji_map = [
+    ("😨", "5235728802142759605"),
+    ("😫", "5458648733065420657"),
+    ("🏐", "5990152005392275807"),
+    ("💵", "5911450371825340502"),
+    ("🌟", "5208801655004350721"),
+    ("⭐️", "5463289097336405244"),
+    ("⭐", "5222039865197084254"),
+    ("⭐️", "5341734105451085914"),
+    ("🌟", "5395851457884866228"),
+    ("⭐️", "5897501460509234625"),
+    ("😎", "6084443648689179160"),
+    ("👑", "6215092654003195416"),
+    ("🆒", "5796417932024092645"),
+    ("⭐️", "5935933437759198435"),
+    ("⭐", "5942783678668085067"),
+    ("🌟", "5346066189854467929"),
+]
 
 # Логируем загрузку модуля для отладки
 logging.info("🔄 Загружен модуль handlers.py - VERSION 2026-01-29-v2")
@@ -97,6 +120,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="schedule", description="Показать расписание опросов"),
         BotCommand(command="balance", description="Показать мой баланс"),
         BotCommand(command="stats", description="Показать статистику"),
+        BotCommand(command="ask", description="Задать вопрос"),
     ]
 
     # Команды для администраторов (включая пользовательские)
@@ -576,6 +600,15 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         except Exception:
             logging.exception("❌ Ошибка при отправке видео losiento")
 
+    @router.message(Command("doyouwearwigs"))
+    async def do_you_wear_wigs_handler(message: Message) -> None:
+        try:
+            await message.answer(
+                "Ислам не реализовал эту суперкоманду. Приносим свои извинения 😔"
+            )
+        except Exception:
+            logging.exception("❌ Ошибка при отправке сообщения doyouwearwigs")
+
     @router.message(Command("gay"))
     async def gay_handler(message: Message) -> None:
         """Отправляет видео 'gay' по очереди из списка."""
@@ -765,6 +798,94 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             logging.warning(
                 f"⚠️ Сетевая ошибка при ответе на /help от @{user.username if user else 'unknown'}"
             )
+
+    @router.message(Command("emoji"))
+    async def send_custom_emoji(message: Message):
+        CUSTOM_EMOJI_ID = "5235728802142759605"
+        await message.answer(
+            f'<tg-emoji emoji-id="{CUSTOM_EMOJI_ID}">😨</tg-emoji>',
+            parse_mode="HTML",
+        )
+
+    @router.message(Command("ask"))
+    async def ask_handler(message: Message) -> None:
+        """Команда для ответов на вопросы с помощью ИИ"""
+        user = message.from_user
+        if user is None:
+            return
+
+        # Проверка rate limit
+        rate_limit_error = rate_limit_check(user, is_admin=False)
+        if rate_limit_error:
+            try:
+                await message.reply(rate_limit_error)
+            except TelegramNetworkError:
+                logging.warning("⚠️ Сетевая ошибка при отправке rate limit сообщения")
+            return
+
+        client = genai.Client(api_key=GEMINI_TOKEN)
+
+        interaction = client.interactions.create(
+            model="gemini-3.5-flash", input=message.text
+        )
+
+        try:
+            msg = interaction.output_text if interaction.output_text else ""  # type: ignore[union-attr]
+            await message.reply(msg)
+            if user:
+                logging.info(
+                    f"📖 Вопрос от пользователя @{user.username} (ID: {user.id})"
+                )
+        except TelegramNetworkError:
+            logging.warning(
+                f"⚠️ Сетевая ошибка при ответе на /help от @{user.username if user else 'unknown'}"
+            )
+
+    @router.message(Command("summary"))
+    async def summary_handler(message: Message) -> None:
+        """Команда для суммирования диалога"""
+        user = message.from_user
+        if not user:
+            return
+
+
+        # Проверка rate limit
+        rate_limit_error = rate_limit_check(user, is_admin=False)
+        if rate_limit_error:
+            try:
+                await message.reply(rate_limit_error)
+            except TelegramNetworkError:
+                logging.warning(
+                    f"⚠️ Сетевая ошибка при ответе на /summary от @{user.username if user else 'unknown'}"
+                )
+            return
+
+        limit = int(message.text.split(" ", 1)[1]) if message.text else 50
+        messages = get_messages(message.chat.id, limit=limit)
+        print("Messages: ")
+        print(messages)
+        text = "\n".join([f"{msg["username"]}: {msg["text"]}" for msg in messages])
+        print(text)
+
+        client = genai.Client(api_key=GEMINI_TOKEN)
+
+        prompt = "Суммируй весь диалог. Выдели только самое важное\r\n" + text
+        interaction = client.interactions.create(
+            model="gemini-3.5-flash", input=prompt
+        )
+
+        try:
+            msg = interaction.output_text if interaction.output_text else ""  # type: ignore[union-attr]
+            await message.reply(msg)
+            if user:
+                logging.info(
+                    f"📖 Вопрос от пользователя @{user.username} (ID: {user.id})"
+                )
+        except TelegramNetworkError:
+            logging.warning(
+                f"⚠️ Сетевая ошибка при ответе на /help от @{user.username if user else 'unknown'}"
+            )
+
 
     @router.message(Command("schedule"))
     async def schedule_handler(message: Message) -> None:
@@ -1826,6 +1947,15 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             await _show_hall_confirm(message, state)
             return
         await _ask_hall_step(message, state, next_step)
+
+    @router.message(Command("get_msg"))
+    async def get_message(message: Message) -> None:
+        messages = get_messages(message.chat.id)
+        print("Messages: ")
+        print(messages)
+        text = "\n".join([f"{msg["username"]}: {msg["text"]}" for msg in messages])
+        print(text)
+        await message.reply(text)
 
     @router.message(HallWizard.name)
     @router.message(HallWizard.place)
@@ -3349,18 +3479,35 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
     @router.message()
     async def log_any_message(message: Message) -> None:
         """Логирует все входящие сообщения и их message_id."""
-        user = message.from_user
+        if not message.from_user:
+            return
+        user: User = message.from_user
         username = f"@{user.username}" if user and user.username else "unknown"
-        user_id = user.id if user else "unknown"
+        user_id = user.id
+
+        custom_emoji_ids = [
+            e.custom_emoji_id
+            for e in (message.entities or [])
+            if e.type == "custom_emoji" and e.custom_emoji_id
+        ]
 
         logging.debug(
-            "📨 Сообщение: id=%s, chat_id=%s, от=%s (ID: %s), тип=%s, текст=%r",
+            "📨 Сообщение: id=%s, chat_id=%s, от=%s (ID: %s), тип=%s, текст=%r, custom_emoji_ids=%s",
             message.message_id,
             message.chat.id,
             username,
             user_id,
             message.content_type,
             message.text or "",
+            custom_emoji_ids or None,
+        )
+
+        insert_message(
+            message.message_id,
+            message.chat.id,
+            user_id,
+            message.text or "",
+            int(message.date.timestamp())
         )
 
     # Регистрируем роутер в диспетчере
