@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -36,7 +36,7 @@ class TestDatabaseBackups:
         fresh_backup = backup_dir / "fresh_backup.sqlite3"
         fresh_backup.write_text("fresh", encoding="utf-8")
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         old_time = now - timedelta(days=11)
         fresh_time = now - timedelta(days=5)
         os.utime(old_backup, (old_time.timestamp(), old_time.timestamp()))

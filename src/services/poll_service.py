@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from asyncio import Task
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -379,12 +379,7 @@ class PollService:
                 "✅ Уведомление об инциденте по опросу '%s' отправлено админу",
                 poll_name,
             )
-        except (
-            TelegramAPIError,
-            TelegramNetworkError,
-            asyncio.TimeoutError,
-            OSError,
-        ):
+        except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
             logging.exception(
                 "❌ Не удалось отправить админу уведомление о несохранённом опросе '%s'",
                 poll_name,
@@ -483,7 +478,7 @@ class PollService:
         option_poll_names = tuple(
             str(poll.get("name") or "") for poll in paid_polls
         ) + (None,)
-        target_month_snapshot = get_next_month_str(datetime.now(timezone.utc))
+        target_month_snapshot = get_next_month_str(datetime.now(UTC))
 
         return PollCreationSpec(
             kind="monthly_subscription",
@@ -1017,25 +1012,14 @@ class PollService:
                 logging.debug(
                     f"✅ Уведомление о миграции отправлено в новый чат {new_chat_id}"
                 )
-            except (
-                TelegramAPIError,
-                TelegramNetworkError,
-                asyncio.TimeoutError,
-                OSError,
-            ):
+            except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
                 logging.exception(
                     f"❌ Не удалось отправить уведомление о миграции в чат {new_chat_id}"
                 )
 
             return new_chat_id
 
-        except (
-            TelegramAPIError,
-            TelegramNetworkError,
-            asyncio.TimeoutError,
-            OSError,
-            ValueError,
-        ) as e:
+        except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError, ValueError) as e:
             logging.exception(
                 f"❌ Критическая ошибка при создании опроса '{poll_name}' в чате {chat_id}. "
                 f"Проверьте права бота и корректность chat_id."
@@ -1057,12 +1041,7 @@ class PollService:
                     action_name="notify admin about poll creation error",
                 )
                 logging.debug("✅ Уведомление об ошибке отправлено админу")
-            except (
-                TelegramAPIError,
-                TelegramNetworkError,
-                asyncio.TimeoutError,
-                OSError,
-            ):
+            except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
                 logging.exception(
                     "❌ Не удалось отправить админу уведомление об ошибке "
                     f"создания опроса в чат {chat_id}"
@@ -1084,7 +1063,7 @@ class PollService:
             logging.debug(
                 f"✅ Информационное сообщение отправлено, message_id={info_message.message_id if info_message else 'unknown'}"
             )
-        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
+        except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
             logging.exception(
                 f"❌ Не удалось отправить информационное сообщение для опроса '{poll_name}'"
             )
@@ -1105,12 +1084,7 @@ class PollService:
 
             await pin_with_retry()
             logging.debug("✅ Опрос успешно закреплен")
-        except (
-            TelegramAPIError,
-            TelegramNetworkError,
-            asyncio.TimeoutError,
-            OSError,
-        ) as e:
+        except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError) as e:
             logging.exception(
                 f"⚠️ Не удалось закрепить опрос '{poll_name}' (message_id={poll_message.message_id}): {e}. "
                 f"Возможно, у бота нет прав на закрепление сообщений."
@@ -1124,7 +1098,7 @@ class PollService:
             )
             return chat_id
 
-        opened_dt = datetime.now(timezone.utc)
+        opened_dt = datetime.now(UTC)
         opened_at = opened_dt.isoformat()
 
         if not create_game(
@@ -1257,12 +1231,7 @@ class PollService:
                     f"✅ Список игроков обновлен для опроса {poll_id}: {roster.total} человек "
                     f"(основных: {main_count}, запасных: {reserve_count}, в листе ожидания: {booked_count})"
                 )
-            except (
-                TelegramAPIError,
-                TelegramNetworkError,
-                asyncio.TimeoutError,
-                OSError,
-            ):
+            except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
                 logging.exception(
                     f"❌ Не удалось отредактировать информационное сообщение для опроса {poll_id} "
                     f"(chat_id={data.chat_id}, message_id={info_msg_id}). "
@@ -1324,7 +1293,7 @@ class PollService:
 
             await stop_poll_with_retry()
             logging.info(f"✅ Опрос '{poll_name}' (poll_id={poll_id}) остановлен")
-        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
+        except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
             logging.exception(
                 f"❌ Не удалось остановить опрос '{poll_name}' "
                 f"(chat_id={data.chat_id}, poll_msg_id={data.poll_msg_id}). "
@@ -1417,22 +1386,12 @@ class PollService:
 
                     await delete_old_with_retry()
                     logging.info("✅ Старое сообщение удалено")
-                except (
-                    TelegramAPIError,
-                    TelegramNetworkError,
-                    asyncio.TimeoutError,
-                    OSError,
-                ):
+                except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
                     logging.warning(
                         f"⚠️ Не удалось удалить старое сообщение (message_id={info_msg_id}). "
                         f"Возможно, оно уже удалено вручную."
                     )
-        except (
-            TelegramAPIError,
-            TelegramNetworkError,
-            asyncio.TimeoutError,
-            OSError,
-        ):
+        except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
             logging.exception(
                 f"❌ Не удалось отправить финальный список для '{poll_name}' "
                 f"(chat_id={data.chat_id}, reply_to={data.poll_msg_id})"
@@ -1469,7 +1428,7 @@ class PollService:
         close_game(
             poll_id,
             status="closed",
-            closed_at=datetime.now(timezone.utc).isoformat(),
+            closed_at=datetime.now(UTC).isoformat(),
             final_message_id=final_message_id,
         )
 
@@ -1578,12 +1537,7 @@ class PollService:
             logging.info(
                 f"✅ Итоги голосования за абонемент отправлены для '{poll_name}'"
             )
-        except (
-            TelegramAPIError,
-            TelegramNetworkError,
-            asyncio.TimeoutError,
-            OSError,
-        ):
+        except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
             logging.exception(
                 f"❌ Не удалось отправить итоги голосования для '{poll_name}'"
             )
@@ -1608,18 +1562,13 @@ class PollService:
                         action_name="send monthly admin report",
                     )
                 logging.info("✅ Отчёт по абонементам отправлен админу")
-            except (
-                TelegramAPIError,
-                TelegramNetworkError,
-                asyncio.TimeoutError,
-                OSError,
-            ):
+            except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
                 logging.exception("❌ Не удалось отправить отчёт по абонементам админу")
 
         close_game(
             poll_id,
             status="closed",
-            closed_at=datetime.now(timezone.utc).isoformat(),
+            closed_at=datetime.now(UTC).isoformat(),
             final_message_id=final_message_id,
         )
 
@@ -1634,7 +1583,7 @@ class PollService:
                 return get_next_month_str(opened_dt)
             except ValueError:
                 pass
-        return get_next_month_str(datetime.now(timezone.utc))
+        return get_next_month_str(datetime.now(UTC))
 
     # ── Вспомогательные методы для абонемента ────────────────────────────────
 
@@ -2058,7 +2007,7 @@ class PollService:
                     action_name="send charge report to admin",
                 )
             logging.info("✅ Сводка о списании отправлена админу")
-        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
+        except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
             logging.exception(
                 f"❌ Не удалось отправить сводку о списании админу (ID: {ADMIN_USER_ID})"
             )

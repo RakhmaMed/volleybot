@@ -69,7 +69,7 @@ async def _notify_admin(bot: Bot, text: str) -> None:
 
     try:
         await send_with_retry()
-    except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
+    except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
         logging.exception("Не удалось отправить служебное уведомление админу")
 
 
@@ -188,7 +188,7 @@ async def on_startup(
                 )
 
             await set_webhook_with_retry()
-        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
+        except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
             logging.exception("❌ Не удалось установить webhook")
     else:
         logging.info("Режим polling активен")
@@ -229,7 +229,7 @@ async def on_shutdown(
         try:
             await delete_webhook_with_retry()
             logging.info("✅ Webhook удален")
-        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
+        except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
             logging.warning("⚠️ Не удалось удалить webhook при выключении")
 
     logging.debug("Закрытие сессии бота...")

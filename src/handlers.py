@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Never
 
 from aiogram import Bot, Dispatcher, Router
@@ -30,6 +30,7 @@ from aiogram.types import (
 )
 from google import genai
 
+from .config import GEMINI_TOKEN
 from .db import (
     add_poll_subscription,
     create_backup,
@@ -38,6 +39,7 @@ from .db import (
     get_all_players,
     get_fund_balance,
     get_guest_players,
+    get_messages,
     get_open_monthly_game,
     get_player_balance,
     get_player_info,
@@ -47,6 +49,7 @@ from .db import (
     get_poll_templates,
     get_stats_summary,
     get_unpaid_halls,
+    insert_message,
     load_state,
     record_hall_payment_atomic,
     save_monthly_vote,
@@ -56,8 +59,6 @@ from .db import (
     toggle_player_ball_donate,
     update_player_and_fund_balance_atomic,
     update_player_and_transaction_atomic,
-    insert_message,
-    get_messages
 )
 from .scheduler import refresh_scheduler
 from .services import AdminService, BotStateService, PollService
@@ -75,7 +76,6 @@ from .utils import (
     validate_hall_pay_callback_data,
     validate_player_select_callback_data,
 )
-from .config import GEMINI_TOKEN
 
 emoji_map = [
     ("😨", "5235728802142759605"),
@@ -551,7 +551,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         """Возвращает True/False для членства в группе или None при неясном ответе."""
         try:
             member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-        except (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError):
+        except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
             logging.exception(
                 "⚠️ Не удалось проверить членство пользователя %s в чате %s",
                 user_id,
@@ -1310,7 +1310,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
         days_order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun", "*"]
         ordered_days = [d for d in days_order if d in day_to_polls]
-        ordered_days += sorted(d for d in day_to_polls.keys() if d not in days_order)
+        ordered_days += sorted(d for d in day_to_polls if d not in days_order)
 
         lines = ["📅 <b>Абонементы по дням</b>"]
 
@@ -2640,7 +2640,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             )
             return
 
-        lines = ["👥 <b>Игроки</b> ({}) — кратко:\n".format(len(all_players))]
+        lines = [f"👥 <b>Игроки</b> ({len(all_players)}) — кратко:\n"]
         poll_templates = get_poll_templates()
         for p in all_players:
             link = format_player_link(p)
@@ -3450,7 +3450,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         name = (
             f"@{user.username}" if user.username else (user.full_name or "Неизвестный")
         )
-        voted_at = datetime.now(timezone.utc).isoformat()
+        voted_at = datetime.now(UTC).isoformat()
         is_guest = await _is_guest_vote(data.chat_id, user.id)
 
         # Обновляем список голосующих

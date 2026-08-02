@@ -1,6 +1,6 @@
 """Тесты для модуля scheduler."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
@@ -18,7 +18,7 @@ from src.services import BotStateService, PollService
 
 
 class FixedDatetime(datetime):
-    fixed_now_utc = datetime(2026, 4, 28, 12, 0, tzinfo=timezone.utc)
+    fixed_now_utc = datetime(2026, 4, 28, 12, 0, tzinfo=UTC)
 
     @classmethod
     def now(cls, tz=None):
@@ -245,7 +245,7 @@ class TestSetupScheduler:
         init_db()
         _create_open_monthly_game()
         FixedDatetime.fixed_now_utc = datetime(
-            2026, 4, 28, 12, 0, tzinfo=timezone.utc
+            2026, 4, 28, 12, 0, tzinfo=UTC
         )
         monkeypatch.setattr("src.scheduler.datetime", FixedDatetime)
 
@@ -276,7 +276,7 @@ class TestSetupScheduler:
         init_db()
         _create_open_monthly_game()
         FixedDatetime.fixed_now_utc = datetime(
-            2026, 4, 28, 16, 0, tzinfo=timezone.utc
+            2026, 4, 28, 16, 0, tzinfo=UTC
         )
         monkeypatch.setattr("src.scheduler.datetime", FixedDatetime)
 
@@ -301,7 +301,7 @@ class TestSetupScheduler:
         init_db()
         _create_open_monthly_game()
         FixedDatetime.fixed_now_utc = datetime(
-            2026, 4, 28, 20, 0, tzinfo=timezone.utc
+            2026, 4, 28, 20, 0, tzinfo=UTC
         )
         monkeypatch.setattr("src.scheduler.datetime", FixedDatetime)
 

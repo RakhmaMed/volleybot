@@ -14,9 +14,10 @@ import re
 import time
 import traceback
 from collections import defaultdict
-from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from aiogram.types import User
 
@@ -218,7 +219,7 @@ def save_error_dump(
     logging.debug(f"Сохранение дампа ошибки для опроса '{poll_name}' в чате {chat_id}")
     try:
         error_data: dict[str, Any] = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "poll_name": poll_name,
             "question": question,
             "error_type": type(error).__name__,
@@ -232,7 +233,7 @@ def save_error_dump(
             try:
                 with open(error_file, "r", encoding="utf-8") as f:
                     existing_errors = json.load(f)
-            except (json.JSONDecodeError, IOError):
+            except (OSError, json.JSONDecodeError):
                 existing_errors = []
 
         existing_errors.append(error_data)

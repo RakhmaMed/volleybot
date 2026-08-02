@@ -60,7 +60,7 @@ class Settings(BaseSettings):
         return v_upper
 
     @model_validator(mode="after")
-    def validate_webhook_config(self) -> "Settings":
+    def validate_webhook_config(self) -> Settings:
         if self.webhook_host:
             if not self.webhook_host.startswith(("http://", "https://")):
                 raise ValueError(

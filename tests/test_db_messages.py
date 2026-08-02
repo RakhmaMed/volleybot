@@ -1,6 +1,5 @@
-import sqlite3
-import pytest
-from src.db import insert_message, get_messages, _connect
+from src.db import get_messages, insert_message
+
 
 def test_insert_and_get_messages():
     # Insert a message
@@ -36,7 +35,7 @@ def test_insert_duplicate_message_id_raises_or_logs():
     # Since insert_message catches sqlite3.Error, it shouldn't raise, but it won't insert either.
     insert_message(
         message_id=300,
-        chat_id=-1002,
+        chat_id=-1001,
         user_id=5013132836,
         text="Привет B",
         date=1719999999

@@ -9,7 +9,7 @@ import sqlite3
 import typing
 from collections import defaultdict
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -24,6 +24,8 @@ SCHEMA_VERSION = 9
 BACKUP_RETENTION_DAYS = 10
 
 
+# TODO: make via Result<T, E>
+# safe(OSError)
 def _get_db_path() -> str:
     """Возвращает путь к базе данных с учётом переменной окружения."""
     override: str | None = os.getenv("VOLLEYBOT_DB_PATH")
@@ -64,7 +66,7 @@ def create_backup(reason: str) -> Path | None:
         return None
 
     backup_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     backup_path = backup_dir / f"{timestamp}_{_sanitize_backup_reason(reason)}.sqlite3"
 
     try:
@@ -95,13 +97,13 @@ def cleanup_old_backups(
     if backup_dir is None or not backup_dir.exists():
         return 0
 
-    current_time = now or datetime.now(timezone.utc)
+    current_time = now or datetime.now(UTC)
     cutoff = current_time - timedelta(days=retention_days)
     deleted = 0
 
     for path in backup_dir.glob("*.sqlite3"):
         try:
-            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
             if mtime < cutoff:
                 path.unlink()
                 deleted += 1
@@ -1882,9 +1884,8 @@ def get_single_game_income_stats(
     аренды. Игроки из листа ожидания не учитываются в доходе с разовых.
     """
     try:
-        if months_back < 1:
-            months_back = 1
-        before = before_month or datetime.now(timezone.utc).strftime("%Y-%m")
+        months_back = max(months_back, 1)
+        before = before_month or datetime.now(UTC).strftime("%Y-%m")
         start_month = _shift_month(before, -months_back)
         start, _ = _month_bounds(start_month)
         end, _ = _month_bounds(before)

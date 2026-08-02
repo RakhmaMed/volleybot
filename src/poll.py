@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
@@ -128,8 +128,8 @@ def _parse_iso_datetime(value: str) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _strip_voter_status_prefix(name: str) -> str:
@@ -196,7 +196,7 @@ def _guest_release_deadline(opened_at: str) -> datetime | None:
         release_date,
         time(hour=GUEST_RELEASE_HOUR_MSK),
         tzinfo=MSK_TZ,
-    ).astimezone(timezone.utc)
+    ).astimezone(UTC)
 
 
 def build_regular_poll_roster(
@@ -210,10 +210,10 @@ def build_regular_poll_roster(
             hours=SUBSCRIPTION_PRIORITY_WINDOW_HOURS
         )
     guest_release_deadline = _guest_release_deadline(data.opened_at)
-    current_dt = now or datetime.now(timezone.utc)
+    current_dt = now or datetime.now(UTC)
     if current_dt.tzinfo is None:
-        current_dt = current_dt.replace(tzinfo=timezone.utc)
-    current_dt = current_dt.astimezone(timezone.utc)
+        current_dt = current_dt.replace(tzinfo=UTC)
+    current_dt = current_dt.astimezone(UTC)
     guests_released = (
         guest_release_deadline is None or current_dt >= guest_release_deadline
     )
@@ -253,7 +253,7 @@ def build_regular_poll_roster(
         return (
             not item[0].has_subscription_priority,
             item[0].update_id,
-            item[1] or datetime.min.replace(tzinfo=timezone.utc),
+            item[1] or datetime.min.replace(tzinfo=UTC),
             item[0].player_id,
         )
 
