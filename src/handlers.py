@@ -28,7 +28,6 @@ from aiogram.types import (
     Update,
     User,
 )
-from google import genai
 
 from .config import GEMINI_TOKEN
 from .db import (
@@ -98,6 +97,13 @@ emoji_map = [
 
 # Логируем загрузку модуля для отладки
 logging.info("🔄 Загружен модуль handlers.py - VERSION 2026-01-29-v2")
+
+
+def _create_genai_client():
+    # Keep the SDK lazy: importing it emits a deprecation warning on Python 3.14.
+    from google import genai
+
+    return genai.Client(api_key=GEMINI_TOKEN)
 
 
 @retry_async(
@@ -823,7 +829,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 logging.warning("⚠️ Сетевая ошибка при отправке rate limit сообщения")
             return
 
-        client = genai.Client(api_key=GEMINI_TOKEN)
+        client = _create_genai_client()
 
         interaction = client.interactions.create(
             model="gemini-3.5-flash", input=message.text
@@ -867,7 +873,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         text = "\n".join([f"{msg["username"]}: {msg["text"]}" for msg in messages])
         print(text)
 
-        client = genai.Client(api_key=GEMINI_TOKEN)
+        client = _create_genai_client()
 
         prompt = "Суммируй весь диалог. Выдели только самое важное\r\n" + text
         interaction = client.interactions.create(

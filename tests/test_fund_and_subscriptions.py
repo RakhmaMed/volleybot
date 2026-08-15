@@ -1,15 +1,9 @@
 """Тесты для кассы, оплаты залов, /restore и расчёта абонементов."""
 from __future__ import annotations
 
-from modulefinder import test
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from returns.iterables import Fold
-from returns.pipeline import flow
-from returns.pointfree import bind
-from returns.result import Failure, Result, Success
-
 from aiogram import Bot, Dispatcher
 from aiogram.types import (
     CallbackQuery,
@@ -18,6 +12,7 @@ from aiogram.types import (
     Message,
     Update,
 )
+from returns.result import Failure, Result, Success
 
 from src.db2 import (
     DB,
