@@ -21,3 +21,6 @@ dev = [
   "pytest-cov>=7.1.0",
   "ruff>=0.15.0",
 ]
+
+[tool.mypy]
+plugins = ["returns.contrib.mypy.returns_plugin"]

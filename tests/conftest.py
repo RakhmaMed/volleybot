@@ -6,6 +6,10 @@ from unittest.mock import MagicMock
 import pytest
 from aiogram import Bot
 from aiogram.types import User
+from src.db2 import DB
+
+import logging
+from collections.abc import Iterator
 
 from src.services import AdminService
 
@@ -15,6 +19,15 @@ def temp_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Изолирует SQLite базу для каждого теста."""
     db_path = tmp_path / "volleybot.db"
     monkeypatch.setenv("VOLLEYBOT_DB_PATH", str(db_path))
+
+
+@pytest.fixture
+def test_db(tmp_path) -> Iterator[DB]:
+    database = DB(str(tmp_path / "volleybot.db"), logging.getLogger(__name__))
+    try:
+        yield database
+    finally:
+        database.close()
 
 
 @pytest.fixture

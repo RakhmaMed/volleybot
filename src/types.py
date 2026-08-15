@@ -4,6 +4,73 @@ from dataclasses import dataclass, field
 from typing import TypedDict
 
 
+class Player(TypedDict):
+    id: int
+    name: str | None
+    fullname: str | None
+    ball_donate: bool
+    is_guest: bool
+    balance: int
+
+class PlayerStats(TypedDict):
+    games_total: int
+    main_count: int
+    reserve_count: int
+    booked_count: int
+    subscription_games: int
+    single_game_count: int
+    single_game_sum: int
+    balance: int
+
+class GamePollStats(TypedDict):
+    games_count: int
+    unique_players: int
+    avg_main: float
+    avg_interest: float
+    subscription_uses: int
+    single_game_sum: int
+    last_game: str | None
+    poll_name_snapshot: str
+
+class GamePollStatsSummary(TypedDict):
+    games_count: int
+    unique_players: int
+    avg_main: float
+    avg_interest: float
+    subscription_uses: int
+    single_game_charges: int
+    single_game_sum: int
+    topups_sum: int
+    hall_payments_sum: int
+    fund_balance: int
+    monthly_polls: int
+
+
+class GameInfo(TypedDict):
+    poll_id: int
+    kind: str
+    status: str
+    poll_template_id: int
+    poll_name_snapshot: str
+    question_snapshot: str
+    chat_id: int
+    poll_message_id: int
+    info_message_id: int
+    final_message_id: int
+    opened_at: str
+    closed_at: str
+    game_date: str # Always empty
+    place_snapshot: str
+    cost_snapshot: int
+    cost_per_game_snapshot: int
+    options_json: dict
+    option_poll_names_json: dict
+    last_info_text: str
+    created_at: str
+    updated_at: str
+    target_month_snapshot: str
+
+
 class PollTemplateRequired(TypedDict):
     """Обязательные поля шаблона опроса."""
 

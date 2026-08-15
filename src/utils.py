@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from returns.result import Success, Failure
 
 from aiogram.types import User
 
@@ -42,17 +43,21 @@ WEEKDAY_TO_INDEX: dict[str, int] = {
 
 
 def to_int(value: object, default: int = 0) -> int:
-    if value is None or value == "":
-        return default
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        return int(value)
-    return default
+    match value:
+        case None | "" | Failure(_):
+            return default
+        case bool():
+            return int(value)
+        case int():
+            return value
+        case str():
+            return int(value)
+        case Success(int() as inner_value):
+            return inner_value
+        case _:
+            return default
 
-
+# TODO: make via Result<T, E>
 def normalize_telegram_username(username: Any) -> str | None:
     """Возвращает валидный Telegram username без @ или None."""
     if username is None:

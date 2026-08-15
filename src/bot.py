@@ -44,6 +44,8 @@ from .utils import (
     retry_async,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format=LOG_FORMAT,
@@ -54,7 +56,7 @@ async def _notify_admin(bot: Bot, text: str) -> None:
     """Отправляет служебное уведомление админу, если он настроен."""
     admin_user_id = ADMIN_USER_ID
     if admin_user_id is None:
-        logging.debug("ADMIN_USER_ID не задан, служебное уведомление пропущено")
+        LOGGER.debug("ADMIN_USER_ID не задан, служебное уведомление пропущено")
         return
 
     @retry_async(
@@ -70,7 +72,7 @@ async def _notify_admin(bot: Bot, text: str) -> None:
     try:
         await send_with_retry()
     except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
-        logging.exception("Не удалось отправить служебное уведомление админу")
+        LOGGER.exception("Не удалось отправить служебное уведомление админу")
 
 
 def _find_inconsistent_poll_templates() -> list[str]:
@@ -93,14 +95,14 @@ async def on_startup(
     effective_webhook_path: str | None = None,
 ) -> None:
     """Выполняется при запуске бота."""
-    logging.info("Инициализация бота...")
+    LOGGER.info("Инициализация бота...")
     cleanup_old_backups()
     create_backup("startup")
 
     # Загружаем список игроков один раз при старте
     poll_service.load_persisted_state()
     poll_service.refresh_restored_regular_polls(bot)
-    logging.debug(
+    LOGGER.debug(
         f"Активных опросов после восстановления: {len(poll_service.get_all_polls())}"
     )
 
@@ -109,7 +111,7 @@ async def on_startup(
 
     inconsistent_polls = _find_inconsistent_poll_templates()
     if inconsistent_polls:
-        logging.warning(
+        LOGGER.warning(
             "Найдены шаблоны с cost > 0 и cost_per_game == 0: %s",
             inconsistent_polls,
         )
@@ -122,7 +124,7 @@ async def on_startup(
 
     setup_scheduler(scheduler, bot, bot_state_service, poll_service)
     scheduler.start()
-    logging.info("Планировщик запущен")
+    LOGGER.info("Планировщик запущен")
 
     if effective_webhook_path:
         try:
@@ -137,7 +139,7 @@ async def on_startup(
             else:
                 effective_url = f"{WEBHOOK_HOST}{webhook_path}"
 
-            logging.debug(f"Попытка установки webhook на URL: {effective_url}")
+            LOGGER.debug(f"Попытка установки webhook на URL: {effective_url}")
 
             # Устанавливаем webhook с секретным токеном если настроен
             @retry_async(
@@ -174,24 +176,24 @@ async def on_startup(
                         secret_token=WEBHOOK_SECRET,
                         allowed_updates=allowed_updates,
                     )
-                    logging.info(
+                    LOGGER.info(
                         f"✅ Webhook успешно установлен: {effective_url} (с секретным токеном)"
                     )
                 else:
                     await bot.set_webhook(
                         effective_url, allowed_updates=allowed_updates
                     )
-                    logging.info(f"✅ Webhook успешно установлен: {effective_url}")
+                    LOGGER.info(f"✅ Webhook успешно установлен: {effective_url}")
 
-                logging.info(
+                LOGGER.info(
                     f"📋 Разрешенные типы updates: {', '.join(allowed_updates)}"
                 )
 
             await set_webhook_with_retry()
         except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
-            logging.exception("❌ Не удалось установить webhook")
+            LOGGER.exception("❌ Не удалось установить webhook")
     else:
-        logging.info("Режим polling активен")
+        LOGGER.info("Режим polling активен")
 
     mode = "webhook" if effective_webhook_path else "polling"
     await _notify_admin(bot, f"🟢 Бот запущен ({mode}).")
@@ -205,18 +207,18 @@ async def on_shutdown(
     is_webhook: bool = False,
 ) -> None:
     """Выполняется при остановке бота."""
-    logging.info("🛑 Начало процедуры остановки бота...")
+    LOGGER.info("🛑 Начало процедуры остановки бота...")
     create_backup("shutdown")
 
     await _notify_admin(bot, "🔴 Бот остановлен.")
 
     if scheduler.running:
-        logging.debug("Остановка планировщика...")
+        LOGGER.debug("Остановка планировщика...")
         scheduler.shutdown()
-        logging.info("✅ Планировщик остановлен")
+        LOGGER.info("✅ Планировщик остановлен")
 
     if is_webhook:
-        logging.debug("Удаление webhook...")
+        LOGGER.debug("Удаление webhook...")
 
         @retry_async(
             (TelegramAPIError, TelegramNetworkError, asyncio.TimeoutError, OSError),
@@ -228,17 +230,17 @@ async def on_shutdown(
 
         try:
             await delete_webhook_with_retry()
-            logging.info("✅ Webhook удален")
+            LOGGER.info("✅ Webhook удален")
         except (TimeoutError, TelegramAPIError, TelegramNetworkError, OSError):
-            logging.warning("⚠️ Не удалось удалить webhook при выключении")
+            LOGGER.warning("⚠️ Не удалось удалить webhook при выключении")
 
-    logging.debug("Закрытие сессии бота...")
+    LOGGER.debug("Закрытие сессии бота...")
     await bot.session.close()
 
-    logging.debug("Сохранение состояния сервисов...")
+    LOGGER.debug("Сохранение состояния сервисов...")
     poll_service.persist_state()
     bot_state_service.persist_state()
-    logging.info("✅ Бот успешно остановлен")
+    LOGGER.info("✅ Бот успешно остановлен")
 
 
 async def run_polling() -> None:
@@ -283,14 +285,14 @@ async def run_polling() -> None:
     dp.startup.register(startup_handler)
     dp.shutdown.register(shutdown_handler)
 
-    logging.info("🚀 Запуск бота в режиме polling...")
+    LOGGER.info("🚀 Запуск бота в режиме polling...")
     await dp.start_polling(bot)
 
 
 def run_webhook() -> None:
     """Запуск в режиме webhook."""
-    logging.info("🚀 Запуск бота в режиме webhook")
-    logging.debug(
+    LOGGER.info("🚀 Запуск бота в режиме webhook")
+    LOGGER.debug(
         f"Webhook настройки: Host={WEBHOOK_HOST}, Port={WEBHOOK_PORT}, Path={WEBHOOK_PATH}"
     )
 
@@ -364,7 +366,7 @@ def run_webhook() -> None:
         if request.path == effective_webhook_path:
             # Проверяем что запрос от Telegram
             if client_ip != "unknown" and not is_telegram_ip(client_ip):
-                logging.warning(
+                LOGGER.warning(
                     f"🚫 Отклонен webhook запрос от не-Telegram IP: {client_ip}"
                 )
                 return web.Response(status=403, text="Forbidden")
@@ -373,7 +375,7 @@ def run_webhook() -> None:
             if WEBHOOK_SECRET:
                 request_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
                 if request_secret != WEBHOOK_SECRET:
-                    logging.warning(
+                    LOGGER.warning(
                         f"🚫 Отклонен webhook запрос с неверным секретным токеном от {client_ip}"
                     )
                     return web.Response(status=403, text="Forbidden")
@@ -391,12 +393,12 @@ def run_webhook() -> None:
     )
     webhook_handler.register(app, path=effective_webhook_path)
 
-    logging.info(f"🔐 Webhook path: {effective_webhook_path}")
-    logging.info(f"🛡️ Trust Proxy: {'ENABLED' if TRUST_PROXY else 'DISABLED'}")
+    LOGGER.info(f"🔐 Webhook path: {effective_webhook_path}")
+    LOGGER.info(f"🛡️ Trust Proxy: {'ENABLED' if TRUST_PROXY else 'DISABLED'}")
     if WEBHOOK_SECRET:
-        logging.info("🔐 Webhook secret token verification: ENABLED")
+        LOGGER.info("🔐 Webhook secret token verification: ENABLED")
     else:
-        logging.warning(
+        LOGGER.warning(
             "⚠️ БЕЗОПАСНОСТЬ: WEBHOOK_SECRET не настроен. "
             "Рекомендуется добавить WEBHOOK_SECRET в .env"
         )
@@ -405,7 +407,7 @@ def run_webhook() -> None:
     setup_application(app, dp, bot=bot)
 
     # Запускаем сервер
-    logging.info(f"🌐 Запуск веб-сервера на порту {WEBHOOK_PORT}...")
+    LOGGER.info(f"🌐 Запуск веб-сервера на порту {WEBHOOK_PORT}...")
     web.run_app(app, host="0.0.0.0", port=WEBHOOK_PORT)
 
 

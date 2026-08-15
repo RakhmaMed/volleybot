@@ -7,6 +7,7 @@ import logging
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+LOGGER = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
     """Настройки приложения, загружаемые из .env или переменных окружения."""
@@ -61,11 +62,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_webhook_config(self) -> Settings:
-        if self.webhook_host:
-            if not self.webhook_host.startswith(("http://", "https://")):
-                raise ValueError(
-                    "webhook_host должен начинаться с http:// или https://"
-                )
+        if self.webhook_host and not self.webhook_host.startswith(("http://", "https://")):
+            raise ValueError("webhook_host должен начинаться с http:// или https://")
         return self
 
     @property
@@ -78,7 +76,7 @@ class Settings(BaseSettings):
 try:
     settings = Settings()  # type: ignore[call-arg]
 except Exception as e:
-    logging.error(f"❌ Ошибка загрузки конфигурации из .env: {e}")
+    LOGGER.error(f"❌ Ошибка загрузки конфигурации из .env: {e}")
     # В случае ошибки в тестах или при отсутствии .env,
     # если не установлены обязательные переменные, бросаем исключение
     raise
@@ -124,4 +122,4 @@ if WEBHOOK_HOST:
     # Это позволяет избежать проблем при работе за прокси.
     WEBHOOK_URL = f"{WEBHOOK_HOST.rstrip('/')}{WEBHOOK_PATH}"
 
-logging.info("✅ Конфигурация успешно загружена из .env")
+LOGGER.info("✅ Конфигурация успешно загружена из .env")
