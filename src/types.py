@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TypedDict
+from typing import Literal, NotRequired, TypedDict
+
+type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
 
 
 class Player(TypedDict):
@@ -47,28 +49,28 @@ class GamePollStatsSummary(TypedDict):
 
 
 class GameInfo(TypedDict):
-    poll_id: int
+    poll_id: str
     kind: str
     status: str
-    poll_template_id: int
+    poll_template_id: int | None
     poll_name_snapshot: str
     question_snapshot: str
     chat_id: int
     poll_message_id: int
-    info_message_id: int
-    final_message_id: int
+    info_message_id: int | None
+    final_message_id: int | None
     opened_at: str
-    closed_at: str
-    game_date: str # Always empty
-    place_snapshot: str
+    closed_at: str | None
+    game_date: str | None
+    place_snapshot: str | None
     cost_snapshot: int
     cost_per_game_snapshot: int
-    options_json: dict
-    option_poll_names_json: dict
+    options_json: str
+    option_poll_names_json: str
     last_info_text: str
     created_at: str
     updated_at: str
-    target_month_snapshot: str
+    target_month_snapshot: str | None
 
 
 class PollTemplateRequired(TypedDict):
@@ -88,14 +90,72 @@ class PollTemplateRequired(TypedDict):
 class PollTemplate(PollTemplateRequired, total=False):
     """Полная структура шаблона опроса из БД."""
 
-    # Опциональные поля
-    place: str  # Место проведения
-    cost: int  # Стоимость одной игры
-    cost_per_game: int  # Стоимость аренды зала за игру
-    enabled: int  # 1 = шаблон включён, 0 = выключен
-    created_at: str  # Время создания
-    updated_at: str  # Время последнего обновления
-    subs: list[int]  # Список user_id подписчиков (добавляется в get_poll_templates)
+    place: str
+    cost: int
+    cost_per_game: int
+    enabled: int
+    created_at: str
+    updated_at: str
+    subs: list[int]
+
+
+class PollTemplateInput(TypedDict):
+    """Данные для создания или изменения шаблона опроса."""
+
+    name: str
+    message: str
+    id: NotRequired[int]
+    place: NotRequired[str]
+    open_day: NotRequired[str]
+    open_hour_utc: NotRequired[int]
+    open_minute_utc: NotRequired[int]
+    game_day: NotRequired[str]
+    game_hour_utc: NotRequired[int]
+    game_minute_utc: NotRequired[int]
+    cost: NotRequired[int]
+    cost_per_game: NotRequired[int]
+    enabled: NotRequired[int]
+    subs: NotRequired[list[int]]
+
+
+class GameParticipant(TypedDict):
+    """Финансовый итог участия игрока в закрытой игре."""
+
+    player_id: int
+    roster_bucket: Literal["main", "reserve", "booked"]
+    sort_order: int
+    is_subscriber: NotRequired[bool]
+    is_guest: NotRequired[bool]
+    guest_free_reason: NotRequired[Literal["first_games", "fill_min_players", "none"]]
+    charged_amount: NotRequired[int]
+    charge_source: NotRequired[Literal["single_game", "subscription", "none"]]
+    balance_before: NotRequired[int | None]
+    balance_after: NotRequired[int | None]
+
+
+class SingleGameIncomeRow(TypedDict):
+    games_count: int
+    single_game_charges: int
+    single_game_sum: int
+    avg_income_per_game: float
+
+
+SingleGameIncomeStats = TypedDict(
+    "SingleGameIncomeStats",
+    {
+        "global": SingleGameIncomeRow,
+        "by_poll_template_id": dict[int, SingleGameIncomeRow],
+    },
+)
+
+
+class MessageRecord(TypedDict):
+    message_id: int
+    chat_id: int
+    user_id: int
+    text: str
+    date: int
+    username: str
 
 
 @dataclass(frozen=True)

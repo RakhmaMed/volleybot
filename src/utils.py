@@ -18,9 +18,9 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from returns.result import Success, Failure
 
 from aiogram.types import User
+from returns.result import Failure, Success
 
 # Rate limiting: хранение времени последних запросов
 # Структура: {user_id: [timestamp1, timestamp2, ...]}

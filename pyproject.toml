@@ -24,3 +24,17 @@ dev = [
 
 [tool.mypy]
 plugins = ["returns.contrib.mypy.returns_plugin"]
+
+[tool.basedpyright]
+typeCheckingMode = "recommended"
+# SQLite and JSON are intentionally dynamic boundaries. Their values are
+# converted to application types in dedicated adapter functions.
+reportAny = false
+reportExplicitAny = false
+# sqlite3.execute reports failures through exceptions; an unused Cursor is not
+# itself an error. UPDATE/DELETE operations inspect rowcount where it matters.
+reportUnusedCallResult = false
+reportImplicitStringConcatenation = false
+reportUnannotatedClassAttribute = false
+reportUnusedParameter = false
+reportUnusedFunction = false

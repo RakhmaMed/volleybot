@@ -1,12 +1,13 @@
-from modulefinder import test
 import sqlite3
 
 import pytest
-from returns.result import Success
+from returns.iterables import Fold
+from returns.pipeline import flow
+from returns.pointfree import bind
+from returns.result import Failure, Result, Success
 
 from src.db2 import (
     DB,
-    _create_current_schema,
     add_poll_subscription,
     close_game,
     create_game,
@@ -17,22 +18,14 @@ from src.db2 import (
     get_poll_templates,
     get_single_game_income_stats,
     get_stats_summary,
+    insert_player,
     save_game_participants,
     save_monthly_vote,
     save_poll_template,
-    insert_player
 )
-
-from src.types import GameInfo
-
+from src.types import GameParticipant, PollTemplateInput
 from src.utils import to_int
-import logging
-from collections.abc import Iterator
 
-from returns.iterables import Fold
-from returns.result import Result, Success, Failure
-from returns.pointfree import bind
-from returns.pipeline import flow
 
 def _create_closed_game_with_participants(
     test_db: DB,
@@ -41,12 +34,12 @@ def _create_closed_game_with_participants(
     template_id: int,
     closed_at: str,
     cost_per_game_snapshot: int,
-    participants: list[dict],
+    participants: list[GameParticipant],
 ) -> Result[None, str]:
     return flow(
         Fold.collect(
             (
-                insert_player(test_db, int(participant["player_id"]))
+                insert_player(test_db, participant["player_id"])
                 for participant in participants
             ),
             Success(()),
@@ -66,7 +59,14 @@ def _create_closed_game_with_participants(
                 cost_per_game_snapshot=cost_per_game_snapshot,
             )
         ),
-        bind(lambda _: close_game(test_db, poll_id, closed_at=closed_at, final_message_id=101)),
+        bind(
+            lambda _: close_game(
+                test_db,
+                poll_id,
+                closed_at=closed_at,
+                final_message_id=101,
+            )
+        ),
         bind(lambda _: save_game_participants(test_db, poll_id, participants)),
     )
 
@@ -74,7 +74,7 @@ def _create_closed_game_with_participants(
 class TestDBPolls:
     """Тесты для функций БД, связанных с шаблонами опросов."""
 
-    def test_init_db_creates_poll_tables(self, test_db):
+    def test_init_db_creates_poll_tables(self, test_db: DB) -> None:
         """Проверка инициализации таблиц для шаблонов опросов и подписок."""
         cursor = test_db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('poll_templates', 'poll_subscriptions', 'games', 'game_participants', 'monthly_poll_votes')"
@@ -106,8 +106,8 @@ class TestDBPolls:
         assert "is_guest" in participant_columns
         assert "guest_free_reason" in participant_columns
 
-    def test_create_and_close_game(self, test_db):
-        save_poll_template(test_db, {"name": "Пятница", "message": "Игра"})
+    def test_create_and_close_game(self, test_db: DB) -> None:
+        save_poll_template(test_db, {"name": "Пятница", "message": "Игра"}).unwrap()
         template = get_poll_templates(test_db).unwrap()[0]
 
         create_game(
@@ -122,7 +122,7 @@ class TestDBPolls:
             poll_message_id=10,
             info_message_id=11,
             opened_at="2026-03-01T10:00:00+00:00",
-        )
+        ).unwrap()
         game = get_open_game_by_template_id(test_db, int(template["id"])).unwrap()
         assert game["poll_id"] == "poll-1"
         assert game["info_message_id"] == 11
@@ -132,7 +132,7 @@ class TestDBPolls:
             "poll-1",
             closed_at="2026-03-01T12:00:00+00:00",
             final_message_id=12,
-        )
+        ).unwrap()
         row = test_db.conn.execute(
             "SELECT status, final_message_id FROM games WHERE poll_id = 'poll-1'"
         ).fetchone()
@@ -158,7 +158,7 @@ class TestDBPolls:
     #     assert "guest_free_reason" in participant_columns
     #     assert user_version == 9
 
-    def test_save_game_participants_persists_guest_fields(self, test_db):
+    def test_save_game_participants_persists_guest_fields(self, test_db: DB) -> None:
         save_poll_template(test_db, {"name": "Пятница", "message": "Игра"}).unwrap()
         insert_player(test_db, 123).unwrap()
         create_game(
@@ -199,8 +199,8 @@ class TestDBPolls:
         ).fetchone()
         assert tuple(row) == (1, "first_games")
 
-    def test_monthly_votes_and_stats(self, test_db):
-        save_poll_template(test_db, {"name": "Пятница", "message": "Игра"})
+    def test_monthly_votes_and_stats(self, test_db: DB) -> None:
+        save_poll_template(test_db, {"name": "Пятница", "message": "Игра"}).unwrap()
         template = get_poll_templates(test_db).unwrap()[0]
         test_db.conn.execute(
             "INSERT INTO players (id, name, fullname, balance) VALUES (1, 'u1', 'User 1', -150)"
@@ -218,11 +218,9 @@ class TestDBPolls:
             chat_id=1,
             poll_message_id=20,
             opened_at="2026-03-01T10:00:00+00:00",
-        )
-        save_monthly_vote(test_db, "monthly-1", 1, [0, 1])
-        result = get_open_monthly_game(test_db)
-        assert isinstance(result, Success)
-        game = result.unwrap()
+        ).unwrap()
+        save_monthly_vote(test_db, "monthly-1", 1, [0, 1]).unwrap()
+        game = get_open_monthly_game(test_db).unwrap()
         assert game["poll_id"] == "monthly-1"
         assert game["kind"] == "monthly_subscription"
         assert game["status"] == "open"
@@ -240,13 +238,13 @@ class TestDBPolls:
             chat_id=1,
             poll_message_id=30,
             opened_at="2026-03-01T10:00:00+00:00",
-        )
+        ).unwrap()
         close_game(
             test_db,
             "regular-1",
             closed_at="2026-03-02T10:00:00+00:00",
             final_message_id=31,
-        )
+        ).unwrap()
         save_game_participants(
             test_db,
             "regular-1",
@@ -262,7 +260,7 @@ class TestDBPolls:
                     "balance_after": -150,
                 }
             ],
-        )
+        ).unwrap()
 
         summary = get_stats_summary(test_db, "2026-03").unwrap()
         poll_stats = get_poll_stats(test_db, int(template["id"]), "2026-03").unwrap()
@@ -271,7 +269,7 @@ class TestDBPolls:
         assert poll_stats["games_count"] == 1
         assert player_stats["games_total"] == 1
 
-    def test_single_game_income_stats_aggregates_paid_games(self, test_db):
+    def test_single_game_income_stats_aggregates_paid_games(self, test_db: DB) -> None:
         save_poll_template(
             test_db,
             {
@@ -280,7 +278,7 @@ class TestDBPolls:
                 "cost": 150,
                 "cost_per_game": 1500,
             }
-        )
+        ).unwrap()
         save_poll_template(
             test_db,
             {
@@ -289,7 +287,7 @@ class TestDBPolls:
                 "cost": 150,
                 "cost_per_game": 1500,
             }
-        )
+        ).unwrap()
         monday, friday = get_poll_templates(test_db).unwrap()
 
         _create_closed_game_with_participants(
@@ -322,7 +320,7 @@ class TestDBPolls:
                     "charge_source": "subscription",
                 },
             ],
-        )
+        ).unwrap()
         _create_closed_game_with_participants(
             test_db,
             poll_id="mon-2",
@@ -345,7 +343,7 @@ class TestDBPolls:
                     "charge_source": "single_game",
                 },
             ],
-        )
+        ).unwrap()
         _create_closed_game_with_participants(
             test_db,
             poll_id="fri-1",
@@ -361,7 +359,7 @@ class TestDBPolls:
                     "charge_source": "single_game",
                 }
             ],
-        )
+        ).unwrap()
         _create_closed_game_with_participants(
             test_db,
             poll_id="free-1",
@@ -377,7 +375,7 @@ class TestDBPolls:
                     "charge_source": "single_game",
                 }
             ],
-        )
+        ).unwrap()
 
         stats = get_single_game_income_stats(test_db, months_back=3, before_month="2026-04").unwrap()
 
@@ -391,7 +389,7 @@ class TestDBPolls:
         assert monday_stats["single_game_sum"] == 450
         assert monday_stats["avg_income_per_game"] == 225
 
-    def test_single_game_income_stats_respects_before_month(self, test_db):
+    def test_single_game_income_stats_respects_before_month(self, test_db: DB) -> None:
         save_poll_template(
             test_db,
             {
@@ -441,7 +439,7 @@ class TestDBPolls:
         assert stats["global"]["games_count"] == 1
         assert stats["global"]["single_game_sum"] == 150
 
-    def test_save_and_get_poll_templates(self, test_db):
+    def test_save_and_get_poll_templates(self, test_db: DB) -> None:
         """Проверка сохранения и получения шаблона опроса с подписчиками."""
         test_db.conn.execute(
             "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
@@ -452,7 +450,7 @@ class TestDBPolls:
             (456, "user456", "User 456"),
         )
         test_db.conn.commit()
-        template = {
+        template: PollTemplateInput = {
             "name": "Test Poll",
             "message": "Test Message",
             "open_day": "mon",
@@ -463,7 +461,7 @@ class TestDBPolls:
             "game_minute_utc": 30,
             "subs": [123, 456],
         }
-        save_poll_template(test_db, template)
+        save_poll_template(test_db, template).unwrap()
 
         templates = get_poll_templates(test_db).unwrap()
         assert len(templates) == 1
@@ -475,21 +473,21 @@ class TestDBPolls:
         assert "subs" in templates[0]
         assert set(templates[0]["subs"]) == {123, 456}
 
-    def test_save_and_get_poll_templates_with_enabled_flag(self, test_db):
+    def test_save_and_get_poll_templates_with_enabled_flag(self, test_db: DB) -> None:
         """Проверка сохранения признака enabled у шаблона."""
-        template = {
+        template: PollTemplateInput = {
             "name": "Disabled Poll",
             "message": "Disabled Message",
             "enabled": 0,
         }
-        save_poll_template(test_db, template)
+        save_poll_template(test_db, template).unwrap()
 
         templates = get_poll_templates(test_db).unwrap()
         assert len(templates) == 1
         assert templates[0]["name"] == "Disabled Poll"
         assert templates[0].get("enabled", 0) == 0
 
-    def test_update_poll_template(self, test_db):
+    def test_update_poll_template(self, test_db: DB) -> None:
         """Проверка обновления существующего шаблона опроса."""
         test_db.conn.execute(
             "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
@@ -504,11 +502,11 @@ class TestDBPolls:
             (3, "user3", "User 3"),
         )
         test_db.conn.commit()
-        template1 = {"name": "Test", "message": "Msg 1", "subs": [1]}
-        template2 = {"name": "Test", "message": "Msg 2", "subs": [2, 3]}
+        template1: PollTemplateInput = {"name": "Test", "message": "Msg 1", "subs": [1]}
+        template2: PollTemplateInput = {"name": "Test", "message": "Msg 2", "subs": [2, 3]}
 
-        save_poll_template(test_db, template1)
-        save_poll_template(test_db, template2)
+        save_poll_template(test_db, template1).unwrap()
+        save_poll_template(test_db, template2).unwrap()
 
         templates = get_poll_templates(test_db).unwrap()
         assert len(templates) == 1
@@ -516,7 +514,7 @@ class TestDBPolls:
         assert "subs" in templates[0]
         assert set(templates[0]["subs"]) == {2, 3}
 
-    def test_add_poll_subscription_inserts_subscription(self, test_db):
+    def test_add_poll_subscription_inserts_subscription(self, test_db: DB) -> None:
         """add_poll_subscription добавляет игрока в подписчики зала."""
         test_db.conn.execute(
             "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
@@ -532,14 +530,17 @@ class TestDBPolls:
         assert "subs" in template
         assert template["subs"] == [123]
 
-    def test_add_poll_subscription_returns_duplicate(self, test_db):
+    def test_add_poll_subscription_returns_duplicate(self, test_db: DB) -> None:
         """Повторное добавление подписчика возвращает duplicate."""
         test_db.conn.execute(
             "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
             (123, "user123", "User 123"),
         )
         test_db.conn.commit()
-        template_id = save_poll_template(test_db, {"name": "Пятница", "message": "Игра"})
+        template_id = save_poll_template(
+            test_db,
+            {"name": "Пятница", "message": "Игра"},
+        ).unwrap()
         assert add_poll_subscription(test_db, to_int(template_id), 123) == Success(None)
 
         result = add_poll_subscription(test_db, to_int(template_id), 123)
@@ -549,7 +550,7 @@ class TestDBPolls:
         assert "subs" in template
         assert template["subs"] == [123]
 
-    def test_add_poll_subscription_reports_missing_entities(self, test_db):
+    def test_add_poll_subscription_reports_missing_entities(self, test_db: DB) -> None:
         """Хелпер различает отсутствующий зал и отсутствующего игрока."""
         test_db.conn.execute(
             "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",
@@ -561,7 +562,7 @@ class TestDBPolls:
         assert add_poll_subscription(test_db, 999, 123) == Failure("missing_hall")
         assert add_poll_subscription(test_db, to_int(template_id), 999) == Failure("missing_player")
 
-    def test_update_poll_template_by_id_allows_rename(self, test_db):
+    def test_update_poll_template_by_id_allows_rename(self, test_db: DB) -> None:
         """Обновление по id должно переименовывать шаблон без создания дубля."""
         template_id = save_poll_template(test_db, {"name": "Old", "message": "Msg 1"}).unwrap()
 
@@ -590,7 +591,7 @@ class TestDBPolls:
         assert "enabled" in templates[0]
         assert templates[0]["enabled"] == 0
 
-    def test_update_poll_template_by_id_does_not_insert_missing_id(self, test_db):
+    def test_update_poll_template_by_id_does_not_insert_missing_id(self, test_db: DB) -> None:
         """Обновление по неизвестному id не должно создавать новый шаблон."""
         result = save_poll_template(
             test_db,
@@ -601,7 +602,7 @@ class TestDBPolls:
         assert result == Failure("❌ Ошибка при обновлении шаблона опроса")
         assert get_poll_templates(test_db).unwrap() == []
 
-    def test_update_poll_template_by_id_rejects_duplicate_name(self, test_db):
+    def test_update_poll_template_by_id_rejects_duplicate_name(self, test_db: DB) -> None:
         """Переименование по id в занятое имя должно быть отклонено."""
         first_id = save_poll_template(test_db, {"name": "First", "message": "Msg 1"}).unwrap()
         second_id = save_poll_template(test_db, {"name": "Second", "message": "Msg 2"}).unwrap()
@@ -618,7 +619,7 @@ class TestDBPolls:
         assert {template["name"] for template in templates} == {"First", "Second"}
         assert first_id != second_id
 
-    def test_foreign_keys_enforced_for_subscriptions(self, test_db):
+    def test_foreign_keys_enforced_for_subscriptions(self, test_db: DB) -> None:
         """Проверка, что FK реально enforced на runtime."""
         test_db.conn.execute(
             "INSERT INTO players (id, name, fullname) VALUES (?, ?, ?)",

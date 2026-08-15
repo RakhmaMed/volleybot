@@ -1,16 +1,15 @@
 """Конфигурация pytest и общие фикстуры."""
 
+import logging
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from aiogram import Bot
 from aiogram.types import User
+
 from src.db2 import DB
-
-import logging
-from collections.abc import Iterator
-
 from src.services import AdminService
 
 
@@ -22,7 +21,7 @@ def temp_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 
 @pytest.fixture
-def test_db(tmp_path) -> Iterator[DB]:
+def test_db(tmp_path: Path) -> Iterator[DB]:
     database = DB(str(tmp_path / "volleybot.db"), logging.getLogger(__name__))
     try:
         yield database

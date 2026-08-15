@@ -4,27 +4,31 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import typing
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Literal
-from warnings import catch_warnings
+from typing import Concatenate, Literal
 
-from _pytest.recwarn import deprecated_call
 from returns.iterables import Fold
-from returns.maybe import Maybe, Nothing
+from returns.pipeline import flow
+from returns.pointfree import bind, map_
 from returns.result import Failure, Result, Success, safe
 
 from .types import (
     GameInfo,
+    GameParticipant,
     GamePollStats,
     GamePollStatsSummary,
+    JsonValue,
+    MessageRecord,
     Player,
     PlayerStats,
     PollTemplate,
+    PollTemplateInput,
+    SingleGameIncomeRow,
+    SingleGameIncomeStats,
 )
 from .utils import normalize_telegram_username
 
@@ -143,20 +147,20 @@ class DB:
         path: str,
         logger: logging.Logger | None = None,
     ):
-        self.logger = logger or LOGGER
+        self.logger: logging.Logger = logger or LOGGER
         self.logger.debug(f"Инициализация БД: {path}")
 
         # Для in-memory соединения каталоги не нужны
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
 
-        self.conn = sqlite3.connect(path)
+        self.conn: sqlite3.Connection = sqlite3.connect(path)
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.row_factory = sqlite3.Row
         _create_base_tables(self.conn)
         _ensure_current_schema(self.conn)
 
-    def close(self):
+    def close(self) -> None:
         self.conn.close()
 
 
@@ -468,25 +472,28 @@ def _validate_schema_strict(conn: sqlite3.Connection) -> list[str]:
     return mismatches
 
 
-def transactional[T](operation: Callable[..., Result[T, str]]) \
--> Callable[..., Result[T, str]]:
+def transactional[T, **P](
+    operation: Callable[Concatenate[DB, P], Result[T, str]],
+) -> Callable[Concatenate[DB, P], Result[T, str]]:
     """Выполняет callback в транзакции и возвращает его результат.
 
     Callback получает соединение и может выполнить несколько SQL-запросов.
     Все их изменения фиксируются одним commit либо полностью отменяются при ошибке.
     """
     @wraps(operation)
-    def wrapper(db: DB, *args, **kwargs) -> Result[T, str]:
+    def wrapper(db: DB, *args: P.args, **kwargs: P.kwargs) -> Result[T, str]:
         try:
             result = operation(db, *args, **kwargs)
             match result:
                 case Success(_):
                     db.conn.commit()
-
+                    return result
                 case Failure(_):
                     db.conn.rollback()
-
-            return result
+                    return result
+                case _:
+                    db.conn.rollback()
+                    return Failure("Операция БД вернула некорректный Result")
         except Exception as e:
             db.conn.rollback()
             db.logger.exception("Ошибка транзакции БД; выполнен rollback")
@@ -495,55 +502,57 @@ def transactional[T](operation: Callable[..., Result[T, str]]) \
 
 
 @safe(exceptions=(TypeError, ValueError))
-def serialize_json(value: Any) -> str:
+def serialize_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 @safe(exceptions=(TypeError, ValueError))
-def deserialize_json(value: str) -> Any:
+def deserialize_json(value: str) -> JsonValue:
     return json.loads(value)
 
 
 @transactional
-def save_state(db: DB, key: str, value: Any) -> Result[None, str]:
-    serialized = serialize_json(value).alt(
-        lambda e: (f"Не удалось сериализовать данные в JSON для ключа '{key}'. Ошибка: {e}")
-    )
+def save_state(db: DB, key: str, value: object) -> Result[None, str]:
+    def persist(payload: str) -> Result[None, str]:
+        db.logger.debug(
+            f"Сохранение состояния: ключ='{key}', "
+            f"размер данных={len(payload)} байт"
+        )
+        db.conn.execute(
+            """
+                INSERT INTO kv_store(key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(KEY) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+            """,
+            (key, payload),
+        )
+        db.logger.debug(f"✅ Состояние '{key}' успешно сохранено")
+        return Success(None)
 
-    match serialized:
-        case Failure(error):
-            return Failure(error)
-
-        case Success(payload):
-            db.logger.debug(
-                f"Сохранение состояния: ключ='{key}', "
-                f"размер данных={len(payload)} байт"
-            )
-
-            db.conn.execute(
-                """
-                    INSERT INTO kv_store(key, value, updated_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(KEY) DO UPDATE SET
-                        value = excluded.value,
-                        updated_at = CURRENT_TIMESTAMP
-                """,
-                (key, payload),
-            )
-
-            db.logger.debug(f"✅ Состояние '{key}' успешно сохранено")
-            return Success(None)
-    raise RuntimeError("Недостижимый код")
+    return serialize_json(value).alt(
+        lambda error: (
+            f"Не удалось сериализовать данные в JSON для ключа '{key}'. "
+            f"Ошибка: {error}"
+        )
+    ).bind(persist)
 
 
 @transactional
-def load_state(db: DB, key: str, default: Any = None) -> Result[Any, str]:
-    """Загружает состояние по ключу, возвращает default при ошибке/отсутствии."""
-    cursor = db.conn.execute(
+def load_state(
+    db: DB,
+    key: str,
+    default: object = None,
+) -> Result[object, str]:
+    """Загружает состояние по ключу, возвращает default при отсутствии."""
+    row = db.conn.execute(
         "SELECT value FROM kv_store WHERE key = ?",
         (key,),
-    )
-    result = cursor.fetchone()
-    return Success(json.loads(result[0]) if result else default)
+    ).fetchone()
+    if row is None:
+        return Success(default)
+
+    return deserialize_json(str(row[0])).alt(str)
 
 
 # --- PLAYER ---
@@ -577,7 +586,7 @@ def get_all_players(db: DB) -> Result[list[Player], str]:
 @transactional
 def get_players_with_balance(db: DB) -> Result[list[Player], str]:
     cursor = db.conn.execute(
-        "SELECT id, name, fullname, balance FROM players "
+        "SELECT id, name, fullname, ball_donate, is_guest, balance FROM players "
         "WHERE balance != 0 ORDER BY fullname ASC"
     )
     return Success([_player_from_row(row) for row in cursor.fetchall()])
@@ -606,10 +615,12 @@ def get_player_info(db: DB, user_id: int) -> Result[Player, str]:
 
 @transactional
 def update_player_balance(db: DB, user_id: int, amount: int) -> Result[None, str]:
-    db.conn.execute(
+    cursor = db.conn.execute(
         "UPDATE players SET balance = balance + ? WHERE id = ?",
         (amount, user_id),
     )
+    if cursor.rowcount == 0:
+        return Failure("Player not found")
     return Success(None)
 
 
@@ -672,7 +683,8 @@ def find_player_by_name(db: DB, query: str) -> Result[list[Player], str]:
     """Ищет игроков по части имени или fullname."""
     pattern = f"%{query}%"
     cursor = db.conn.execute(
-        "SELECT id, name, fullname, is_guest, balance FROM players WHERE name LIKE ? OR fullname LIKE ? ORDER BY fullname ASC",
+        "SELECT id, name, fullname, ball_donate, is_guest, balance "
+        "FROM players WHERE name LIKE ? OR fullname LIKE ? ORDER BY fullname ASC",
         (pattern, pattern),
     )
     return Success([_player_from_row(row) for row in cursor.fetchall()])
@@ -706,6 +718,31 @@ def ensure_player(db: DB, user_id: int, name: str | None = None, fullname: str |
     return Success(None)
 
 
+def makePollTemplate(
+    row: sqlite3.Row,
+    subs: list[int] | None = None,
+) -> PollTemplate:
+    """Преобразует строку poll_templates в тип приложения."""
+    return {
+        "id": int(row["id"]),
+        "name": str(row["name"]),
+        "place": str(row["place"] or ""),
+        "message": str(row["message"]),
+        "open_day": str(row["open_day"]),
+        "open_hour_utc": int(row["open_hour_utc"]),
+        "open_minute_utc": int(row["open_minute_utc"]),
+        "game_day": str(row["game_day"]),
+        "game_hour_utc": int(row["game_hour_utc"]),
+        "game_minute_utc": int(row["game_minute_utc"]),
+        "cost": int(row["cost"]),
+        "cost_per_game": int(row["cost_per_game"]),
+        "enabled": int(row["enabled"]),
+        "created_at": str(row["created_at"]),
+        "updated_at": str(row["updated_at"]),
+        "subs": list(subs or ()),
+    }
+
+
 @transactional
 def get_poll_templates(db: DB) -> Result[list[PollTemplate], str]:
     """Возвращает все шаблоны опросов из БД."""
@@ -721,12 +758,10 @@ def get_poll_templates(db: DB) -> Result[list[PollTemplate], str]:
             int(sub_row["user_id"])
         )
 
-    templates = []
-    for row in template_rows:
-        template = dict(row)
-        template_id = int(template["id"])
-        template["subs"] = subs_by_template.get(template_id, [])
-        templates.append(template)
+    templates = [
+        makePollTemplate(row, subs_by_template.get(int(row["id"]), []))
+        for row in template_rows
+    ]
     return Success(templates)
 
 
@@ -770,7 +805,7 @@ def add_poll_subscription(db: DB, poll_template_id: int, user_id: int) \
 @transactional
 def save_poll_template(
     db: DB,
-    template: typing.Mapping[str, typing.Any],
+    template: PollTemplateInput,
     *,
     match_by: Literal["name", "id"] = "name",
 ) -> Result[int, str]:
@@ -826,7 +861,9 @@ def save_poll_template(
         ).fetchone()
         poll_template_id = int(row[0])
     else:
-        poll_template_id = int(template["id"])
+        if "id" not in template:
+            return Failure("Для обновления по id требуется поле 'id'")
+        poll_template_id = template["id"]
         try:
             cursor = db.conn.execute(
                 """
@@ -849,7 +886,7 @@ def save_poll_template(
                 """,
                 (*values, poll_template_id),
             )
-        except sqlite3.IntegrityError as e:
+        except sqlite3.IntegrityError:
             return Failure("Имя должно быть уникальным")
         if cursor.rowcount == 0:
             return Failure("❌ Ошибка при обновлении шаблона опроса")
@@ -922,7 +959,7 @@ def add_transaction(
         f"player_id={player_id}, amount={amount}, poll_template_id={poll_template_id}, "
         f"poll_name_snapshot={poll_name_snapshot}"
     )
-    return Result(None)
+    return Success(None)
 
 
 # ── Fund (касса) ────────────────────────────────────────────────────────────
@@ -935,7 +972,7 @@ def get_fund_balance(db: DB) -> Result[int, str]:
     ).fetchone()
 
     if row:
-        return Result(int(row[0]))
+        return Success(int(row[0]))
     return Failure("❌ Ошибка при получении баланса кассы")
 
 @transactional
@@ -957,9 +994,11 @@ def update_fund_balance(db: DB, amount: int) -> Result[int, str]:
         """,
         (FUND_BALANCE_KEY, amount),
     ).fetchone()
-    new_balance = int(row[0]) if row else 0
+    if row is None:
+        return Failure("Не удалось обновить баланс кассы")
+    new_balance = int(row[0])
     db.logger.info(f"💰 Касса изменена на {amount:+d}, новый баланс: {new_balance}")
-    return Result(new_balance)
+    return Success(new_balance)
 
 
 @transactional
@@ -1086,8 +1125,6 @@ def get_unpaid_halls(db: DB, month: str) -> Result[list[PollTemplate], str]:
     Returns:
         Список шаблонов опросов с cost_per_game > 0, не имеющих записи в hall_payments
     """
-    from typing import cast
-
     template_rows = db.conn.execute(
         """
         SELECT pt.*
@@ -1108,12 +1145,10 @@ def get_unpaid_halls(db: DB, month: str) -> Result[list[PollTemplate], str]:
         subs_by_template[int(sub_row["poll_template_id"])].append(
             int(sub_row["user_id"])
         )
-    templates: list[PollTemplate] = []
-    for row in template_rows:
-        template = cast(PollTemplate, dict(row))
-        template_id = int(template["id"])
-        template["subs"] = subs_by_template.get(template_id, [])
-        templates.append(template)
+    templates = [
+        makePollTemplate(row, subs_by_template.get(int(row["id"]), []))
+        for row in template_rows
+    ]
     return Success(templates)
 
 # deprecated
@@ -1315,7 +1350,7 @@ def update_game_info_message(
     last_info_text: str | None = None,
 ) -> Result[None, str]:
     """Обновляет ID информационного сообщения и кеш текста."""
-    db.conn.execute(
+    cursor = db.conn.execute(
         """
         UPDATE games
         SET info_message_id = ?,
@@ -1325,12 +1360,14 @@ def update_game_info_message(
         """,
         (info_message_id, last_info_text, poll_id),
     )
+    if cursor.rowcount == 0:
+        return Failure("Игра не найдена")
     return Success(None)
 
 @transactional
 def update_game_last_info_text(db: DB, poll_id: str, text: str) -> Result[None, str]:
     """Обновляет последний отправленный текст промежуточного сообщения."""
-    db.conn.execute(
+    cursor = db.conn.execute(
         """
         UPDATE games
         SET last_info_text = ?, updated_at = CURRENT_TIMESTAMP
@@ -1338,6 +1375,8 @@ def update_game_last_info_text(db: DB, poll_id: str, text: str) -> Result[None, 
         """,
         (text, poll_id),
     )
+    if cursor.rowcount == 0:
+        return Failure("Игра не найдена")
     return Success(None)
 
 
@@ -1351,7 +1390,7 @@ def close_game(
     final_message_id: int | None = None,
 ) -> Result[None, str]:
     """Закрывает игру в БД."""
-    db.conn.execute(
+    cursor = db.conn.execute(
         """
         UPDATE games
         SET status = ?,
@@ -1362,6 +1401,8 @@ def close_game(
         """,
         (status, closed_at, final_message_id, poll_id),
     )
+    if cursor.rowcount == 0:
+        return Failure("Игра не найдена")
     return Success(None)
 
 
@@ -1393,43 +1434,63 @@ def load_monthly_votes(db: DB, game_poll_id: str) -> Result[dict[int, list[int]]
         """,
         (game_poll_id,),
     ).fetchall()
-    result: dict[int, list[int]] = {}
-    for player_id, option_ids_json in rows:
-        loaded = deserialize_json(option_ids_json)
-        match loaded:
-            case Failure(error):
-                return Failure(error).alt(str)
-            case Success(payload):
-                result[int(player_id)] = payload
-    return Success(result)
+    def validate_option_ids(payload: JsonValue) -> Result[list[int], str]:
+        if not isinstance(payload, list) or not all(
+            isinstance(option_id, int) for option_id in payload
+        ):
+            return Failure("Некорректный формат голосов в БД")
+        return Success([
+            option_id for option_id in payload if isinstance(option_id, int)
+        ])
+
+    def parse_row(row: sqlite3.Row) -> Result[tuple[int, list[int]], str]:
+        player_id, option_ids_json = row
+        return flow(
+            deserialize_json(str(option_ids_json)).alt(str),
+            bind(validate_option_ids),
+            map_(lambda option_ids: (int(player_id), option_ids)), # pyright: ignore[reportUnknownArgumentType]
+        )
+
+    return flow(
+        Fold.collect(map(parse_row, rows), Success(())),
+        map_(dict), # pyright: ignore[reportUnknownArgumentType]
+    )
 
 
-def _make_game_info(row: sqlite3.Row) -> Result[GameInfo, str]:
-    if not row:
+def _make_game_info(row: sqlite3.Row | None) -> Result[GameInfo, str]:
+    if row is None:
         return Failure("❌ Ошибка при десереализации игры")
+
+    poll_template_id = row["poll_template_id"]
+    info_message_id = row["info_message_id"]
+    final_message_id = row["final_message_id"]
     return Success({
-        "poll_id": row["poll_id"],
-        "kind": row["kind"],
-        "status": row["status"],
-        "poll_template_id": row["poll_template_id"],
-        "poll_name_snapshot": row["poll_name_snapshot"],
-        "question_snapshot": row["question_snapshot"],
-        "chat_id": row["chat_id"],
-        "poll_message_id": row["poll_message_id"],
-        "info_message_id": row["info_message_id"],
-        "final_message_id": row["final_message_id"],
-        "opened_at": row["opened_at"],
-        "closed_at": row["closed_at"],
-        "game_date": row["game_date"],
-        "place_snapshot": row["place_snapshot"],
-        "cost_snapshot": row["cost_snapshot"],
-        "cost_per_game_snapshot": row["cost_per_game_snapshot"],
-        "options_json": row["options_json"],
-        "option_poll_names_json": row["option_poll_names_json"],
-        "last_info_text": row["last_info_text"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-        "target_month_snapshot": row["target_month_snapshot"],
+        "poll_id": str(row["poll_id"]),
+        "kind": str(row["kind"]),
+        "status": str(row["status"]),
+        "poll_template_id": int(poll_template_id) if poll_template_id is not None else None,
+        "poll_name_snapshot": str(row["poll_name_snapshot"]),
+        "question_snapshot": str(row["question_snapshot"]),
+        "chat_id": int(row["chat_id"]),
+        "poll_message_id": int(row["poll_message_id"]),
+        "info_message_id": int(info_message_id) if info_message_id is not None else None,
+        "final_message_id": int(final_message_id) if final_message_id is not None else None,
+        "opened_at": str(row["opened_at"]),
+        "closed_at": str(row["closed_at"]) if row["closed_at"] is not None else None,
+        "game_date": str(row["game_date"]) if row["game_date"] is not None else None,
+        "place_snapshot": str(row["place_snapshot"]) if row["place_snapshot"] is not None else None,
+        "cost_snapshot": int(row["cost_snapshot"]),
+        "cost_per_game_snapshot": int(row["cost_per_game_snapshot"]),
+        "options_json": str(row["options_json"]),
+        "option_poll_names_json": str(row["option_poll_names_json"]),
+        "last_info_text": str(row["last_info_text"]),
+        "created_at": str(row["created_at"]),
+        "updated_at": str(row["updated_at"]),
+        "target_month_snapshot": (
+            str(row["target_month_snapshot"])
+            if row["target_month_snapshot"] is not None
+            else None
+        ),
     })
 
 @transactional
@@ -1449,10 +1510,10 @@ def get_open_games(db: DB) -> Result[list[GameInfo], str]:
     rows = db.conn.execute(
         "SELECT * FROM games WHERE status = 'open' ORDER BY opened_at"
     ).fetchall()
-    return Fold.collect(
-        map(_make_game_info, rows),
-        Success(()),
-    ).map(list)  # pyright: ignore[reportAttributeAccessIssue]
+    return flow(
+        Fold.collect(map(_make_game_info, rows), Success(())),
+        map_(list), # pyright: ignore[reportUnknownArgumentType]
+    )
 
 
 @transactional
@@ -1490,7 +1551,7 @@ def get_open_monthly_game(db: DB) -> Result[GameInfo, str]:
 
 @transactional
 def save_game_participants(
-    db: DB, game_poll_id: str, participants: list[dict[str, Any]]
+    db: DB, game_poll_id: str, participants: list[GameParticipant]
 ) -> Result[None, str]:
     """Сохраняет состав и финансовый итог игры."""
     db.conn.execute(
@@ -1582,7 +1643,7 @@ def _stats_from_row(row: sqlite3.Row, balance: int) -> Result[PlayerStats, str]:
 @transactional
 def get_single_game_income_stats(
     db: DB, months_back: int = 3, before_month: str = ""
-) -> Result[dict[str, Any], str]:
+) -> Result[SingleGameIncomeStats, str]:
     """
     Возвращает средний доход с разовых игроков по закрытым платным играм.
 
@@ -1636,7 +1697,7 @@ def get_single_game_income_stats(
         params,
     ).fetchall()
 
-    def build_row(row: sqlite3.Row | None) -> dict[str, Any]:
+    def build_row(row: sqlite3.Row | None) -> SingleGameIncomeRow:
         games_count = int(row["games_count"] or 0) if row else 0
         single_game_sum = int(row["single_game_sum"] or 0) if row else 0
         return {
@@ -1662,7 +1723,7 @@ def get_stats_summary(db: DB, month: str = "") \
     """Сводная статистика по regular-играм."""
     start, end = _month_bounds(month).value_or((None, None))
     filter_sql = ""
-    params: list[Any] = []
+    params: list[str] = []
     if start and end:
         filter_sql = "AND g.closed_at >= ? AND g.closed_at < ?"
         params.extend([start, end])
@@ -1704,7 +1765,7 @@ def get_stats_summary(db: DB, month: str = "") \
         params,
     ).fetchall()
     monthly_filter = ""
-    monthly_params: list[Any] = []
+    monthly_params: list[str] = []
     if start and end:
         monthly_filter = "AND opened_at >= ? AND opened_at < ?"
         monthly_params = [start, end]
@@ -1718,9 +1779,9 @@ def get_stats_summary(db: DB, month: str = "") \
     ).fetchone()
 
     transactions_filter = ""
-    tx_params: list[Any] = []
+    tx_params: list[str] = []
     hall_filter = ""
-    hall_params: list[Any] = []
+    hall_params: list[str] = []
     if start and end:
         transactions_filter = "WHERE created_at >= ? AND created_at < ?"
         tx_params = [start, end]
@@ -1780,7 +1841,7 @@ def get_poll_stats(db: DB, poll_template_id: int, month: str = "") \
     """Статистика по одному залу."""
     start, end = _month_bounds(month).value_or((None, None))
     filter_sql = ""
-    params: list[Any] = [poll_template_id]
+    params: list[int | str] = [poll_template_id]
     if start and end:
         filter_sql = "AND g.closed_at >= ? AND g.closed_at < ?"
         params.extend([start, end])
@@ -1868,7 +1929,7 @@ def get_player_stats(
     """Статистика по игроку."""
     start, end = _month_bounds(month).value_or((None, None))
     filter_sql = ""
-    params: list[Any] = [player_id]
+    params: list[int | str] = [player_id]
     if start and end:
         filter_sql = "AND g.closed_at >= ? AND g.closed_at < ?"
         params.extend([start, end])
@@ -1888,13 +1949,15 @@ def get_player_stats(
         """,
         params,
     ).fetchone()
-    balance = get_player_balance(db, player_id)
-    match balance:
-        case Failure(_):
-            return Failure("Баланс игрока не найден")
-        case Success(_):
-            return _stats_from_row(row, balance.value_or(0))
-    raise RuntimeError("Недостижимый код")
+    def build_stats(balance: int) -> Result[PlayerStats, str]:
+        return _stats_from_row(row, balance)
+
+    return flow(
+        get_player_balance(db, player_id).alt(
+            lambda _: "Баланс игрока не найден"
+        ),
+        bind(build_stats),
+    )
 
 # --- Messages
 
@@ -1903,7 +1966,7 @@ def get_messages(
     db: DB,
     chat_id: int,
     limit: int = 100,
-) -> Result[list[dict[str, Any]], str]:
+) -> Result[list[MessageRecord], str]:
     rows = db.conn.execute(
         """
         SELECT
@@ -1921,7 +1984,17 @@ def get_messages(
         """,
         (chat_id, limit),
     ).fetchall()
-    return Success([dict(row) for row in rows])
+    return Success([
+        {
+            "message_id": int(row["message_id"]),
+            "chat_id": int(row["chat_id"]),
+            "user_id": int(row["user_id"]),
+            "text": str(row["text"]),
+            "date": int(row["date"]),
+            "username": str(row["username"]),
+        }
+        for row in rows
+    ])
 
 @transactional
 def insert_message(
@@ -1939,4 +2012,4 @@ def insert_message(
         """,
         (message_id, chat_id, user_id, text, date),
     )
-    return Result(None)
+    return Success(None)
