@@ -11,6 +11,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
     Update,
+    User,
 )
 from returns.result import Failure, Result, Success
 
@@ -27,7 +28,7 @@ from src.db2 import (
     update_player_balance,
 )
 from src.handlers import register_handlers
-from src.services import BotStateService, PollService
+from src.services import AdminService, BotStateService, PollService
 
 # ── DB-level fund tests ─────────────────────────────────────────────────────
 
@@ -252,14 +253,14 @@ class TestPayFundTracking:
     @patch("src.handlers.ensure_player")
     async def test_restore_does_not_update_fund(
         self,
-        mock_ensure,
-        mock_get_balance,
-        mock_update_balance,
-        mock_get_fund,
-        admin_user,
-        regular_user,
-        admin_service,
-    ):
+        mock_ensure: MagicMock,
+        mock_get_balance: MagicMock,
+        mock_update_balance: MagicMock,
+        mock_get_fund: MagicMock,
+        admin_user: User,
+        regular_user: User,
+        admin_service: AdminService,
+    ) -> None:
         """/restore не вызывает update_fund_balance."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -313,14 +314,14 @@ class TestPayFundTracking:
     @patch("src.handlers.ensure_player")
     async def test_restore_shows_no_fund_change(
         self,
-        mock_ensure,
-        mock_get_balance,
-        mock_update_balance,
-        mock_get_fund,
-        admin_user,
-        regular_user,
-        admin_service,
-    ):
+        mock_ensure: MagicMock,
+        mock_get_balance: MagicMock,
+        mock_update_balance: MagicMock,
+        mock_get_fund: MagicMock,
+        admin_user: User,
+        regular_user: User,
+        admin_service: AdminService,
+    ) -> None:
         """Ответ /restore содержит 'Касса не изменена'."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -379,11 +380,11 @@ class TestHallPaymentHandler:
     @patch("src.handlers.get_fund_balance", return_value=5000)
     async def test_hall_payment_shows_unpaid(
         self,
-        mock_get_fund,
-        mock_get_unpaid,
-        admin_user,
-        admin_service,
-    ):
+        mock_get_fund: MagicMock,
+        mock_get_unpaid: MagicMock,
+        admin_user: User,
+        admin_service: AdminService,
+    ) -> None:
         """При /pay Оплата зала показываются неоплаченные залы."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -429,10 +430,10 @@ class TestHallPaymentHandler:
     @patch("src.handlers.get_unpaid_halls", return_value=[])
     async def test_hall_payment_all_paid(
         self,
-        mock_get_unpaid,
-        admin_user,
-        admin_service,
-    ):
+        mock_get_unpaid: MagicMock,
+        admin_user: User,
+        admin_service: AdminService,
+    ) -> None:
         """Если все залы оплачены — сообщение об этом."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -467,11 +468,11 @@ class TestHallPaymentHandler:
     @patch("src.handlers.get_fund_balance", return_value=5000)
     async def test_hall_payment_case_insensitive(
         self,
-        mock_get_fund,
-        mock_get_unpaid,
-        admin_user,
-        admin_service,
-    ):
+        mock_get_fund: MagicMock,
+        mock_get_unpaid: MagicMock,
+        admin_user: User,
+        admin_service: AdminService,
+    ) -> None:
         """/pay ОПЛАТА ЗАЛА (в верхнем регистре) тоже работает."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -507,8 +508,11 @@ class TestHallPaymentHandler:
         assert "Неоплаченные залы" in method.text
 
     async def test_hall_payment_callback_creates_admin_player_if_missing(
-        self, admin_user, admin_service, test_db: DB
-    ):
+        self,
+        admin_user: User,
+        admin_service: AdminService,
+        test_db: DB,
+    ) -> None:
         """Оплата зала через callback не должна падать, если админ ещё не игрок (не в БД)"""
         save_poll_template(
             test_db,
@@ -565,11 +569,11 @@ class TestHallPaymentHandler:
     @patch("src.handlers.get_poll_templates")
     async def test_hall_payment_callback_reports_generic_failure(
         self,
-        mock_get_templates,
-        mock_record_payment,
-        admin_user,
-        admin_service,
-    ):
+        mock_get_templates: MagicMock,
+        mock_record_payment: MagicMock,
+        admin_user: User,
+        admin_service: AdminService,
+    ) -> None:
         """Не-дубликатная ошибка оплаты не должна маскироваться под already paid."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -626,11 +630,11 @@ class TestBalanceFundDisplay:
     @patch("src.handlers.get_players_with_balance", return_value=[])
     async def test_balance_shows_fund(
         self,
-        mock_get_players,
-        mock_get_fund,
-        admin_user,
-        admin_service,
-    ):
+        mock_get_players: MagicMock,
+        mock_get_fund: MagicMock,
+        admin_user: User,
+        admin_service: AdminService,
+    ) -> None:
         """Администратор видит баланс кассы в ответе /balance."""
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()

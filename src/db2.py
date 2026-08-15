@@ -497,11 +497,12 @@ def transactional[T, **P](
         except sqlite3.IntegrityError as e:
             db.conn.rollback()
             return Failure(f"❌ Ошибка уникальности полей: {e}")
-        except Exception as e:
+        except sqlite3.Error as e:
             db.conn.rollback()
             return Failure(f"Ошибка транзакции БД: {e}")
         finally:
-            db.logger.exception("Ошибка транзакции БД; выполнен rollback")
+            if db.conn.in_transaction:
+                db.conn.rollback()
     return wrapper
 
 
