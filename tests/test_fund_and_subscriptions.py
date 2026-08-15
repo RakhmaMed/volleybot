@@ -1,8 +1,15 @@
 """Тесты для кассы, оплаты залов, /restore и расчёта абонементов."""
+from __future__ import annotations
 
+from modulefinder import test
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from returns.iterables import Fold
+from returns.pipeline import flow
+from returns.pointfree import bind
+from returns.result import Failure, Result, Success
+
 from aiogram import Bot, Dispatcher
 from aiogram.types import (
     CallbackQuery,
@@ -12,14 +19,13 @@ from aiogram.types import (
     Update,
 )
 
-from src.db import (
-    _connect,
+from src.db2 import (
+    DB,
     add_transaction,
     ensure_player,
     get_fund_balance,
     get_player_balance,
     get_unpaid_halls,
-    init_db,
     record_hall_payment,
     save_poll_template,
     update_fund_balance,
@@ -31,51 +37,45 @@ from src.services import BotStateService, PollService
 # ── DB-level fund tests ─────────────────────────────────────────────────────
 
 
-def _get_poll_template_id(name: str) -> int:
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT id FROM poll_templates WHERE name = ?",
-            (name,),
-        ).fetchone()
-    if row is None:
-        raise AssertionError(f"Template '{name}' not found")
-    return int(row[0])
+def _get_poll_template_id(db: DB, name: str) -> Result[int, str]:
+    row = db.conn.execute(
+        "SELECT id FROM poll_templates WHERE name = ?",
+        (name,),
+    ).fetchone()
+    if row:
+        return Success(int(row[0]))
+    return Failure(f"Template '{name}' not found")
 
 
 class TestFundBalance:
     """Тесты для функций кассы в БД."""
 
-    def test_fund_balance_default_zero(self, temp_db):
+    def test_fund_balance_default_zero(self, test_db: DB):
         """По умолчанию баланс кассы равен 0."""
-        init_db()
-        assert get_fund_balance() == 0
+        assert get_fund_balance(test_db) == Failure("❌ Ошибка при получении баланса кассы")
 
-    def test_update_fund_balance_increment(self, temp_db):
+    def test_update_fund_balance_increment(self, test_db: DB):
         """Пополнение кассы увеличивает баланс."""
-        init_db()
-        update_fund_balance(500)
-        assert get_fund_balance() == 500
+        update_fund_balance(test_db, 500)
+        assert get_fund_balance(test_db).unwrap() == 500
 
-    def test_update_fund_balance_decrement(self, temp_db):
+    def test_update_fund_balance_decrement(self, test_db: DB):
         """Списание с кассы уменьшает баланс."""
-        init_db()
-        update_fund_balance(1000)
-        update_fund_balance(-300)
-        assert get_fund_balance() == 700
+        update_fund_balance(test_db, 1000)
+        update_fund_balance(test_db, -300)
+        assert get_fund_balance(test_db).unwrap() == 700
 
-    def test_update_fund_balance_multiple(self, temp_db):
+    def test_update_fund_balance_multiple(self, test_db: DB):
         """Несколько последовательных изменений кассы корректны."""
-        init_db()
-        update_fund_balance(100)
-        update_fund_balance(200)
-        update_fund_balance(-50)
-        assert get_fund_balance() == 250
+        update_fund_balance(test_db, 100)
+        update_fund_balance(test_db, 200)
+        update_fund_balance(test_db, -50)
+        assert get_fund_balance(test_db).unwrap() == 250
 
-    def test_fund_can_go_negative(self, temp_db):
+    def test_fund_can_go_negative(self, test_db: DB):
         """Касса может уйти в минус."""
-        init_db()
-        update_fund_balance(-500)
-        assert get_fund_balance() == -500
+        update_fund_balance(test_db, -500)
+        assert get_fund_balance(test_db).unwrap() == -500
 
 
 # ── DB-level hall payment tests ──────────────────────────────────────────────
@@ -84,8 +84,14 @@ class TestFundBalance:
 class TestHallPayments:
     """Тесты для оплаты залов."""
 
-    def _create_paid_template(self, name: str = "Пятница", cost_per_game: int = 1500):
+    def _create_paid_template(
+        self,
+        test_db: DB,
+        name: str = "Пятница",
+        cost_per_game: int = 1500,
+    ):
         save_poll_template(
+            test_db,
             {
                 "name": name,
                 "message": f"Игра {name}",
@@ -94,68 +100,65 @@ class TestHallPayments:
             }
         )
 
-    def test_get_unpaid_halls_returns_paid_only(self, temp_db):
+    def test_get_unpaid_halls_returns_paid_only(self, test_db: DB):
         """get_unpaid_halls возвращает только залы с cost_per_game > 0."""
-        init_db()
-        self._create_paid_template("Пятница", cost_per_game=1500)
-        save_poll_template(
-            {
-                "name": "Среда",
-                "message": "Бесплатная игра",
-                "cost": 0,
-                "cost_per_game": 0,
-            }
-        )
+        self._create_paid_template(test_db, "Пятница", cost_per_game=1500)
+        self._create_paid_template(test_db, "Среда", cost_per_game=0)
 
-        unpaid = get_unpaid_halls("2026-02")
+        unpaid = get_unpaid_halls(test_db, "2026-02").unwrap()
         assert len(unpaid) == 1
         assert unpaid[0]["name"] == "Пятница"
 
-    def test_get_unpaid_halls_excludes_paid(self, temp_db):
+    def test_get_unpaid_halls_excludes_paid(self, test_db: DB):
         """Оплаченные залы не возвращаются."""
-        init_db()
-        self._create_paid_template("Пятница", cost_per_game=1500)
-        self._create_paid_template("Понедельник", cost_per_game=1000)
+        self._create_paid_template(test_db, "Пятница", cost_per_game=1500)
+        self._create_paid_template(test_db, "Понедельник", cost_per_game=1000)
 
-        record_hall_payment(_get_poll_template_id("Пятница"), "2026-02", 6000)
+        record_hall_payment(
+            test_db,
+            _get_poll_template_id(test_db, "Пятница").unwrap(),
+            "2026-02",
+            6000,
+        )
 
-        unpaid = get_unpaid_halls("2026-02")
+        unpaid = get_unpaid_halls(test_db, "2026-02").unwrap()
         assert len(unpaid) == 1
         assert unpaid[0]["name"] == "Понедельник"
 
-    def test_record_hall_payment_success(self, temp_db):
+    def test_record_hall_payment_success(self, test_db: DB):
         """Запись оплаты зала успешна."""
-        init_db()
-        self._create_paid_template("Пятница")
+        self._create_paid_template(test_db, "Пятница")
 
-        result = record_hall_payment(_get_poll_template_id("Пятница"), "2026-02", 6000)
-        assert result is True
+        result = record_hall_payment(
+            test_db,
+            _get_poll_template_id(test_db, "Пятница").unwrap(),
+            "2026-02",
+            6000,
+        )
+        assert result == Success(None)
 
-    def test_record_hall_payment_duplicate_fails(self, temp_db):
+    def test_record_hall_payment_duplicate_fails(self, test_db: DB):
         """Повторная оплата того же зала за тот же месяц не проходит."""
-        init_db()
-        self._create_paid_template("Пятница")
+        self._create_paid_template(test_db, "Пятница")
+        poll_template_id = _get_poll_template_id(test_db, "Пятница").unwrap()
+        assert record_hall_payment(test_db, poll_template_id, "2026-02", 6000) == Success(None)
+        assert record_hall_payment(test_db, poll_template_id, "2026-02", 6000) \
+            .failure() \
+            .startswith("❌ Ошибка уникальности полей")
 
-        poll_template_id = _get_poll_template_id("Пятница")
-        assert record_hall_payment(poll_template_id, "2026-02", 6000) is True
-        assert record_hall_payment(poll_template_id, "2026-02", 6000) is False
-
-    def test_different_months_allowed(self, temp_db):
+    def test_different_months_allowed(self, test_db: DB):
         """Оплата одного зала за разные месяцы допустима."""
-        init_db()
-        self._create_paid_template("Пятница")
+        self._create_paid_template(test_db, "Пятница")
+        poll_template_id = _get_poll_template_id(test_db, "Пятница").unwrap()
+        assert record_hall_payment(test_db, poll_template_id, "2026-02", 6000) == Success(None)
+        assert record_hall_payment(test_db, poll_template_id, "2026-03", 6000) == Success(None)
 
-        poll_template_id = _get_poll_template_id("Пятница")
-        assert record_hall_payment(poll_template_id, "2026-02", 6000) is True
-        assert record_hall_payment(poll_template_id, "2026-03", 6000) is True
-
-    def test_all_halls_paid(self, temp_db):
+    def test_all_halls_paid(self, test_db: DB):
         """Если все залы оплачены, get_unpaid_halls возвращает пустой список."""
-        init_db()
-        self._create_paid_template("Пятница", cost_per_game=1500)
-        record_hall_payment(_get_poll_template_id("Пятница"), "2026-02", 6000)
-
-        unpaid = get_unpaid_halls("2026-02")
+        self._create_paid_template(test_db, "Пятница", cost_per_game=1500)
+        poll_template_id = _get_poll_template_id(test_db, "Пятница").unwrap()
+        record_hall_payment(test_db, poll_template_id, "2026-02", 6000)
+        unpaid = get_unpaid_halls(test_db, "2026-02").unwrap()
         assert len(unpaid) == 0
 
 
@@ -165,46 +168,40 @@ class TestHallPayments:
 class TestMonthlyCost:
     """Тесты для поля cost_per_game в poll_templates."""
 
-    def test_cost_per_game_default_1500(self, temp_db):
+    def test_cost_per_game_default_1500(self, test_db: DB):
         """cost_per_game по умолчанию равен 1500."""
-        init_db()
         save_poll_template(
+            test_db,
             {
                 "name": "Test",
                 "message": "Test",
             }
         )
-        with _connect() as conn:
-            conn.row_factory = __import__("sqlite3").Row
-            row = conn.execute(
-                "SELECT cost_per_game FROM poll_templates WHERE name = 'Test'"
-            ).fetchone()
-            assert row["cost_per_game"] == 1500
+        row = test_db.conn.execute(
+            "SELECT cost_per_game FROM poll_templates WHERE name = 'Test'"
+        ).fetchone()
+        assert row["cost_per_game"] == 1500
 
-    def test_cost_per_game_saved(self, temp_db):
+    def test_cost_per_game_saved(self, test_db: DB):
         """cost_per_game сохраняется корректно."""
-        init_db()
         save_poll_template(
+            test_db,
             {
                 "name": "Пятница",
                 "message": "Игра",
                 "cost_per_game": 1500,
             }
         )
-        with _connect() as conn:
-            conn.row_factory = __import__("sqlite3").Row
-            row = conn.execute(
-                "SELECT cost_per_game FROM poll_templates WHERE name = 'Пятница'"
-            ).fetchone()
-            assert row["cost_per_game"] == 1500
+        row = test_db.conn.execute(
+            "SELECT cost_per_game FROM poll_templates WHERE name = 'Пятница'"
+        ).fetchone()
+        assert row["cost_per_game"] == 1500
 
-    def test_cost_per_game_exists_in_current_schema(self, temp_db):
+    def test_cost_per_game_exists_in_current_schema(self, test_db: DB):
         """Проверка, что актуальная схема сразу содержит cost_per_game."""
-        init_db()
-        with _connect() as conn:
-            cursor = conn.execute("PRAGMA table_info(poll_templates)")
-            columns = [row[1] for row in cursor.fetchall()]
-            assert "cost_per_game" in columns
+        cursor = test_db.conn.execute("PRAGMA table_info(poll_templates)")
+        columns = [row[1] for row in cursor.fetchall()]
+        assert "cost_per_game" in columns
 
 
 # ── DB-level transaction tests ───────────────────────────────────────────────
@@ -213,28 +210,25 @@ class TestMonthlyCost:
 class TestTransactionLogging:
     """Тесты для логирования транзакций."""
 
-    def test_transaction_created(self, temp_db):
+    def test_transaction_created(self, test_db: DB):
         """Транзакция создаётся с правильными данными."""
-        init_db()
-        ensure_player(user_id=100, name="test", fullname="Test Player")
-        add_transaction(100, 500, "Оплата (admin: @admin)")
+        ensure_player(test_db, user_id=100, name="test", fullname="Test Player")
+        add_transaction(test_db, 100, 500, "Оплата (admin: @admin)")
 
-        with _connect() as conn:
-            conn.row_factory = __import__("sqlite3").Row
-            rows = conn.execute(
-                "SELECT * FROM transactions WHERE player_id = 100"
-            ).fetchall()
-            assert len(rows) == 1
-            assert rows[0]["amount"] == 500
-            assert rows[0]["description"] == "Оплата (admin: @admin)"
+        rows = test_db.conn.execute(
+            "SELECT * FROM transactions WHERE player_id = 100"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["amount"] == 500
+        assert rows[0]["description"] == "Оплата (admin: @admin)"
 
-    def test_transaction_with_poll_name(self, temp_db):
+    def test_transaction_with_poll_name(self, test_db: DB):
         """Транзакция с привязкой к опросу."""
-        init_db()
-        ensure_player(user_id=101, name="test2", fullname="Test 2")
-        save_poll_template({"name": "Пятница", "message": "Игра"})
-        poll_template_id = _get_poll_template_id("Пятница")
+        ensure_player(test_db, user_id=101, name="test2", fullname="Test 2")
+        save_poll_template(test_db, {"name": "Пятница", "message": "Игра"})
+        poll_template_id = _get_poll_template_id(test_db, "Пятница").unwrap()
         add_transaction(
+            test_db,
             101,
             -150,
             "Зал: Пятница (08.02.2026)",
@@ -242,14 +236,12 @@ class TestTransactionLogging:
             poll_name_snapshot="Пятница",
         )
 
-        with _connect() as conn:
-            conn.row_factory = __import__("sqlite3").Row
-            row = conn.execute(
-                "SELECT * FROM transactions WHERE player_id = 101"
-            ).fetchone()
-            assert row["poll_template_id"] == poll_template_id
-            assert row["poll_name_snapshot"] == "Пятница"
-            assert row["amount"] == -150
+        row = test_db.conn.execute(
+            "SELECT * FROM transactions WHERE player_id = 101"
+        ).fetchone()
+        assert row["poll_template_id"] == poll_template_id
+        assert row["poll_name_snapshot"] == "Пятница"
+        assert row["amount"] == -150
 
 
 # ── Handler-level /pay tests (fund tracking) ────────────────────────────────
@@ -520,11 +512,11 @@ class TestHallPaymentHandler:
         assert "Неоплаченные залы" in method.text
 
     async def test_hall_payment_callback_creates_admin_player_if_missing(
-        self, admin_user, admin_service, temp_db
+        self, admin_user, admin_service, test_db: DB
     ):
-        """Оплата зала через callback не должна падать, если админ ещё не игрок."""
-        init_db()
+        """Оплата зала через callback не должна падать, если админ ещё не игрок (не в БД)"""
         save_poll_template(
+            test_db,
             {
                 "name": "Пятница",
                 "message": "Игра",
@@ -533,7 +525,7 @@ class TestHallPaymentHandler:
                 "cost_per_game": 1500,
             }
         )
-        update_fund_balance(7000)
+        update_fund_balance(test_db, 7000)
 
         bot = AsyncMock(spec=Bot)
         dp = Dispatcher()
@@ -565,13 +557,12 @@ class TestHallPaymentHandler:
 
         await dp.feed_update(bot, Update(update_id=10, callback_query=callback_query))
 
-        assert get_player_balance(admin_user.id) is not None
-        assert get_fund_balance() == 1000
-        with _connect() as conn:
-            row = conn.execute(
-                "SELECT amount FROM transactions WHERE player_id = ?",
-                (admin_user.id,),
-            ).fetchone()
+        assert get_player_balance(test_db, admin_user.id) == Success(0)
+        assert get_fund_balance(test_db) == Success(1000)
+        row = test_db.conn.execute(
+            "SELECT amount FROM transactions WHERE player_id = ?",
+            (admin_user.id,),
+        ).fetchone()
         assert row is not None
         assert int(row[0]) == -6000
 
@@ -683,46 +674,41 @@ class TestBalanceFundDisplay:
 class TestSubscriptionCalculation:
     """Тесты для расчёта абонемента (DB-уровень, без Telegram API)."""
 
-    def test_subscription_deducts_from_balance(self, temp_db):
+    def test_subscription_deducts_from_balance(self, test_db: DB):
         """Списание абонемента уменьшает баланс подписчика."""
-        init_db()
         user_id = 100
-        ensure_player(user_id=user_id, name="test", fullname="Test Player")
+        ensure_player(test_db, user_id=user_id, name="test", fullname="Test Player").unwrap()
 
         # Списываем цену абонемента (в новой модели — 400-500₽ за зал)
         per_person = 450
-        update_player_balance(user_id, -per_person)
+        update_player_balance(test_db, user_id, -per_person).unwrap()
 
-        player = get_player_balance(user_id)
-        assert player is not None
-        assert player["balance"] == -450
+        player = get_player_balance(test_db, user_id).unwrap()
+        assert player == -450
 
-    def test_subscription_fund_not_changed(self, temp_db):
+    def test_subscription_fund_not_changed(self, test_db: DB):
         """При списании абонемента касса НЕ меняется."""
-        init_db()
-        update_fund_balance(2000)  # начальная касса
+        update_fund_balance(test_db, 2000)  # начальная касса
 
         user_id = 100
-        ensure_player(user_id=user_id, name="test", fullname="Test Player")
+        ensure_player(test_db, user_id=user_id, name="test", fullname="Test Player").unwrap()
 
         # Имитируем списание абонемента (баланс минусуется, касса нет)
-        update_player_balance(user_id, -450)
+        update_player_balance(test_db, user_id, -450).unwrap()
 
-        assert get_fund_balance() == 2000  # касса не изменилась
+        assert get_fund_balance(test_db).unwrap() == 2000  # касса не изменилась
 
-    def test_subscription_combo_deducts_from_balance(self, temp_db):
+    def test_subscription_combo_deducts_from_balance(self, test_db: DB):
         """Подписчик на 2 зала (комбо) — списание комбо-цены."""
-        init_db()
         # Комбо-цена = price_per_hall * 1.7 ≈ 770₽
         combo_price = 770
 
         user_id = 200
-        ensure_player(user_id=user_id, name="sub_user", fullname="Sub User")
-        update_player_balance(user_id, -combo_price)
+        ensure_player(test_db, user_id=user_id, name="sub_user", fullname="Sub User").unwrap()
+        update_player_balance(test_db, user_id, -combo_price).unwrap()
 
-        player = get_player_balance(user_id)
-        assert player is not None
-        assert player["balance"] == -770
+        player = get_player_balance(test_db, user_id).unwrap()
+        assert player == -770
 
 
 # ── Integration test: full pay → fund → hall payment flow ────────────────────
@@ -731,12 +717,12 @@ class TestSubscriptionCalculation:
 class TestFullPaymentFlow:
     """Интеграционный тест: полный цикл оплаты."""
 
-    def test_casual_payment_flow(self, temp_db):
+    def test_casual_payment_flow(self, test_db: DB):
         """Полный цикл: списание за игру → оплата → оплата зала."""
-        init_db()
 
         # Настройка
         save_poll_template(
+            test_db,
             {
                 "name": "Пятница",
                 "message": "Игра",
@@ -745,66 +731,67 @@ class TestFullPaymentFlow:
             }
         )
         user_id = 100
-        ensure_player(user_id=user_id, name="casual", fullname="Casual Player")
+        ensure_player(test_db, user_id=user_id, name="casual", fullname="Casual Player").unwrap()
+        update_fund_balance(test_db, 0).unwrap()
 
         # 1. Автоматическое списание за игру (бот делает при закрытии голосования)
-        update_player_balance(user_id, -150)
-        poll_template_id = _get_poll_template_id("Пятница")
+        update_player_balance(test_db, user_id, -150).unwrap()
+        poll_template_id = _get_poll_template_id(test_db, "Пятница").unwrap()
         add_transaction(
+            test_db,
             user_id,
             -150,
             "Зал: Пятница (07.02.2026)",
             poll_template_id=poll_template_id,
             poll_name_snapshot="Пятница",
-        )
+        ).unwrap()
 
-        player = get_player_balance(user_id)
-        assert player is not None
-        assert player["balance"] == -150
-        assert get_fund_balance() == 0  # Касса не меняется
+        player = get_player_balance(test_db, user_id).unwrap()
+        assert player == -150
+        assert get_fund_balance(test_db).unwrap() == 0  # Касса не меняется
 
         # 2. Игрок оплачивает через /pay
-        update_player_balance(user_id, 150)
-        update_fund_balance(150)
-        add_transaction(user_id, 150, "Оплата (admin: @admin)")
+        update_player_balance(test_db, user_id, 150)
+        update_fund_balance(test_db, 150)
+        add_transaction(test_db, user_id, 150, "Оплата (admin: @admin)").unwrap()
 
-        player = get_player_balance(user_id)
-        assert player is not None
-        assert player["balance"] == 0
-        assert get_fund_balance() == 150  # Касса увеличилась
+        player = get_player_balance(test_db, user_id).unwrap()
+        assert player == 0
+        assert get_fund_balance(test_db).unwrap() == 150  # Касса увеличилась
 
         # 3. Оплата зала из кассы
-        record_hall_payment(poll_template_id, "2026-02", 6000)
-        update_fund_balance(-6000)
+        record_hall_payment(test_db, poll_template_id, "2026-02", 6000)
+        update_fund_balance(test_db, -6000).unwrap()
 
-        assert get_fund_balance() == -5850  # Касса ушла в минус
-        unpaid = get_unpaid_halls("2026-02")
+        assert get_fund_balance(test_db).unwrap() == -5850  # Касса ушла в минус
+        unpaid = get_unpaid_halls(test_db, "2026-02").unwrap()
         assert len(unpaid) == 0  # Зал оплачен
 
-    def test_restore_does_not_affect_fund(self, temp_db):
+    def test_restore_does_not_affect_fund(self, test_db: DB):
         """Восстановление баланса не влияет на кассу."""
-        init_db()
+
+        update_fund_balance(test_db, 0).unwrap()
+
         user_id = 200
-        ensure_player(user_id=user_id, name="noshow", fullname="No Show")
+        ensure_player(test_db, user_id=user_id, name="noshow", fullname="No Show").unwrap()
 
         # Списание за игру
-        update_player_balance(user_id, -150)
-        add_transaction(user_id, -150, "Зал: Пятница (07.02.2026)")
+        update_player_balance(test_db, user_id, -150)
+        add_transaction(test_db, user_id, -150, "Зал: Пятница (07.02.2026)").unwrap()
 
         # Восстановление (/restore)
-        update_player_balance(user_id, 150)
-        add_transaction(user_id, 150, "Восстановление (admin: @admin)")
+        update_player_balance(test_db, user_id, 150).unwrap()
+        add_transaction(test_db, user_id, 150, "Восстановление (admin: @admin)").unwrap()
         # НЕ вызываем update_fund_balance!
 
-        player = get_player_balance(user_id)
-        assert player is not None
-        assert player["balance"] == 0
-        assert get_fund_balance() == 0  # Касса не изменилась
+        player = get_player_balance(test_db, user_id).unwrap()
+        assert player == 0
+        assert get_fund_balance(test_db).unwrap() == 0  # Касса не изменилась
 
-    def test_subscription_then_hall_payment(self, temp_db):
+    def test_subscription_then_hall_payment(self, test_db: DB):
         """Абонемент списывается с баланса, затем зал оплачивается из кассы."""
-        init_db()
         save_poll_template(
+            test_db,
             {
                 "name": "Пятница",
                 "message": "Игра",
@@ -814,13 +801,13 @@ class TestFullPaymentFlow:
         )
 
         # Касса накопилась от предыдущих оплат
-        update_fund_balance(2000)
+        update_fund_balance(test_db, 2000).unwrap()
 
         # Подписчики: 10 человек
         num_subs = 10
         for i in range(num_subs):
             uid = 1000 + i
-            ensure_player(user_id=uid, name=f"sub{i}", fullname=f"Sub {i}")
+            ensure_player(test_db,user_id=uid, name=f"sub{i}", fullname=f"Sub {i}").unwrap()
 
         # В новой модели цена абонемента — 400-500₽ за зал (единая)
         per_person = 450  # примерная цена
@@ -828,21 +815,21 @@ class TestFullPaymentFlow:
         # Списание с подписчиков (касса НЕ меняется)
         for i in range(num_subs):
             uid = 1000 + i
-            update_player_balance(uid, -per_person)
-            add_transaction(uid, -per_person, "Абонемент: Пятница (2026-03)")
+            update_player_balance(test_db, uid, -per_person).unwrap()
+            add_transaction(test_db, uid, -per_person, "Абонемент: Пятница (2026-03)").unwrap()
 
-        assert get_fund_balance() == 2000  # Касса не изменилась
+        assert get_fund_balance(test_db).unwrap() == 2000  # Касса не изменилась
 
         # Оплата зала из кассы
-        record_hall_payment(_get_poll_template_id("Пятница"), "2026-03", 6000)
-        update_fund_balance(-6000)
+        record_hall_payment(test_db, _get_poll_template_id(test_db, "Пятница").unwrap(), "2026-03", 6000)
+        update_fund_balance(test_db, -6000).unwrap()
 
-        assert get_fund_balance() == -4000
+        assert get_fund_balance(test_db).unwrap() == -4000
 
         # Подписчики оплачивают свои долги
         for i in range(num_subs):
             uid = 1000 + i
-            update_player_balance(uid, per_person)
-            update_fund_balance(per_person)
+            update_player_balance(test_db, uid, per_person).unwrap()
+            update_fund_balance(test_db, per_person).unwrap()
 
-        assert get_fund_balance() == 2000 + (per_person * num_subs) - 6000
+        assert get_fund_balance(test_db).unwrap() == 2000 + (per_person * num_subs) - 6000
