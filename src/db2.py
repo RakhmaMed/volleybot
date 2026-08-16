@@ -668,7 +668,7 @@ def set_player_guest(db: DB, user_id: int, is_guest: bool) -> Result[None, str]:
     )
     if cursor.rowcount > 0:
         return Success(None)
-    return Failure("❌ Ошибка при изменении гостевого статуса игрока {user_id}")
+    return Failure(f"❌ Ошибка при изменении гостевого статуса игрока {user_id}")
 
 @transactional
 def get_guest_players(db: DB) -> Result[list[Player], str]:
