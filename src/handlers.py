@@ -28,6 +28,7 @@ from aiogram.types import (
     Update,
     User,
 )
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from .db import (
     add_poll_subscription,
@@ -37,6 +38,7 @@ from .db import (
     get_all_players,
     get_fund_balance,
     get_guest_players,
+    get_monthly_game_by_target_month,
     get_open_monthly_game,
     get_player_balance,
     get_player_info,
@@ -108,9 +110,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="subs", description="Абонементы по дням / добавить"),
         BotCommand(command="pay", description="Изменить баланс / оплата зала"),
         BotCommand(command="restore", description="Восстановить баланс (без кассы)"),
-        BotCommand(
-            command="open_monthly", description="Тест: открыть опрос абонемента"
-        ),
+        BotCommand(command="open_monthly", description="Открыть абонемент: YYYY-MM"),
         BotCommand(
             command="close_monthly", description="Тест: закрыть опрос абонемента"
         ),
@@ -1936,7 +1936,7 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
 
     @router.message(Command("open_monthly"))
     async def open_monthly_handler(message: Message) -> None:
-        """Тест: вручную открыть месячный опрос на абонемент (только для администратора)."""
+        """Вручную открывает абонемент на явно указанный месяц."""
         user = message.from_user
         if user is None:
             return
@@ -1946,35 +1946,88 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         if not is_admin:
             return
 
+        command_parts = (message.text or "").split()
+        if len(command_parts) != 2:
+            await safe_reply(
+                message,
+                "❌ Укажите месяц абонемента: <code>/open_monthly YYYY-MM</code>\n"
+                "Например: <code>/open_monthly 2026-09</code>",
+                parse_mode="HTML",
+                action_name="reply to /open_monthly usage",
+            )
+            return
+
+        target_month = command_parts[1]
+        try:
+            parsed_target_month = datetime.strptime(target_month, "%Y-%m")
+        except ValueError:
+            parsed_target_month = None
+        if (
+            parsed_target_month is None
+            or parsed_target_month.strftime("%Y-%m") != target_month
+        ):
+            await safe_reply(
+                message,
+                "❌ Неверный месяц. Используйте формат <code>YYYY-MM</code>, "
+                "например <code>2026-09</code>.",
+                parse_mode="HTML",
+                action_name="reply to /open_monthly invalid month",
+            )
+            return
+
+        existing_game = get_monthly_game_by_target_month(target_month)
+        if existing_game is not None:
+            await safe_reply(
+                message,
+                f"ℹ️ Опрос на <code>{target_month}</code> уже существует "
+                f"(статус: <code>{escape_html(str(existing_game.get('status', 'unknown')))}</code>), "
+                "повторное открытие запрещено.",
+                parse_mode="HTML",
+                action_name="reply to /open_monthly duplicate target",
+            )
+            return
+
+        if get_open_monthly_game() is not None:
+            await safe_reply(
+                message,
+                "ℹ️ Другой месячный опрос уже открыт.",
+                action_name="reply to /open_monthly already open",
+            )
+            return
+
         poll_service: PollService = dp.workflow_data["poll_service"]
-        if poll_service.build_monthly_subscription_poll_spec() is None:
+        if poll_service.build_monthly_subscription_poll_spec(target_month) is None:
             await safe_reply(
                 message,
                 "❌ Нет платных залов. Добавьте опросы с cost > 0 в БД.",
                 action_name="reply to /open_monthly missing halls",
             )
             return
-        if get_open_monthly_game() is not None:
+
+        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
+        if not bot_state_service.is_enabled():
             await safe_reply(
                 message,
-                "ℹ️ Месячный опрос уже открыт.",
-                action_name="reply to /open_monthly already open",
+                "❌ Бот выключен. Сначала используйте /start.",
+                action_name="reply to /open_monthly bot disabled",
             )
             return
 
-        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
         chat_id = bot_state_service.get_chat_id()
         new_chat_id = await poll_service.open_monthly_subscription_poll(
             bot,
             chat_id,
-            bot_state_service.is_enabled(),
+            True,
+            target_month,
         )
         if new_chat_id != chat_id:
             bot_state_service.set_chat_id(new_chat_id)
 
         await safe_reply(
             message,
-            "✅ Месячный опрос открыт. Проголосуйте, затем используйте /close_monthly для закрытия.",
+            f"✅ Месячный опрос на <code>{target_month}</code> открыт. "
+            "После голосования используйте /close_monthly.",
+            parse_mode="HTML",
             action_name="reply to /open_monthly success",
         )
 
@@ -1995,12 +2048,16 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
         if monthly_game is None:
             await safe_reply(
                 message,
-                "❌ Нет активного опроса. Сначала откройте месячный опрос: /open_monthly",
+                "❌ Нет активного опроса. Сначала откройте месячный опрос: "
+                "/open_monthly YYYY-MM",
                 action_name="reply to /close_monthly missing poll",
             )
             return
 
         await poll_service.close_poll(bot, str(monthly_game["poll_id"]))
+        scheduler: AsyncIOScheduler = dp.workflow_data["scheduler"]
+        bot_state_service: BotStateService = dp.workflow_data["bot_state_service"]
+        refresh_scheduler(scheduler, bot, bot_state_service, poll_service)
         await safe_reply(
             message,
             "✅ Месячный опрос закрыт. Расчёт абонемента выполнен.",

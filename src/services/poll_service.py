@@ -38,6 +38,7 @@ from ..db import (
     ensure_player,
     get_fund_balance,
     get_game,
+    get_monthly_game_by_target_month,
     get_open_game_by_template_id,
     get_open_games,
     get_open_monthly_game,
@@ -469,8 +470,18 @@ class PollService:
             target_month_snapshot=None,
         )
 
-    def build_monthly_subscription_poll_spec(self) -> PollCreationSpec | None:
+    def build_monthly_subscription_poll_spec(
+        self, target_month: str | None = None
+    ) -> PollCreationSpec | None:
         """Собирает spec месячного опроса из актуальных данных БД."""
+        if target_month is not None:
+            try:
+                parsed_target_month = datetime.strptime(target_month, "%Y-%m")
+            except ValueError as error:
+                raise ValueError("target_month must use YYYY-MM format") from error
+            if parsed_target_month.strftime("%Y-%m") != target_month:
+                raise ValueError("target_month must use YYYY-MM format")
+
         poll_templates = get_poll_templates()
         paid_polls = [
             p
@@ -489,13 +500,15 @@ class PollService:
         option_poll_names = tuple(str(poll.get("name") or "") for poll in paid_polls) + (
             None,
         )
-        target_month_snapshot = get_next_month_str(datetime.now(timezone.utc))
+        target_month_snapshot = target_month or get_next_month_str(
+            datetime.now(timezone.utc)
+        )
 
         return PollCreationSpec(
             kind="monthly_subscription",
             poll_name="monthly_subscription",
             question=(
-                "Абонемент на следующий месяц.\n"
+                f"Абонемент на {target_month_snapshot}.\n"
                 "Выберите игры для подписки. Можно выбрать несколько вариантов."
             ),
             options=options,
@@ -534,13 +547,25 @@ class PollService:
         bot: Bot,
         chat_id: int,
         bot_enabled: bool,
+        target_month: str | None = None,
     ) -> int:
         """Открывает месячный опрос по актуальным данным БД."""
         if get_open_monthly_game() is not None:
             logging.info("ℹ️ Месячный опрос уже открыт, повторное открытие пропущено")
             return chat_id
 
-        spec = self.build_monthly_subscription_poll_spec()
+        if (
+            target_month is not None
+            and get_monthly_game_by_target_month(target_month) is not None
+        ):
+            logging.warning(
+                "⚠️ Месячный опрос для target_month=%s уже существует, "
+                "повторное открытие пропущено",
+                target_month,
+            )
+            return chat_id
+
+        spec = self.build_monthly_subscription_poll_spec(target_month)
         if spec is None:
             logging.info("ℹ️ Платные опросы не найдены, открытие месячного опроса пропущено")
             return chat_id

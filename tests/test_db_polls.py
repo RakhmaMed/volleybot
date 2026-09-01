@@ -8,6 +8,7 @@ from src.db import (
     add_poll_subscription,
     close_game,
     create_game,
+    get_monthly_game_by_target_month,
     get_open_game_by_template_id,
     get_open_monthly_game,
     get_player_stats,
@@ -194,6 +195,27 @@ class TestDBPolls:
                 ("regular-guest", 123),
             ).fetchone()
             assert row == (1, "first_games")
+
+    def test_get_monthly_game_by_target_month_finds_closed_game(self, temp_db):
+        init_db()
+        create_game(
+            poll_id="monthly-september",
+            kind="monthly_subscription",
+            status="closed",
+            poll_template_id=None,
+            poll_name_snapshot="monthly_subscription",
+            question_snapshot="Абонемент?",
+            chat_id=1,
+            poll_message_id=20,
+            opened_at="2026-08-31T19:00:00+00:00",
+            target_month_snapshot="2026-09",
+        )
+
+        game = get_monthly_game_by_target_month("2026-09")
+
+        assert game is not None
+        assert game["poll_id"] == "monthly-september"
+        assert get_monthly_game_by_target_month("2026-10") is None
 
     def test_monthly_votes_and_stats(self, temp_db):
         init_db()

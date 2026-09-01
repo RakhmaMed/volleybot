@@ -22,8 +22,8 @@ from src.db import (
     init_db,
     load_state,
     save_game_participants,
-    save_state,
     save_poll_template,
+    save_state,
     update_player_balance,
 )
 from src.poll import (
@@ -425,12 +425,42 @@ class TestPollService:
         assert spec is not None
         assert spec.kind == "monthly_subscription"
         assert spec.question == (
-            "Абонемент на следующий месяц.\n"
+            "Абонемент на 2026-05.\n"
             "Выберите игры для подписки. Можно выбрать несколько вариантов."
         )
         assert spec.options == ("Понедельник — 18:30 МСК", "Смотреть результат")
         assert spec.option_poll_names == ("Понедельник", None)
         assert spec.target_month_snapshot == "2026-05"
+
+    def test_build_monthly_subscription_poll_spec_uses_explicit_target_month(self):
+        """Явный месяц не должен пересчитываться относительно текущей даты."""
+        service = PollService()
+
+        with patch(
+            "src.services.poll_service.get_poll_templates",
+            return_value=[
+                {
+                    "name": "Пятница",
+                    "game_hour_utc": 16,
+                    "game_minute_utc": 0,
+                    "cost": 100,
+                    "enabled": 1,
+                }
+            ],
+        ), patch("src.services.poll_service.get_next_month_str") as get_next_month:
+            spec = service.build_monthly_subscription_poll_spec("2026-09")
+
+        assert spec is not None
+        assert spec.target_month_snapshot == "2026-09"
+        assert spec.question.startswith("Абонемент на 2026-09.\n")
+        get_next_month.assert_not_called()
+
+    def test_build_monthly_subscription_poll_spec_rejects_invalid_target_month(self):
+        """Явный месяц должен строго соответствовать календарному YYYY-MM."""
+        service = PollService()
+
+        with pytest.raises(ValueError, match="YYYY-MM"):
+            service.build_monthly_subscription_poll_spec("2026-13")
 
     def test_build_monthly_subscription_poll_spec_returns_none_without_paid_polls(self):
         """Если нет enabled платных залов, monthly spec не строится."""

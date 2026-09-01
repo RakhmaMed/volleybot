@@ -23,6 +23,9 @@ from .db import (
 from .services import BotStateService, PollService
 from .types import PollTemplate
 
+MONTHLY_MISFIRE_GRACE_SECONDS = 60 * 60
+MONTHLY_RECONCILIATION_JOB_ID = "monthly_subs_reconcile"
+
 
 def create_poll_job(
     bot: Bot,
@@ -31,6 +34,7 @@ def create_poll_job(
     poll_template_id: int | None = None,
     *,
     monthly: bool = False,
+    monthly_target_month: str | None = None,
 ) -> Callable[[], Awaitable[None]]:
     """
     Создаёт асинхронную задачу для отправки опроса.
@@ -47,11 +51,19 @@ def create_poll_job(
     async def job() -> None:
         chat_id: int = bot_state_service.get_chat_id()
         if monthly:
-            new_chat_id = await poll_service.open_monthly_subscription_poll(
-                bot,
-                chat_id,
-                bot_state_service.is_enabled(),
-            )
+            if monthly_target_month is None:
+                new_chat_id = await poll_service.open_monthly_subscription_poll(
+                    bot,
+                    chat_id,
+                    bot_state_service.is_enabled(),
+                )
+            else:
+                new_chat_id = await poll_service.open_monthly_subscription_poll(
+                    bot,
+                    chat_id,
+                    bot_state_service.is_enabled(),
+                    monthly_target_month,
+                )
         else:
             if poll_template_id is None:
                 logging.warning(
@@ -75,6 +87,9 @@ def create_close_poll_job(
     poll_service: PollService,
     poll_template_id: int | None = None,
     monthly: bool = False,
+    *,
+    scheduler: AsyncIOScheduler | None = None,
+    bot_state_service: BotStateService | None = None,
 ) -> Callable[[], Awaitable[None]]:
     """
     Создаёт асинхронную задачу для закрытия опроса.
@@ -100,6 +115,17 @@ def create_close_poll_job(
         if game is None:
             return
         await poll_service.close_poll(bot, str(game["poll_id"]))
+
+        if monthly and scheduler is not None and bot_state_service is not None:
+            if get_open_monthly_game() is None:
+                reconcile_monthly_subscription_jobs(
+                    scheduler, bot, bot_state_service, poll_service
+                )
+            else:
+                logging.warning(
+                    "⚠️ Месячный опрос остался открытым после закрытия; "
+                    "следующий цикл пока не запланирован"
+                )
 
     return job
 
@@ -133,6 +159,52 @@ def create_reminder_job(
     return job
 
 
+def reconcile_monthly_subscription_jobs(
+    scheduler: AsyncIOScheduler,
+    bot: Bot,
+    bot_state_service: BotStateService,
+    poll_service: PollService,
+) -> None:
+    """Восстанавливает месячные jobs из актуального состояния БД."""
+    enabled_poll_templates = [
+        poll for poll in get_poll_templates() if int(poll.get("enabled", 1) or 0) == 1
+    ]
+    _schedule_monthly_subscription_poll(
+        scheduler,
+        bot,
+        bot_state_service,
+        poll_service,
+        enabled_poll_templates,
+    )
+
+
+def _schedule_monthly_reconciliation_job(
+    scheduler: AsyncIOScheduler,
+    bot: Bot,
+    bot_state_service: BotStateService,
+    poll_service: PollService,
+) -> None:
+    """Добавляет ежедневную страховочную сверку месячного расписания."""
+
+    async def reconciliation_job() -> None:
+        reconcile_monthly_subscription_jobs(
+            scheduler, bot, bot_state_service, poll_service
+        )
+
+    scheduler.add_job(
+        reconciliation_job,
+        trigger=CronTrigger(
+            hour=3,
+            minute=5,
+            timezone="Europe/Moscow",
+        ),
+        id=MONTHLY_RECONCILIATION_JOB_ID,
+        name="Абонемент (сверка расписания)",
+        replace_existing=True,
+        misfire_grace_time=MONTHLY_MISFIRE_GRACE_SECONDS,
+    )
+
+
 def setup_scheduler(
     scheduler: AsyncIOScheduler,
     bot: Bot,
@@ -155,6 +227,9 @@ def setup_scheduler(
         id="backup_cleanup",
         name="Бэкапы (очистка)",
         replace_existing=True,
+    )
+    _schedule_monthly_reconciliation_job(
+        scheduler, bot, bot_state_service, poll_service
     )
 
     # Загружаем шаблоны опросов из БД
@@ -220,6 +295,10 @@ def refresh_scheduler(
     for job_id in jobs_to_remove:
         scheduler.remove_job(job_id)
         logging.debug(f"🗑️ Удалена задача: {job_id}")
+
+    _schedule_monthly_reconciliation_job(
+        scheduler, bot, bot_state_service, poll_service
+    )
 
     # Перезагружаем из БД
     poll_templates = get_poll_templates()
@@ -480,6 +559,8 @@ def _schedule_monthly_subscription_poll(
             return
         open_moscow = last_game.replace(hour=22, minute=0, second=0, microsecond=0)
 
+    target_month = next_month_start.strftime("%Y-%m")
+
     # Перед открытием сбрасываем старые платные подписки, на следующий день
     # напоминаем о дедлайне, а закрываем голосование ровно через 24 часа.
     clear_moscow = open_moscow - timedelta(minutes=1)
@@ -505,6 +586,7 @@ def _schedule_monthly_subscription_poll(
         id=clear_job_id,
         name="Абонемент (очистка подписок)",
         replace_existing=True,
+        misfire_grace_time=MONTHLY_MISFIRE_GRACE_SECONDS,
     )
 
     poll_job = create_poll_job(
@@ -512,6 +594,7 @@ def _schedule_monthly_subscription_poll(
         bot_state_service,
         poll_service,
         monthly=True,
+        monthly_target_month=target_month,
     )
     scheduler.add_job(
         poll_job,
@@ -519,6 +602,7 @@ def _schedule_monthly_subscription_poll(
         id=open_job_id,
         name="Абонемент (открытие)",
         replace_existing=True,
+        misfire_grace_time=MONTHLY_MISFIRE_GRACE_SECONDS,
     )
 
     reminder_text = (
@@ -533,21 +617,30 @@ def _schedule_monthly_subscription_poll(
         id=reminder_job_id,
         name="Абонемент (напоминание)",
         replace_existing=True,
+        misfire_grace_time=MONTHLY_MISFIRE_GRACE_SECONDS,
     )
 
-    close_job = create_close_poll_job(bot, poll_service, monthly=True)
+    close_job = create_close_poll_job(
+        bot,
+        poll_service,
+        monthly=True,
+        scheduler=scheduler,
+        bot_state_service=bot_state_service,
+    )
     scheduler.add_job(
         close_job,
         trigger=DateTrigger(run_date=to_utc(close_moscow)),
         id=close_job_id,
         name="Абонемент (закрытие)",
         replace_existing=True,
+        misfire_grace_time=MONTHLY_MISFIRE_GRACE_SECONDS,
     )
 
     logging.info(
         "📆 Месячный опрос на абонемент запланирован: "
-        f"очистка={clear_moscow}, открытие={open_moscow}, "
-        f"напоминание={reminder_moscow}, закрытие={close_moscow}"
+        f"target_month={target_month}, очистка={clear_moscow}, "
+        f"открытие={open_moscow}, напоминание={reminder_moscow}, "
+        f"закрытие={close_moscow}"
     )
 
 
@@ -597,6 +690,7 @@ def _schedule_active_monthly_subscription_poll(
             id=reminder_job_id,
             name="Абонемент (напоминание)",
             replace_existing=True,
+            misfire_grace_time=MONTHLY_MISFIRE_GRACE_SECONDS,
         )
     else:
         logging.info(
@@ -612,13 +706,20 @@ def _schedule_active_monthly_subscription_poll(
             close_run_moscow,
         )
 
-    close_job = create_close_poll_job(bot, poll_service, monthly=True)
+    close_job = create_close_poll_job(
+        bot,
+        poll_service,
+        monthly=True,
+        scheduler=scheduler,
+        bot_state_service=bot_state_service,
+    )
     scheduler.add_job(
         close_job,
         trigger=DateTrigger(run_date=to_utc(close_run_moscow)),
         id=close_job_id,
         name="Абонемент (закрытие)",
         replace_existing=True,
+        misfire_grace_time=MONTHLY_MISFIRE_GRACE_SECONDS,
     )
 
     logging.info(

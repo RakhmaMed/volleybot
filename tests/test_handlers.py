@@ -1721,15 +1721,92 @@ class TestMonthlyAndStatsHandlers:
             date=datetime.now(),
             chat=chat,
             from_user=admin_user,
-            text="/open_monthly",
+            text="/open_monthly 2026-09",
         )
         await dp.feed_update(bot, Update(update_id=1, message=message))
 
+        poll_service.build_monthly_subscription_poll_spec.assert_called_once_with(
+            "2026-09"
+        )
         poll_service.open_monthly_subscription_poll.assert_called_once_with(
             bot,
             -1001234567890,
             True,
+            "2026-09",
         )
+
+    async def test_open_monthly_requires_explicit_valid_target_month(
+        self, admin_user, admin_service, temp_db
+    ):
+        init_db()
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        poll_service = PollService()
+        poll_service.open_monthly_subscription_poll = AsyncMock()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": poll_service,
+            }
+        )
+        register_handlers(dp, bot)
+        chat = Chat(id=-1001234567890, type="supergroup")
+
+        for update_id, text in enumerate(
+            ("/open_monthly", "/open_monthly 2026-13", "/open_monthly 2026-9"),
+            start=1,
+        ):
+            message = Message(
+                message_id=update_id,
+                date=datetime.now(),
+                chat=chat,
+                from_user=admin_user,
+                text=text,
+            )
+            await dp.feed_update(bot, Update(update_id=update_id, message=message))
+
+        poll_service.open_monthly_subscription_poll.assert_not_awaited()
+
+    async def test_open_monthly_rejects_duplicate_target_month(
+        self, admin_user, admin_service, temp_db
+    ):
+        init_db()
+        create_game(
+            poll_id="monthly-existing",
+            kind="monthly_subscription",
+            status="closed",
+            poll_template_id=None,
+            poll_name_snapshot="monthly_subscription",
+            question_snapshot="Абонемент?",
+            chat_id=-1001234567890,
+            poll_message_id=1,
+            opened_at="2026-08-31T19:00:00+00:00",
+            target_month_snapshot="2026-09",
+        )
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        poll_service = PollService()
+        poll_service.open_monthly_subscription_poll = AsyncMock()
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": BotStateService(default_chat_id=-1001234567890),
+                "poll_service": poll_service,
+            }
+        )
+        register_handlers(dp, bot)
+        message = Message(
+            message_id=1,
+            date=datetime.now(),
+            chat=Chat(id=-1001234567890, type="supergroup"),
+            from_user=admin_user,
+            text="/open_monthly 2026-09",
+        )
+
+        await dp.feed_update(bot, Update(update_id=1, message=message))
+
+        poll_service.open_monthly_subscription_poll.assert_not_awaited()
 
     async def test_close_monthly_uses_open_monthly_game(
         self, admin_user, admin_service, temp_db
@@ -1751,11 +1828,13 @@ class TestMonthlyAndStatsHandlers:
         dp = Dispatcher()
         poll_service = PollService()
         poll_service.close_poll = AsyncMock()
+        scheduler = MagicMock()
         dp.workflow_data.update(
             {
                 "admin_service": admin_service,
                 "bot_state_service": BotStateService(default_chat_id=-1001234567890),
                 "poll_service": poll_service,
+                "scheduler": scheduler,
             }
         )
         register_handlers(dp, bot)
@@ -1768,8 +1847,15 @@ class TestMonthlyAndStatsHandlers:
             from_user=admin_user,
             text="/close_monthly",
         )
-        await dp.feed_update(bot, Update(update_id=1, message=message))
+        with patch("src.handlers.refresh_scheduler") as refresh_scheduler_mock:
+            await dp.feed_update(bot, Update(update_id=1, message=message))
         poll_service.close_poll.assert_called_once_with(bot, "monthly-1")
+        refresh_scheduler_mock.assert_called_once_with(
+            scheduler,
+            bot,
+            dp.workflow_data["bot_state_service"],
+            poll_service,
+        )
 
     async def test_stats_summary_command(self, admin_user, admin_service, temp_db):
         init_db()

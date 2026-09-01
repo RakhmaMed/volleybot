@@ -7,8 +7,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from src.db import create_game, init_db
+from src.db import close_game, create_game, init_db
 from src.scheduler import (
+    MONTHLY_MISFIRE_GRACE_SECONDS,
     create_close_poll_job,
     create_poll_job,
     refresh_scheduler,
@@ -25,6 +26,37 @@ class FixedDatetime(datetime):
         if tz is None:
             return cls.fixed_now_utc.replace(tzinfo=None)
         return cls.fixed_now_utc.astimezone(tz)
+
+
+def _paid_monthly_poll_templates() -> list[dict]:
+    return [
+        {
+            "id": 1,
+            "name": "Понедельник",
+            "message": "Играем в понедельник?",
+            "open_day": "sun",
+            "open_hour_utc": 10,
+            "open_minute_utc": 0,
+            "game_day": "mon",
+            "game_hour_utc": 16,
+            "game_minute_utc": 0,
+            "cost": 150,
+            "enabled": 1,
+        },
+        {
+            "id": 2,
+            "name": "Пятница",
+            "message": "Играем в пятницу?",
+            "open_day": "thu",
+            "open_hour_utc": 10,
+            "open_minute_utc": 0,
+            "game_day": "fri",
+            "game_hour_utc": 16,
+            "game_minute_utc": 0,
+            "cost": 150,
+            "enabled": 1,
+        },
+    ]
 
 
 def _create_open_monthly_game(opened_at: str = "2026-04-27T19:00:00+00:00") -> None:
@@ -174,9 +206,10 @@ class TestSetupScheduler:
         with patch("src.scheduler.get_poll_templates", return_value=test_polls):
             setup_scheduler(scheduler, bot, bot_state_service, poll_service)
 
-            # Проверяем, что задачи добавлены
+            # Открытие, закрытие, очистка бэкапов и monthly reconciliation.
             jobs = scheduler.get_jobs()
-            assert len(jobs) == 3  # Открытие, закрытие и очистка старых бэкапов
+            assert len(jobs) == 4
+            assert "Абонемент (сверка расписания)" in {job.name for job in jobs}
 
     def test_setup_scheduler_skips_disabled_templates(self, temp_db):
         """Планировщик не должен создавать jobs для выключенных шаблонов."""
@@ -215,7 +248,7 @@ class TestSetupScheduler:
             setup_scheduler(scheduler, bot, bot_state_service, poll_service)
 
         jobs = scheduler.get_jobs()
-        assert len(jobs) == 3
+        assert len(jobs) == 4
         job_names = {job.name for job in jobs}
         assert "enabled_poll (открытие)" in job_names
         assert "enabled_poll (закрытие)" in job_names
@@ -235,8 +268,100 @@ class TestSetupScheduler:
             setup_scheduler(scheduler, bot, bot_state_service, poll_service)
 
             jobs = scheduler.get_jobs()
-            assert len(jobs) == 1
-            assert jobs[0].name == "Бэкапы (очистка)"
+            assert len(jobs) == 2
+            assert {job.name for job in jobs} == {
+                "Бэкапы (очистка)",
+                "Абонемент (сверка расписания)",
+            }
+
+    @pytest.mark.asyncio
+    async def test_monthly_close_schedules_next_cycle_without_restart(
+        self, monkeypatch: pytest.MonkeyPatch, temp_db
+    ):
+        """Закрытие monthly poll сразу планирует опрос на следующий месяц."""
+        init_db()
+        FixedDatetime.fixed_now_utc = datetime(
+            2026, 7, 30, 12, 0, tzinfo=timezone.utc
+        )
+        monkeypatch.setattr("src.scheduler.datetime", FixedDatetime)
+
+        scheduler = AsyncIOScheduler(timezone="UTC")
+        scheduler.start(paused=True)
+        bot = MagicMock()
+        bot_state_service = BotStateService(default_chat_id=-1001234567890)
+        poll_service = PollService()
+        poll_service.open_monthly_subscription_poll = AsyncMock(
+            return_value=-1001234567890
+        )
+
+        async def close_monthly_poll(_bot, poll_id: str) -> None:
+            close_game(poll_id, closed_at="2026-08-01T19:00:00+00:00")
+
+        poll_service.close_poll = AsyncMock(side_effect=close_monthly_poll)
+
+        with patch(
+            "src.scheduler.get_poll_templates",
+            return_value=_paid_monthly_poll_templates(),
+        ):
+            setup_scheduler(scheduler, bot, bot_state_service, poll_service)
+
+            first_open_job = scheduler.get_job("monthly_subs_open")
+            assert first_open_job is not None
+            assert first_open_job.trigger.run_date == datetime(
+                2026, 7, 31, 19, 0, tzinfo=ZoneInfo("UTC")
+            )
+            assert (
+                first_open_job.misfire_grace_time
+                == MONTHLY_MISFIRE_GRACE_SECONDS
+            )
+
+            await first_open_job.func()
+            poll_service.open_monthly_subscription_poll.assert_awaited_once_with(
+                bot,
+                -1001234567890,
+                True,
+                "2026-08",
+            )
+
+            create_game(
+                poll_id="monthly-august",
+                kind="monthly_subscription",
+                status="open",
+                poll_template_id=None,
+                poll_name_snapshot="monthly_subscription",
+                question_snapshot="Абонемент на 2026-08.",
+                chat_id=-1001234567890,
+                poll_message_id=20,
+                opened_at="2026-07-31T19:00:00+00:00",
+                target_month_snapshot="2026-08",
+            )
+            first_close_job = scheduler.get_job("monthly_subs_close")
+            assert first_close_job is not None
+
+            FixedDatetime.fixed_now_utc = datetime(
+                2026, 8, 1, 19, 0, tzinfo=timezone.utc
+            )
+            await first_close_job.func()
+
+            next_open_job = scheduler.get_job("monthly_subs_open")
+            assert next_open_job is not None
+            assert next_open_job.trigger.run_date == datetime(
+                2026, 8, 31, 19, 0, tzinfo=ZoneInfo("UTC")
+            )
+            assert (
+                next_open_job.misfire_grace_time
+                == MONTHLY_MISFIRE_GRACE_SECONDS
+            )
+
+            await next_open_job.func()
+            poll_service.open_monthly_subscription_poll.assert_awaited_with(
+                bot,
+                -1001234567890,
+                True,
+                "2026-09",
+            )
+
+        scheduler.shutdown()
 
     def test_setup_scheduler_restores_active_monthly_jobs_before_reminder(
         self, monkeypatch: pytest.MonkeyPatch, temp_db

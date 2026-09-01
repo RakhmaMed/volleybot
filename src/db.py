@@ -1744,6 +1744,32 @@ def get_open_monthly_game() -> dict[str, Any] | None:
         return None
 
 
+def get_monthly_game_by_target_month(target_month: str) -> dict[str, Any] | None:
+    """Возвращает последний месячный опрос для указанного месяца абонемента."""
+    try:
+        init_db()
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT *
+                FROM games
+                WHERE kind = 'monthly_subscription'
+                  AND target_month_snapshot = ?
+                ORDER BY opened_at DESC
+                LIMIT 1
+                """,
+                (target_month,),
+            ).fetchone()
+        return dict(row) if row else None
+    except sqlite3.Error:
+        logging.exception(
+            "❌ Ошибка при получении месячного опроса для target_month=%s",
+            target_month,
+        )
+        return None
+
+
 def save_game_participants(
     game_poll_id: str, participants: list[dict[str, Any]]
 ) -> None:
