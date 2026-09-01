@@ -8,6 +8,7 @@ from src.db2 import (
     get_player_info,
     toggle_player_ball_donate,
 )
+from src.types import NotFound
 from src.utils import get_player_name
 
 
@@ -238,7 +239,8 @@ class TestGetPlayerInfo:
 
     def test_get_player_info_returns_none_for_missing(self, test_db: DB):
         """get_player_info возвращает None для несуществующего игрока."""
-        assert get_player_info(test_db, 99999) == Failure("Player not found")
+        # <Failure: NotFound(entity='player', key=99999)>
+        assert get_player_info(test_db, 99999) == Failure(NotFound(entity="player", key=99999))
 
 
 class TestTogglePlayerBallDonate:
@@ -274,7 +276,7 @@ class TestTogglePlayerBallDonate:
 
     def test_toggle_player_ball_donate_returns_none_for_missing_player(self, test_db: DB):
         result = toggle_player_ball_donate(test_db, 99999)
-        assert result == Failure("Player not found")
+        assert result == Failure(NotFound(entity="player", key=99999))
 
 
 class TestGetPlayerNameFromDB:

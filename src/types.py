@@ -1,10 +1,80 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Literal, NotRequired, TypedDict
+
+from returns.result import Result
+
+# --- Generic Types
 
 type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
 
+@dataclass(frozen=True, slots=True)
+class InvalidData:
+    field: str
+    detail: str
+
+
+# ── DB Types ────────────────────────────────────────────
+
+class TransactionMode(StrEnum):
+    DEFERRED = "DEFERRED"
+    IMMEDIATE = "IMMEDIATE"
+
+class ConstraintKind(StrEnum):
+    UNIQUE = "unique"
+    NOT_NULL = "not null"
+    CHECK = "check"
+    PRIMARY_KEY = "primary key"
+    FOREIGN_KEY = "foreign key"
+
+
+@dataclass(frozen=True, slots=True)
+class NotFound:
+    entity: str
+    key: object
+
+
+@dataclass(frozen=True, slots=True)
+class AlreadyExists:
+    entity: str
+    key: object
+
+
+@dataclass(frozen=True, slots=True)
+class ConstraintViolation:
+    kind: ConstraintKind
+    operation: str
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class InvariantViolation:
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class StorageFailure:
+    operation: str
+    sqlite_code: int | None
+    sqlite_name: str | None
+    detail: str
+
+
+type DBError = (
+    NotFound
+    | InvalidData
+    | AlreadyExists
+    | ConstraintViolation
+    | InvariantViolation
+    | StorageFailure
+)
+
+type DBResult[T] = Result[T, DBError]
+
+
+# --- Player Types ---
 
 class Player(TypedDict):
     id: int
@@ -23,6 +93,9 @@ class PlayerStats(TypedDict):
     single_game_count: int
     single_game_sum: int
     balance: int
+
+
+# --- Game Types ---
 
 class GamePollStats(TypedDict):
     games_count: int
@@ -72,6 +145,8 @@ class GameInfo(TypedDict):
     updated_at: str
     target_month_snapshot: str | None
 
+
+# --- Poll Types ---
 
 class PollTemplateRequired(TypedDict):
     """Обязательные поля шаблона опроса."""
@@ -149,15 +224,6 @@ SingleGameIncomeStats = TypedDict(
 )
 
 
-class MessageRecord(TypedDict):
-    message_id: int
-    chat_id: int
-    user_id: int
-    text: str
-    date: int
-    username: str
-
-
 @dataclass(frozen=True)
 class PollCreationSpec:
     """Готовый payload и снапшоты для создания опроса."""
@@ -213,3 +279,13 @@ class SubscriptionResult:
     projected_savings: int = 0       # Прогноз казны на конец месяца
     # Цена абонемента по количеству выбранных залов: hall_count -> price.
     tier_prices: dict[int, int] = field(default_factory=dict)
+
+# --- Message Types ---
+
+class MessageRecord(TypedDict):
+    message_id: int
+    chat_id: int
+    user_id: int
+    text: str
+    date: int
+    username: str

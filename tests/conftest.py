@@ -9,7 +9,7 @@ import pytest
 from aiogram import Bot
 from aiogram.types import User
 
-from src.db2 import DB
+from src.db2 import DB, _create_fund_balance
 from src.services import AdminService
 
 
@@ -23,6 +23,7 @@ def temp_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 @pytest.fixture
 def test_db(tmp_path: Path) -> Iterator[DB]:
     database = DB(str(tmp_path / "volleybot.db"), logging.getLogger(__name__))
+    _create_fund_balance(database, 0)
     try:
         yield database
     finally:

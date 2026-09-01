@@ -12,6 +12,7 @@ from src.db2 import (
     save_state,
     update_fund_balance,
 )
+from src.types import InvalidData
 
 
 def test_save_state_stores_json_serialized_value(test_db: DB) -> None:
@@ -35,9 +36,10 @@ def test_save_state_updates_existing_key(test_db: DB) -> None:
 def test_save_state_returns_failure_for_non_json_serializable_value(test_db: DB) -> None:
     error = save_state(test_db, "bot_state", {"invalid": object()}).failure()
 
-    assert "Не удалось сериализовать данные в JSON для ключа 'bot_state'" in error
+    assert isinstance(error, InvalidData)
+    assert error.detail == "Object of type object is not JSON serializable"
     count = test_db.conn.execute("SELECT COUNT(*) FROM kv_store").fetchone()[0]
-    assert count == 0
+    assert count == 1 # we always have the "fund_balance" key
 
 def test_load_state_returns_default_for_nonexistent_key(test_db: DB) -> None:
     result = load_state(test_db, "nonexistent_key")
@@ -47,11 +49,11 @@ def test_load_state_returns_default_for_nonexistent_key_with_default(test_db: DB
     result = load_state(test_db, "nonexistent_key", default=42)
     assert result.unwrap() == 42
 
-
+# Больше не нужен этот тест. Переписать с использованием атомарного варианта
 def test_result_returning_operations_commit(test_db: DB) -> None:
     assert insert_player(test_db, 1) == Success(None)
     assert add_transaction(test_db, 1, 100, "Пополнение") == Success(None)
-    assert update_fund_balance(test_db, 100) == Success(100)
+    assert update_fund_balance(test_db, 100) == Success(None)
     assert get_fund_balance(test_db) == Success(100)
     assert insert_message(test_db, 10, 20, 1, "Сообщение", 30) == Success(None)
     assert not test_db.conn.in_transaction

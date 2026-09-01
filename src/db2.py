@@ -17,18 +17,28 @@ from returns.pointfree import bind, map_
 from returns.result import Failure, Result, Success, safe
 
 from .types import (
+    AlreadyExists,
+    ConstraintKind,
+    ConstraintViolation,
+    DBError,
+    DBResult,
     GameInfo,
     GameParticipant,
     GamePollStats,
     GamePollStatsSummary,
+    InvalidData,
+    InvariantViolation,
     JsonValue,
     MessageRecord,
+    NotFound,
     Player,
     PlayerStats,
     PollTemplate,
     PollTemplateInput,
     SingleGameIncomeRow,
     SingleGameIncomeStats,
+    StorageFailure,
+    TransactionMode,
 )
 from .utils import normalize_telegram_username
 
@@ -154,15 +164,180 @@ class DB:
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
 
-        self.conn: sqlite3.Connection = sqlite3.connect(path)
-        self.conn.execute("PRAGMA foreign_keys = ON")
+        self.conn: sqlite3.Connection = sqlite3.connect(path, autocommit=True)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys = ON")
         _create_base_tables(self.conn)
         _ensure_current_schema(self.conn)
 
     def close(self) -> None:
         self.conn.close()
 
+
+def map_sqlite_error(
+    error: sqlite3.Error,
+    *,
+    operation: str,
+) -> DBError:
+    """Преобразует ошибку SQLite в соответствующий объект DBError."""
+    code = getattr(error, "sqlite_errorcode", None)
+    name = getattr(error, "sqlite_errorname", None)
+    detail = str(error)
+
+    if isinstance(error, sqlite3.IntegrityError):
+        match code:
+            case sqlite3.SQLITE_CONSTRAINT_UNIQUE:
+                return ConstraintViolation(
+                    kind=ConstraintKind.UNIQUE,
+                    operation=operation,
+                    detail=detail,
+                )
+            case sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY:
+                return ConstraintViolation(
+                    kind=ConstraintKind.PRIMARY_KEY,
+                    operation=operation,
+                    detail=detail,
+                )
+            case sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY:
+                return ConstraintViolation(
+                    kind=ConstraintKind.FOREIGN_KEY,
+                    operation=operation,
+                    detail=detail,
+                )
+            case sqlite3.SQLITE_CONSTRAINT_CHECK:
+                return ConstraintViolation(
+                    kind=ConstraintKind.CHECK,
+                    operation=operation,
+                    detail=detail,
+                )
+            case sqlite3.SQLITE_CONSTRAINT_NOTNULL:
+                return ConstraintViolation(
+                    kind=ConstraintKind.NOT_NULL,
+                    operation=operation,
+                    detail=detail,
+                )
+            case _:
+                pass
+
+    return StorageFailure(
+        operation=operation,
+        sqlite_code=code,
+        sqlite_name=name,
+        detail=detail,
+    )
+
+
+def _rollback_best_effort(
+    conn: sqlite3.Connection,
+    *,
+    operation_name: str,
+) -> None:
+    """Пытается выполнить откат транзакции, логируя ошибки."""
+    if not conn.in_transaction:
+        return
+
+    try:
+        conn.execute("ROLLBACK")
+    except sqlite3.Error:
+        # Ошибка rollback означает, что состоянию сconnection
+        # больше нельзя полностью доверять.
+        LOGGER.exception(
+            "Не удалось откатить транзакцию %s",
+            operation_name,
+        )
+
+def query[T, **P](operation: Callable[Concatenate[DB, P], DBResult[T]]) \
+        -> Callable[Concatenate[DB, P], DBResult[T]]:
+    @wraps(operation)
+    def wrapper(db: DB, *args: P.args, **kwargs: P.kwargs) -> DBResult[T]:
+        try:
+            return operation(db, *args, **kwargs)
+        except sqlite3.Error as error:
+            return Failure(
+                map_sqlite_error(error, operation=operation.__name__)
+            )
+
+    return wrapper
+
+def run_transaction[T](
+    db: DB,
+    *,
+    operation_name: str,
+    operation: Callable[[], DBResult[T]],
+    mode: TransactionMode = TransactionMode.IMMEDIATE,
+) -> DBResult[T]:
+    conn = db.conn
+
+    # В первой версии вложенные тразакции запрещены.
+    # Позже здесь можно использовать SAVEPOINT.
+    if conn.in_transaction:
+        return Failure(
+            InvariantViolation(
+                f"Операция {operation_name} пытается начать "
+                "вложенную транзакцию без SAVEPOINT"
+            )
+        )
+
+    try:
+        # Граница транзакции начинается здесь
+        conn.execute(f"BEGIN {mode}")
+
+        # Здесь вызывается исходная декорированная функция
+        #
+        # Любой sqlite3.Error из любого внутреннего conn.execute())
+        # поднимается обратно сюда.
+        result = operation()
+
+        match result:
+            case Success(_):
+                conn.execute("COMMIT")
+            case Failure(_):
+                conn.execute("ROLLBACK")
+            case _:
+                conn.execute("ROLLBACK")
+                raise TypeError(
+                    f"{operation_name} вернула не Result: {type(result).__name__}"
+                )
+        return result
+    except sqlite3.Error as error:
+        # Сюда попадают ошибки из:
+        #
+        # - BEGIN;
+        # - любого SQL-запроса внутри operation();
+        # - COMMIT;
+        # - ROLLBACK из Failure-ветки.
+        _rollback_best_effort(conn, operation_name=operation_name)
+        return Failure(map_sqlite_error(error, operation=operation_name))
+    except BaseException:
+        # Неожиданный programmer bug тоже не должен оставлять
+        # транзакцию открытой.
+        _rollback_best_effort(
+            conn,
+            operation_name=operation_name,
+        )
+
+        # Но AttributeError, TypeError, KeyboardInterrupt и прочие
+        # неожиданные ошибки нельзя маскировать как DBError.
+        raise
+
+
+def transactional[T, **P](
+    operation: Callable[Concatenate[DB, P], DBResult[T]],
+) -> Callable[Concatenate[DB, P], DBResult[T]]:
+    """Выполняет callback в транзакции и возвращает его результат.
+
+    Callback получает соединение и может выполнить несколько SQL-запросов.
+    Все их изменения фиксируются одним commit либо полностью отменяются при ошибке.
+    """
+    @wraps(operation)
+    def wrapper(db: DB, *args: P.args, **kwargs: P.kwargs) -> DBResult[T]:
+        return run_transaction(
+            db,
+            operation_name=operation.__name__,
+            operation=lambda: operation(db, *args, **kwargs),
+        )
+
+    return wrapper
 
 def _create_base_tables(conn: sqlite3.Connection) -> None:
     """Создаёт таблицы, не зависящие от версии схемы бизнес-данных."""
@@ -472,39 +647,6 @@ def _validate_schema_strict(conn: sqlite3.Connection) -> list[str]:
     return mismatches
 
 
-def transactional[T, **P](
-    operation: Callable[Concatenate[DB, P], Result[T, str]],
-) -> Callable[Concatenate[DB, P], Result[T, str]]:
-    """Выполняет callback в транзакции и возвращает его результат.
-
-    Callback получает соединение и может выполнить несколько SQL-запросов.
-    Все их изменения фиксируются одним commit либо полностью отменяются при ошибке.
-    """
-    @wraps(operation)
-    def wrapper(db: DB, *args: P.args, **kwargs: P.kwargs) -> Result[T, str]:
-        try:
-            result = operation(db, *args, **kwargs)
-            match result:
-                case Success(_):
-                    db.conn.commit()
-                    return result
-                case Failure(_):
-                    db.conn.rollback()
-                    return result
-                case _:
-                    db.conn.rollback()
-                    return Failure("Операция БД вернула некорректный Result")
-        except sqlite3.IntegrityError as e:
-            db.conn.rollback()
-            return Failure(f"❌ Ошибка уникальности полей: {e}")
-        except sqlite3.Error as e:
-            db.conn.rollback()
-            return Failure(f"Ошибка транзакции БД: {e}")
-        finally:
-            if db.conn.in_transaction:
-                db.conn.rollback()
-    return wrapper
-
 
 @safe(exceptions=(TypeError, ValueError))
 def serialize_json(value: object) -> str:
@@ -516,8 +658,8 @@ def deserialize_json(value: str) -> JsonValue:
 
 
 @transactional
-def save_state(db: DB, key: str, value: object) -> Result[None, str]:
-    def persist(payload: str) -> Result[None, str]:
+def save_state(db: DB, key: str, value: object) -> DBResult[None]:
+    def persist(payload: str) -> DBResult[None]:
         db.logger.debug(
             f"Сохранение состояния: ключ='{key}', "
             f"размер данных={len(payload)} байт"
@@ -536,9 +678,9 @@ def save_state(db: DB, key: str, value: object) -> Result[None, str]:
         return Success(None)
 
     return serialize_json(value).alt(
-        lambda error: (
-            f"Не удалось сериализовать данные в JSON для ключа '{key}'. "
-            f"Ошибка: {error}"
+        lambda error: InvalidData(
+            field=key,
+            detail=str(error),
         )
     ).bind(persist)
 
@@ -548,7 +690,7 @@ def load_state(
     db: DB,
     key: str,
     default: object = None,
-) -> Result[object, str]:
+) -> DBResult[object]:
     """Загружает состояние по ключу, возвращает default при отсутствии."""
     row = db.conn.execute(
         "SELECT value FROM kv_store WHERE key = ?",
@@ -557,7 +699,12 @@ def load_state(
     if row is None:
         return Success(default)
 
-    return deserialize_json(str(row[0])).alt(str)
+    return deserialize_json(str(row[0])).alt(
+        lambda error: InvalidData(
+            field=key,
+            detail=str(error),
+        )
+    )
 
 
 # --- PLAYER ---
@@ -573,7 +720,7 @@ def _player_from_row(row: sqlite3.Row) -> Player:
     }
 
 @transactional
-def insert_player(db: DB, player_id: int) -> Result[None, str]:
+def insert_player(db: DB, player_id: int) -> DBResult[None]:
     db.conn.execute(
         "INSERT OR IGNORE INTO players (id, name, fullname) VALUES (?, ?, ?)",
         (player_id, f"user{player_id}", f"User {player_id}"),
@@ -581,7 +728,7 @@ def insert_player(db: DB, player_id: int) -> Result[None, str]:
     return Success(None)
 
 @transactional
-def get_all_players(db: DB) -> Result[list[Player], str]:
+def get_all_players(db: DB) -> DBResult[list[Player]]:
     cursor = db.conn.execute(
         "SELECT id, name, fullname, ball_donate, is_guest, balance FROM players"
     )
@@ -589,7 +736,7 @@ def get_all_players(db: DB) -> Result[list[Player], str]:
 
 
 @transactional
-def get_players_with_balance(db: DB) -> Result[list[Player], str]:
+def get_players_with_balance(db: DB) -> DBResult[list[Player]]:
     cursor = db.conn.execute(
         "SELECT id, name, fullname, ball_donate, is_guest, balance FROM players "
         "WHERE balance != 0 ORDER BY fullname ASC"
@@ -597,42 +744,52 @@ def get_players_with_balance(db: DB) -> Result[list[Player], str]:
     return Success([_player_from_row(row) for row in cursor.fetchall()])
 
 
-@transactional
-def get_player_balance(db: DB, user_id: int) -> Result[int, str]:
+def _get_player_balance(db: DB, user_id: int) -> DBResult[int]:
     """Возвращает баланс конкретного игрока."""
     row = db.conn.execute(
         "SELECT balance FROM players WHERE id = ?",
         (user_id,),
     ).fetchone()
-    return Success(int(row["balance"])) if row else Failure("Player not found")
+
+    if row:
+        return Success(int(row["balance"]))
+    return Failure(NotFound(entity="player", key=user_id))
+
+@query
+def get_player_balance(db: DB, user_id: int) -> DBResult[int]:
+    """Возвращает баланс конкретного игрока."""
+    return _get_player_balance(db, user_id)
 
 
-@transactional
-def get_player_info(db: DB, user_id: int) -> Result[Player, str]:
+@query
+def get_player_info(db: DB, user_id: int) -> DBResult[Player]:
     row = db.conn.execute(
         "SELECT id, name, fullname, ball_donate, is_guest, balance FROM players WHERE id = ?",
         (user_id,),
     ).fetchone()
     if row is None:
-        return Failure("Player not found")
+        return Failure(NotFound(entity="player", key=user_id))
     return Success(_player_from_row(row))
 
 
-@transactional
-def update_player_balance(db: DB, user_id: int, amount: int) -> Result[None, str]:
+def _update_player_balance(db: DB, player_id: int, amount: int) -> DBResult[None]:
     cursor = db.conn.execute(
         "UPDATE players SET balance = balance + ? WHERE id = ?",
-        (amount, user_id),
+        (amount, player_id),
     )
     if cursor.rowcount == 0:
-        return Failure("Player not found")
+        return Failure(NotFound(entity="player", key=player_id))
     return Success(None)
+
+@transactional
+def update_player_balance(db: DB, player_id: int, amount: int) -> DBResult[None]:
+    return _update_player_balance(db, player_id, amount)
 
 
 # TODO: проверить, необходима ли эта избыточность
 # когда ты задаёшь значение, а потом проверяешь его
 @transactional
-def toggle_player_ball_donate(db: DB, user_id: int) -> Result[bool, str]:
+def toggle_player_ball_donate(db: DB, user_id: int) -> DBResult[bool]:
     cursor = db.conn.execute(
         """
         UPDATE players
@@ -645,7 +802,7 @@ def toggle_player_ball_donate(db: DB, user_id: int) -> Result[bool, str]:
         (user_id,),
     )
     if cursor.rowcount == 0:
-        return Failure("Player not found")
+        return Failure(NotFound(entity="player", key=user_id))
 
     row = db.conn.execute(
         "SELECT ball_donate FROM players WHERE id = ?", (user_id,)
@@ -653,11 +810,11 @@ def toggle_player_ball_donate(db: DB, user_id: int) -> Result[bool, str]:
 
     if row:
         return Success(bool(row[0]))
-    return Failure("Player not found")
+    return Failure(NotFound(entity="player", key=user_id))
 
 
 @transactional
-def set_player_guest(db: DB, user_id: int, is_guest: bool) -> Result[None, str]:
+def set_player_guest(db: DB, user_id: int, is_guest: bool) -> DBResult[None]:
     cursor = db.conn.execute(
         """
         UPDATE players
@@ -668,10 +825,10 @@ def set_player_guest(db: DB, user_id: int, is_guest: bool) -> Result[None, str]:
     )
     if cursor.rowcount > 0:
         return Success(None)
-    return Failure(f"❌ Ошибка при изменении гостевого статуса игрока {user_id}")
+    return Failure(NotFound(entity="player", key=user_id))
 
 @transactional
-def get_guest_players(db: DB) -> Result[list[Player], str]:
+def get_guest_players(db: DB) -> DBResult[list[Player]]:
     cursor = db.conn.execute(
         """
         SELECT id, name, fullname, ball_donate, is_guest, balance
@@ -684,7 +841,7 @@ def get_guest_players(db: DB) -> Result[list[Player], str]:
 
 
 @transactional
-def find_player_by_name(db: DB, query: str) -> Result[list[Player], str]:
+def find_player_by_name(db: DB, query: str) -> DBResult[list[Player]]:
     """Ищет игроков по части имени или fullname."""
     pattern = f"%{query}%"
     cursor = db.conn.execute(
@@ -697,7 +854,7 @@ def find_player_by_name(db: DB, query: str) -> Result[list[Player], str]:
 
 @transactional
 def ensure_player(db: DB, user_id: int, name: str | None = None, fullname: str | None = None) \
-    -> Result[None, str]:
+    -> DBResult[None]:
     """
     Гарантирует наличие игрока в базе данных.
 
@@ -749,7 +906,7 @@ def makePollTemplate(
 
 
 @transactional
-def get_poll_templates(db: DB) -> Result[list[PollTemplate], str]:
+def get_poll_templates(db: DB) -> DBResult[list[PollTemplate]]:
     """Возвращает все шаблоны опросов из БД."""
     template_rows = db.conn.execute(
         "SELECT * FROM poll_templates ORDER BY id"
@@ -772,21 +929,22 @@ def get_poll_templates(db: DB) -> Result[list[PollTemplate], str]:
 
 @transactional
 def add_poll_subscription(db: DB, poll_template_id: int, user_id: int) \
-    -> Result[None, str]:
+    -> DBResult[None]:
     """Добавляет игрока в подписчики конкретного шаблона опроса."""
     hall_row = db.conn.execute(
         "SELECT 1 FROM poll_templates WHERE id = ?",
         (poll_template_id,),
     ).fetchone()
     if hall_row is None:
-        return Failure("missing_hall")
+        return Failure(NotFound(entity="hall", key=poll_template_id))
 
     player_row = db.conn.execute(
         "SELECT 1 FROM players WHERE id = ?",
         (user_id,),
     ).fetchone()
     if player_row is None:
-        return Failure("missing_player")
+        return Failure(NotFound(entity="player", key=user_id))
+
 
     existing_row = db.conn.execute(
         """
@@ -796,7 +954,7 @@ def add_poll_subscription(db: DB, poll_template_id: int, user_id: int) \
         (poll_template_id, user_id),
     ).fetchone()
     if existing_row is not None:
-        return Failure("duplicate")
+        return Failure(AlreadyExists("poll_subscription", (poll_template_id, user_id)))
 
     db.conn.execute(
         """
@@ -914,7 +1072,7 @@ def save_poll_template(
 
 
 @transactional
-def clear_paid_poll_subscriptions(db: DB) -> Result[None, str]:
+def clear_paid_poll_subscriptions(db: DB) -> DBResult[None]:
     db.conn.execute(
         """
         DELETE FROM poll_subscriptions
@@ -933,7 +1091,7 @@ def add_transaction(
     description: str,
     poll_template_id: int | None = None,
     poll_name_snapshot: str | None = None,
-) -> Result[None, str]:
+) -> DBResult[None]:
     """
     Добавляет транзакцию в историю.
 
@@ -951,13 +1109,7 @@ def add_transaction(
         )
         VALUES (?, ?, ?, ?, ?)
         """,
-        (
-            player_id,
-            amount,
-            description,
-            poll_template_id,
-            poll_name_snapshot,
-        ),
+        (player_id, amount, description, poll_template_id, poll_name_snapshot),
     )
     db.logger.debug(
         "✅ Транзакция добавлена: "
@@ -969,8 +1121,7 @@ def add_transaction(
 
 # ── Fund (касса) ────────────────────────────────────────────────────────────
 
-@transactional
-def get_fund_balance(db: DB) -> Result[int, str]:
+def _get_fund_balance(db: DB) -> DBResult[int]:
     """Возвращает текущий баланс кассы."""
     row = db.conn.execute(
         "SELECT value FROM kv_store WHERE key = ?", (FUND_BALANCE_KEY,)
@@ -978,33 +1129,61 @@ def get_fund_balance(db: DB) -> Result[int, str]:
 
     if row:
         return Success(int(row[0]))
-    return Failure("❌ Ошибка при получении баланса кассы")
+    return Failure(InvariantViolation("Отсутствует баланс кассы"))
+
 
 @transactional
-def update_fund_balance(db: DB, amount: int) -> Result[int, str]:
+def get_fund_balance(db: DB) -> DBResult[int]:
+    """Возвращает текущий баланс кассы."""
+    return _get_fund_balance(db)
+
+
+def _update_fund_balance(db: DB, amount: int) -> DBResult[None]:
+    cursor = db.conn.execute(
+        """
+        UPDATE kv_store
+        SET value = CAST(value AS INTEGER) + ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE key = ?
+        """,
+        (amount, FUND_BALANCE_KEY),
+    )
+    if cursor.rowcount != 1:
+        return Failure(InvariantViolation("Обязательная запись fund_balance отсутствует"))
+    return Success(None)
+
+@transactional
+def update_fund_balance(db: DB, amount: int) -> DBResult[None]:
     """
     Атомарно изменяет баланс кассы на указанную сумму.
 
     Args:
         amount: Сумма изменения (положительная — пополнение, отрицательная — списание)
     """
-    row = db.conn.execute(
-        """
-        INSERT INTO kv_store(key, value, updated_at)
-        VALUES (?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(key) DO UPDATE SET
-            value = CAST(kv_store.value AS INTEGER) + CAST(excluded.value AS INTEGER),
-            updated_at = CURRENT_TIMESTAMP
-        RETURNING CAST(value AS INTEGER)
-        """,
-        (FUND_BALANCE_KEY, amount),
-    ).fetchone()
-    if row is None:
-        return Failure("Не удалось обновить баланс кассы")
-    new_balance = int(row[0])
-    db.logger.info(f"💰 Касса изменена на {amount:+d}, новый баланс: {new_balance}")
-    return Success(new_balance)
+    return _update_fund_balance(db, amount)
 
+
+
+
+def _insert_transaction(
+    db: DB,
+    *,
+    player_id: int,
+    amount: int,
+    description: str,
+    poll_template_id: int | None = None,
+    poll_name_snapshot: str | None = None,
+) -> DBResult[None]:
+    db.conn.execute(
+        """
+        INSERT INTO transactions (
+            player_id, amount, description, poll_template_id, poll_name_snapshot
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (player_id, amount, description, poll_template_id, poll_name_snapshot),
+    )
+
+    return Success(None)
 
 @transactional
 def update_player_and_fund_balance_atomic(
@@ -1014,7 +1193,7 @@ def update_player_and_fund_balance_atomic(
     description: str,
     poll_template_id: int | None = None,
     poll_name_snapshot: str | None = None,
-) -> Result[None, str]:
+) -> DBResult[None]:
     """
     Атомарно изменяет баланс игрока, кассу и добавляет транзакцию в одной транзакции.
 
@@ -1031,41 +1210,19 @@ def update_player_and_fund_balance_atomic(
     Returns:
         True если все операции успешны, иначе False
     """
-    # 1. Обновить баланс игрока
-    cursor = db.conn.execute(
-        "UPDATE players SET balance = balance + ? WHERE id = ?",
-        (amount, player_id),
-    )
-    if cursor.rowcount == 0:
-        return Failure(f"Игрок {player_id} не найден для обновления баланса")
 
-    # 2. Обновить баланс кассы (атомарно в той же транзакции)
-    db.conn.execute(
-        """
-        INSERT INTO kv_store(key, value, updated_at)
-        VALUES (?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(key) DO UPDATE SET
-            value = CAST(kv_store.value AS INTEGER) + CAST(excluded.value AS INTEGER),
-            updated_at = CURRENT_TIMESTAMP
-        """,
-        (FUND_BALANCE_KEY, amount),
+    return (
+        _update_player_balance(db, player_id=player_id, amount=amount) \
+            .bind(lambda _: _update_fund_balance(db, amount=amount)) \
+            .bind(lambda _: _insert_transaction(
+                db,
+                player_id=player_id,
+                amount=amount,
+                description=description,
+                poll_template_id=poll_template_id,
+                poll_name_snapshot=poll_name_snapshot,
+            ))
     )
-
-    # 3. Добавить транзакцию
-    db.conn.execute(
-        """
-        INSERT INTO transactions (
-            player_id, amount, description, poll_template_id, poll_name_snapshot
-        ) VALUES (?, ?, ?, ?, ?)
-        """,
-        (player_id, amount, description, poll_template_id, poll_name_snapshot),
-    )
-
-    db.logger.info(
-        f"💰 Атомарно обновлён баланс игрока {player_id}: {amount:+d}, "
-        f"касса +{amount:+d}, транзакция: {description}"
-    )
-    return Success(None)
 
 
 @transactional
@@ -1076,7 +1233,7 @@ def update_player_and_transaction_atomic(
     description: str,
     poll_template_id: int | None = None,
     poll_name_snapshot: str | None = None,
-) -> Result[None, str]:
+) -> DBResult[None]:
     """
     Атомарно изменяет баланс игрока и добавляет транзакцию (без изменения кассы).
 
@@ -1092,35 +1249,23 @@ def update_player_and_transaction_atomic(
     Returns:
         True если все операции успешны, иначе False
     """
-    # 1. Обновить баланс игрока
-    cursor = db.conn.execute(
-        "UPDATE players SET balance = balance + ? WHERE id = ?",
-        (amount, player_id),
+    return (
+        _update_player_balance(db, player_id=player_id, amount=amount) \
+            .bind(lambda _: _insert_transaction(
+                db,
+                player_id=player_id,
+                amount=amount,
+                description=description,
+                poll_template_id=poll_template_id,
+                poll_name_snapshot=poll_name_snapshot,
+            ))
     )
-    if cursor.rowcount == 0:
-        return Failure(f"Игрок {player_id} не найден для восстановления баланса")
-
-    # 2. Добавить транзакцию (касса НЕ меняется)
-    db.conn.execute(
-        """
-        INSERT INTO transactions (
-            player_id, amount, description, poll_template_id, poll_name_snapshot
-        ) VALUES (?, ?, ?, ?, ?)
-        """,
-        (player_id, amount, description, poll_template_id, poll_name_snapshot),
-    )
-
-    db.logger.info(
-        f"🔄 Атомарно восстановлен баланс игрока {player_id}: {amount:+d}, "
-        f"касса не изменена, транзакция: {description}"
-    )
-    return Success(None)
 
 
 # ── Hall payments (оплата залов) ─────────────────────────────────────────────
 
 @transactional
-def get_unpaid_halls(db: DB, month: str) -> Result[list[PollTemplate], str]:
+def get_unpaid_halls(db: DB, month: str) -> DBResult[list[PollTemplate]]:
     """
     Возвращает платные залы (cost_per_game > 0), ещё не оплаченные в данном месяце.
 
@@ -1158,7 +1303,7 @@ def get_unpaid_halls(db: DB, month: str) -> Result[list[PollTemplate], str]:
 
 # deprecated
 @transactional
-def record_hall_payment(db: DB, poll_template_id: int, month: str, amount: int) -> Result[None, str]:
+def record_hall_payment(db: DB, poll_template_id: int, month: str, amount: int) -> DBResult[None]:
     """
     Записывает оплату зала за месяц.
 
@@ -1186,12 +1331,12 @@ def record_hall_payment(db: DB, poll_template_id: int, month: str, amount: int) 
 @transactional
 def record_hall_payment_atomic(
     db: DB,
-    payer_id: int,
+    player_id: int,
     poll_template_id: int,
     month: str,
     amount: int,
     poll_name: str,
-) -> Result[str, str]:
+) -> DBResult[str]:
     """
     Атомарно записывает оплату зала, уменьшает кассу и добавляет транзакцию.
 
@@ -1223,7 +1368,7 @@ def record_hall_payment_atomic(
         db.logger.warning(
             f"⚠️ Зал {poll_name} за {month} уже оплачен"
         )
-        return Failure("duplicate")
+        return Failure(AlreadyExists("poll_subscription", (poll_template_id, player_id)))
 
     # 2. Уменьшить баланс кассы
     db.conn.execute(
@@ -1245,7 +1390,7 @@ def record_hall_payment_atomic(
         ) VALUES (?, ?, ?, ?, ?)
         """,
         (
-            payer_id,
+            player_id,
             -amount,
             f"Оплата зала: {poll_name} ({month})",
             poll_template_id,
@@ -1283,7 +1428,7 @@ def create_game(
     info_message_id: int | None = None,
     final_message_id: int | None = None,
     last_info_text: str = "⏳ Идёт сбор голосов...",
-) -> Result[None, str]:
+) -> DBResult[None]:
     """
     Создаёт или обновляет запись игры/голосования.
 
@@ -1353,7 +1498,7 @@ def update_game_info_message(
     *,
     info_message_id: int | None,
     last_info_text: str | None = None,
-) -> Result[None, str]:
+) -> DBResult[None]:
     """Обновляет ID информационного сообщения и кеш текста."""
     cursor = db.conn.execute(
         """
@@ -1366,11 +1511,11 @@ def update_game_info_message(
         (info_message_id, last_info_text, poll_id),
     )
     if cursor.rowcount == 0:
-        return Failure("Игра не найдена")
+        return Failure(NotFound(entity="game", key=poll_id))
     return Success(None)
 
 @transactional
-def update_game_last_info_text(db: DB, poll_id: str, text: str) -> Result[None, str]:
+def update_game_last_info_text(db: DB, poll_id: str, text: str) -> DBResult[None]:
     """Обновляет последний отправленный текст промежуточного сообщения."""
     cursor = db.conn.execute(
         """
@@ -1381,7 +1526,7 @@ def update_game_last_info_text(db: DB, poll_id: str, text: str) -> Result[None, 
         (text, poll_id),
     )
     if cursor.rowcount == 0:
-        return Failure("Игра не найдена")
+        return Failure(NotFound(entity="game", key=poll_id))
     return Success(None)
 
 
@@ -1393,7 +1538,7 @@ def close_game(
     status: str = "closed",
     closed_at: str,
     final_message_id: int | None = None,
-) -> Result[None, str]:
+) -> DBResult[None]:
     """Закрывает игру в БД."""
     cursor = db.conn.execute(
         """
@@ -1407,13 +1552,13 @@ def close_game(
         (status, closed_at, final_message_id, poll_id),
     )
     if cursor.rowcount == 0:
-        return Failure("Игра не найдена")
+        return Failure(NotFound(entity="game", key=poll_id))
     return Success(None)
 
 
 @transactional
 def save_monthly_vote(db: DB, game_poll_id: str, player_id: int, option_ids: list[int]) \
--> Result[None, str]:
+    -> DBResult[None]:
     """Сохраняет выбор пользователя в месячном голосовании."""
     db.conn.execute(
         """
@@ -1429,7 +1574,7 @@ def save_monthly_vote(db: DB, game_poll_id: str, player_id: int, option_ids: lis
 
 
 @transactional
-def load_monthly_votes(db: DB, game_poll_id: str) -> Result[dict[int, list[int]], str]:
+def load_monthly_votes(db: DB, game_poll_id: str) -> DBResult[dict[int, list[int]]]:
     """Возвращает сохранённые голоса месячного опроса."""
     rows = db.conn.execute(
         """
@@ -1462,9 +1607,9 @@ def load_monthly_votes(db: DB, game_poll_id: str) -> Result[dict[int, list[int]]
     )
 
 
-def _make_game_info(row: sqlite3.Row | None) -> Result[GameInfo, str]:
+def _make_game_info(row: sqlite3.Row | None, poll_id: int = 0) -> DBResult[GameInfo]:
     if row is None:
-        return Failure("❌ Ошибка при десереализации игры")
+        return Failure(NotFound("open game", poll_id))
 
     poll_template_id = row["poll_template_id"]
     info_message_id = row["info_message_id"]
@@ -1498,19 +1643,18 @@ def _make_game_info(row: sqlite3.Row | None) -> Result[GameInfo, str]:
         ),
     })
 
-@transactional
-def get_game(db: DB, poll_id: str) -> Result[GameInfo, str]:
+@query
+def get_game(db: DB, poll_id: int) -> DBResult[GameInfo]:
     """Возвращает игру по poll_id."""
     row = db.conn.execute(
         "SELECT * FROM games WHERE poll_id = ?",
         (poll_id,),
     ).fetchone()
-
-    return _make_game_info(row)
+    return _make_game_info(row, poll_id)
 
 
 @transactional
-def get_open_games(db: DB) -> Result[list[GameInfo], str]:
+def get_open_games(db: DB) -> DBResult[list[GameInfo]]:
     """Возвращает все открытые игры."""
     rows = db.conn.execute(
         "SELECT * FROM games WHERE status = 'open' ORDER BY opened_at"
@@ -1522,7 +1666,7 @@ def get_open_games(db: DB) -> Result[list[GameInfo], str]:
 
 
 @transactional
-def get_open_game_by_template_id(db: DB, poll_template_id: int) -> Result[GameInfo, str]:
+def get_open_game_by_template_id(db: DB, poll_template_id: int) -> DBResult[GameInfo]:
     """Возвращает открытую regular-игру по шаблону."""
     row = db.conn.execute(
         """
@@ -1536,11 +1680,12 @@ def get_open_game_by_template_id(db: DB, poll_template_id: int) -> Result[GameIn
         """,
         (poll_template_id,),
     ).fetchone()
-    return _make_game_info(row)
+
+    return _make_game_info(row, poll_template_id)
 
 
 @transactional
-def get_open_monthly_game(db: DB) -> Result[GameInfo, str]:
+def get_open_monthly_game(db: DB) -> DBResult[GameInfo]:
     """Возвращает открытый месячный опрос."""
     row = db.conn.execute(
         """
@@ -1557,7 +1702,7 @@ def get_open_monthly_game(db: DB) -> Result[GameInfo, str]:
 @transactional
 def save_game_participants(
     db: DB, game_poll_id: str, participants: list[GameParticipant]
-) -> Result[None, str]:
+) -> DBResult[None]:
     """Сохраняет состав и финансовый итог игры."""
     db.conn.execute(
         "DELETE FROM game_participants WHERE game_poll_id = ?", (game_poll_id,)
@@ -1589,7 +1734,7 @@ def save_game_participants(
 
 
 @transactional
-def count_player_regular_participations(db: DB, player_id: int) -> Result[int, str]:
+def count_player_regular_participations(db: DB, player_id: int) -> DBResult[int]:
     """Считает прошлые участия игрока в regular-играх в main/reserve."""
     row = db.conn.execute(
         """
@@ -1603,7 +1748,7 @@ def count_player_regular_participations(db: DB, player_id: int) -> Result[int, s
         """,
         (player_id,),
     ).fetchone()
-    return Success(int(row[0] or 0)) if row else Failure("no data")
+    return Success(int(row[0] or 0)) if row else Failure(NotFound(entity="player", key=player_id))
 
 # --- Stats
 
@@ -1648,7 +1793,7 @@ def _stats_from_row(row: sqlite3.Row, balance: int) -> Result[PlayerStats, str]:
 @transactional
 def get_single_game_income_stats(
     db: DB, months_back: int = 3, before_month: str = ""
-) -> Result[SingleGameIncomeStats, str]:
+) -> DBResult[SingleGameIncomeStats]:
     """
     Возвращает средний доход с разовых игроков по закрытым платным играм.
 
@@ -1724,7 +1869,7 @@ def get_single_game_income_stats(
 
 @transactional
 def get_stats_summary(db: DB, month: str = "") \
-    -> Result[GamePollStatsSummary, str]:
+    -> DBResult[GamePollStatsSummary]:
     """Сводная статистика по regular-играм."""
     start, end = _month_bounds(month).value_or((None, None))
     filter_sql = ""
@@ -1823,7 +1968,7 @@ def get_stats_summary(db: DB, month: str = "") \
     single_game_sum = int(summary_row["single_game_sum"] or 0) if summary_row else 0
     topups_sum = int(payments_row["topups_sum"] or 0) if payments_row else 0
     hall_payments_sum = int(hall_row["hall_payments_sum"] or 0) if hall_row else 0
-    fund_balance = get_fund_balance(db)
+    fund_balance = _get_fund_balance(db).unwrap()
     monthly_polls = int(monthly_row["monthly_polls"] or 0) if monthly_row else 0
     return Success({
         "games_count": games_count,
@@ -1835,14 +1980,14 @@ def get_stats_summary(db: DB, month: str = "") \
         "single_game_sum": single_game_sum,
         "topups_sum": topups_sum,
         "hall_payments_sum": hall_payments_sum,
-        "fund_balance": fund_balance.value_or(0),
+        "fund_balance": fund_balance,
         "monthly_polls": monthly_polls,
     })
 
 
 @transactional
 def get_poll_stats(db: DB, poll_template_id: int, month: str = "") \
-    -> Result[GamePollStats, str]:
+    -> DBResult[GamePollStats]:
     """Статистика по одному залу."""
     start, end = _month_bounds(month).value_or((None, None))
     filter_sql = ""
@@ -1930,7 +2075,7 @@ def get_player_stats(
     db: DB,
     player_id: int,
     month: str = "",
-) -> Result[PlayerStats, str]:
+) -> DBResult[PlayerStats]:
     """Статистика по игроку."""
     start, end = _month_bounds(month).value_or((None, None))
     filter_sql = ""
@@ -1958,7 +2103,7 @@ def get_player_stats(
         return _stats_from_row(row, balance)
 
     return flow(
-        get_player_balance(db, player_id).alt(
+        _get_player_balance(db, player_id).alt(
             lambda _: "Баланс игрока не найден"
         ),
         bind(build_stats),
@@ -1966,12 +2111,12 @@ def get_player_stats(
 
 # --- Messages
 
-@transactional
+@query
 def get_messages(
     db: DB,
     chat_id: int,
     limit: int = 100,
-) -> Result[list[MessageRecord], str]:
+) -> DBResult[list[MessageRecord]]:
     rows = db.conn.execute(
         """
         SELECT
@@ -2009,12 +2154,29 @@ def insert_message(
     user_id: int,
     text: str,
     date: int,
-) -> Result[None, str]:
+) -> DBResult[None]:
     db.conn.execute(
         """
         INSERT INTO messages (message_id, chat_id, user_id, text, date)
         VALUES (?, ?, ?, ?, ?)
         """,
         (message_id, chat_id, user_id, text, date),
+    )
+    return Success(None)
+
+
+# --- For test purposes only ---
+@transactional
+def _create_fund_balance(db: DB, amount: int) -> DBResult[None]:
+    db.conn.execute(
+        """
+        INSERT INTO kv_store(key, value, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET
+            value = CAST(kv_store.value AS INTEGER) + CAST(excluded.value AS INTEGER),
+            updated_at = CURRENT_TIMESTAMP
+        RETURNING CAST(value AS INTEGER)
+        """,
+        (FUND_BALANCE_KEY, amount),
     )
     return Success(None)

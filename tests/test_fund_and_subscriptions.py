@@ -29,6 +29,7 @@ from src.db2 import (
 )
 from src.handlers import register_handlers
 from src.services import AdminService, BotStateService, PollService
+from src.types import ConstraintKind, ConstraintViolation
 
 # ── DB-level fund tests ─────────────────────────────────────────────────────
 
@@ -47,8 +48,8 @@ class TestFundBalance:
     """Тесты для функций кассы в БД."""
 
     def test_fund_balance_default_zero(self, test_db: DB):
-        """По умолчанию баланс кассы равен 0."""
-        assert get_fund_balance(test_db) == Failure("❌ Ошибка при получении баланса кассы")
+        """Касса инициализируется с нулевым балансом."""
+        assert get_fund_balance(test_db) == Success(0)
 
     def test_update_fund_balance_increment(self, test_db: DB):
         """Пополнение кассы увеличивает баланс."""
@@ -138,9 +139,13 @@ class TestHallPayments:
         self._create_paid_template(test_db, "Пятница")
         poll_template_id = _get_poll_template_id(test_db, "Пятница").unwrap()
         assert record_hall_payment(test_db, poll_template_id, "2026-02", 6000) == Success(None)
-        assert record_hall_payment(test_db, poll_template_id, "2026-02", 6000) \
-            .failure() \
-            .startswith("❌ Ошибка уникальности полей")
+        expectedFailure = Failure(
+            ConstraintViolation(
+                kind=ConstraintKind.UNIQUE,
+                operation="record_hall_payment",
+                detail="UNIQUE constraint failed: hall_payments.poll_template_id, hall_payments.month",
+            ))
+        assert record_hall_payment(test_db, poll_template_id, "2026-02", 6000) == expectedFailure
 
     def test_different_months_allowed(self, test_db: DB):
         """Оплата одного зала за разные месяцы допустима."""
