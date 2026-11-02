@@ -2580,18 +2580,27 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             lines.append(
                 f"• {link} — {balance} ₽, абонемент: {subscriptions}, мяч: {ball}{guest}"
             )
-        text = "\n".join(lines)
-        if len(text) > 4000:
-            text = (
-                "\n".join(lines[:1] + lines[1:81]) + "\n\n… и ещё (показаны первые 80)."
-            )
-        await safe_reply(
-            message,
-            text,
-            parse_mode="HTML",
-            link_preview_options=LinkPreviewOptions(is_disabled=True),
-            action_name="reply to /player list",
-        )
+        texts = [lines[0]]
+        # Считаем и HTML-разметку в UTF-16, оставляя запас до лимита Telegram.
+        text_length = len(lines[0].encode("utf-16-le")) // 2
+        for line in lines[1:]:
+            line_length = len(line.encode("utf-16-le")) // 2
+            if text_length + 1 + line_length > 4000:
+                texts.append(line)
+                text_length = line_length
+            else:
+                texts[-1] += "\n" + line
+                text_length += 1 + line_length
+
+        for text in texts:
+            if not await safe_reply(
+                message,
+                text,
+                parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+                action_name="reply to /player list",
+            ):
+                return
 
     def _format_guest_usage() -> str:
         return (

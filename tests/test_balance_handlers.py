@@ -660,6 +660,80 @@ class TestPlayerCommand:
         assert "абонемент: Пятница (Зал №1)" in method.text
         assert "мяч" in method.text.lower()
 
+    @pytest.mark.parametrize(
+        ("player_count", "name_prefix"),
+        [(73, "Игрок"), (120, "Игрок"), (40, "🏐" * 64)],
+        ids=["under_80_players", "over_80_players", "emoji_names"],
+    )
+    @patch("src.handlers.get_poll_templates")
+    @patch("src.handlers.get_all_players")
+    async def test_player_long_list_is_split_without_losing_players(
+        self,
+        mock_get_all,
+        mock_get_templates,
+        admin_user,
+        admin_service,
+        player_count,
+        name_prefix,
+    ):
+        """Длинный список отправляется частями с целыми HTML-ссылками."""
+        bot = AsyncMock(spec=Bot)
+        dp = Dispatcher()
+        mock_get_all.return_value = [
+            {
+                "id": player_id,
+                "name": f"player{player_id}",
+                "fullname": f"{name_prefix} {player_id}",
+                "ball_donate": False,
+                "balance": -100,
+            }
+            for player_id in range(1, player_count + 1)
+        ]
+        mock_get_templates.return_value = [
+            {
+                "id": 1,
+                "name": "Среда <вечер>",
+                "place": "Зал & площадка",
+                "subs": list(range(1, player_count + 1)),
+            }
+        ]
+        dp.workflow_data.update(
+            {
+                "admin_service": admin_service,
+                "bot_state_service": MagicMock(),
+                "poll_service": MagicMock(),
+            }
+        )
+        register_handlers(dp, bot)
+        message = Message(
+            message_id=1,
+            date=MagicMock(),
+            chat=Chat(id=-1001234567890, type="supergroup"),
+            from_user=admin_user,
+            text="/player",
+        )
+
+        await dp.feed_update(bot, Update(update_id=1, message=message))
+
+        methods = [call.args[0] for call in bot.call_args_list]
+        assert len(methods) > 1
+        assert f"Игроки</b> ({player_count})" in methods[0].text
+        player_lines = []
+        for method in methods:
+            assert method.parse_mode == "HTML"
+            assert method.link_preview_options.is_disabled
+            assert len(method.text.encode("utf-16-le")) // 2 <= 4000
+            for line in method.text.splitlines():
+                if line.startswith("• "):
+                    assert line.count("<a ") == line.count("</a>") == 1
+                    assert "абонемент: Среда &lt;вечер&gt; (Зал &amp; площадка)" in line
+                    assert line.endswith("мяч: нет")
+                    player_lines.append(line)
+        assert len(player_lines) == player_count
+        for player_id, line in enumerate(player_lines, start=1):
+            assert f'<a href="https://t.me/player{player_id}">' in line
+            assert f">{name_prefix} {player_id}</a>" in line
+
     @patch("src.handlers.get_all_players")
     async def test_player_regular_user_ignored(
         self, mock_get_all, regular_user, admin_service
