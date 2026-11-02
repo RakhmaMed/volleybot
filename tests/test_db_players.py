@@ -1,3 +1,7 @@
+import sqlite3
+from unittest.mock import patch
+
+import pytest
 from aiogram.types import User
 
 from src.db import (
@@ -6,6 +10,7 @@ from src.db import (
     get_all_players,
     get_player_info,
     init_db,
+    rename_player,
     toggle_player_ball_donate,
 )
 from src.utils import get_player_name
@@ -259,6 +264,61 @@ class TestGetPlayerInfo:
         """get_player_info возвращает None для несуществующего игрока."""
         init_db()
         assert get_player_info(99999) is None
+
+
+class TestRenamePlayer:
+    def test_rename_preserves_other_fields_and_survives_ensure_player(self, temp_db):
+        init_db()
+        ensure_player(42, "player42", "Old Name")
+        with _connect() as conn:
+            conn.execute(
+                "UPDATE players SET balance = 300, ball_donate = 1, is_guest = 1, "
+                "updated_at = '2000-01-01 00:00:00' WHERE id = 42"
+            )
+            conn.commit()
+
+        assert rename_player(42, "  Иван Петров  ") is True
+        with _connect() as conn:
+            updated_at = conn.execute(
+                "SELECT updated_at FROM players WHERE id = 42"
+            ).fetchone()[0]
+        assert updated_at != "2000-01-01 00:00:00"
+        ensure_player(42, "player42", "Telegram Name")
+
+        assert get_player_info(42) == {
+            "id": 42,
+            "name": "player42",
+            "fullname": "Иван Петров",
+            "ball_donate": True,
+            "is_guest": True,
+            "balance": 300,
+        }
+
+    @pytest.mark.parametrize("fullname", ["", "  ", "\t\n"])
+    def test_rename_rejects_blank_name(self, fullname, temp_db):
+        init_db()
+        ensure_player(42, "player42", "Old Name")
+
+        assert rename_player(42, fullname) is False
+        assert get_player_info(42)["fullname"] == "Old Name"
+
+    def test_rename_missing_player_does_not_create_one(self, temp_db):
+        init_db()
+
+        assert rename_player(99999, "New Name") is False
+        assert get_player_info(99999) is None
+
+    def test_rename_stores_special_characters_literally(self, temp_db):
+        init_db()
+        ensure_player(42, "player42", "Old Name")
+        fullname = "O'Connor <Иван> & друзья"
+
+        assert rename_player(42, fullname) is True
+        assert get_player_info(42)["fullname"] == fullname
+
+    def test_rename_returns_false_on_database_error(self, temp_db):
+        with patch("src.db._connect", side_effect=sqlite3.OperationalError("failed")):
+            assert rename_player(42, "New Name") is False
 
 
 class TestTogglePlayerBallDonate:

@@ -697,6 +697,31 @@ def get_player_info(user_id: int) -> dict[str, Any] | None:
         return None
 
 
+def rename_player(user_id: int, fullname: str) -> bool:
+    """Изменяет отображаемое имя игрока, сохраняя остальные данные."""
+    fullname = fullname.strip()
+    if not fullname:
+        return False
+
+    try:
+        with _connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE players
+                SET fullname = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (fullname, user_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except sqlite3.Error:
+        logging.getLogger(__name__).exception(
+            "❌ Ошибка при переименовании игрока %s", user_id
+        )
+        return False
+
+
 def update_player_balance(user_id: int, amount: int) -> bool:
     """Изменяет баланс игрока на указанную сумму (может быть отрицательной)."""
     try:

@@ -50,6 +50,7 @@ from .db import (
     get_unpaid_halls,
     load_state,
     record_hall_payment_atomic,
+    rename_player,
     save_monthly_vote,
     save_poll_template,
     save_state,
@@ -114,7 +115,9 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(
             command="close_monthly", description="Тест: закрыть опрос абонемента"
         ),
-        BotCommand(command="player", description="Подробная информация об игроках"),
+        BotCommand(
+            command="player", description="Информация об игроках / переименовать"
+        ),
         BotCommand(command="guest", description="Управление гостями"),
         BotCommand(
             command="ball_donate", description="Переключить донат мяча у игрока"
@@ -744,6 +747,8 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             "/restore [имя] [сумма] — найти игрока и восстановить баланс\n"
             "/player — список всех игроков с подробной информацией\n"
             "/player [имя] — информация об одном игроке (по имени, @username или ID)\n"
+            "/player rename PLAYER Новое имя — переименовать игрока\n"
+            "/player rename Новое имя — переименовать в ответ на сообщение\n"
             "/guest — список гостей / добавить / убрать гостя\n"
             "/ball_donate — переключить донат мяча у игрока (reply)\n"
             "/ball_donate [имя] — переключить донат мяча по имени, @username или ID\n"
@@ -2433,9 +2438,104 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
                 action_name="reply to /restore update failure",
             )
 
+    async def _rename_player(message: Message, payload: str) -> None:
+        usage = (
+            "✏️ <b>Переименование игрока</b>\n\n"
+            "<code>/player rename PLAYER Новое имя</code>\n"
+            "PLAYER: ID, @username или часть имени без пробелов.\n"
+            "В ответ на сообщение игрока: <code>/player rename Новое имя</code>\n\n"
+            "Меняется только отображаемое имя, не Telegram username."
+        )
+        target_user = (
+            message.reply_to_message.from_user if message.reply_to_message else None
+        )
+        if target_user:
+            new_fullname = payload.strip()
+            if not new_fullname:
+                await safe_reply(
+                    message,
+                    usage,
+                    parse_mode="HTML",
+                    action_name="reply to /player rename usage",
+                )
+                return
+            player = get_player_info(target_user.id) or {"id": target_user.id}
+        else:
+            parts = payload.split(maxsplit=1)
+            if len(parts) < 2:
+                await safe_reply(
+                    message,
+                    usage,
+                    parse_mode="HTML",
+                    action_name="reply to /player rename usage",
+                )
+                return
+            query, new_fullname = parts[0], parts[1].strip()
+            if query.isdigit():
+                player = get_player_info(int(query))
+            else:
+                clean_query = query.lstrip("@")
+                players = find_player_by_name(clean_query) if clean_query else []
+                if len(players) > 1:
+                    lines = [
+                        "❓ Найдено несколько игроков. Повторите команду с ID нужного игрока:",
+                    ]
+                    lines.extend(
+                        f"• <code>{p['id']}</code> — {format_player_link(p)}"
+                        for p in players[:10]
+                    )
+                    await safe_reply(
+                        message,
+                        "\n".join(lines),
+                        parse_mode="HTML",
+                        link_preview_options=LinkPreviewOptions(is_disabled=True),
+                        action_name="reply to /player rename ambiguity",
+                    )
+                    return
+                player = players[0] if players else None
+            if player is None:
+                await safe_reply(
+                    message,
+                    f"❌ Игрок '{escape_html(query)}' не найден.",
+                    parse_mode="HTML",
+                    action_name="reply to /player rename missing player",
+                )
+                return
+
+        player_id = int(player["id"])
+        create_backup("player_rename_command")
+        if target_user:
+            ensure_player(
+                user_id=target_user.id,
+                name=target_user.username,
+                fullname=target_user.full_name,
+            )
+        if not rename_player(player_id, new_fullname):
+            await safe_reply(
+                message,
+                "❌ Не удалось переименовать игрока.",
+                action_name="reply to /player rename failure",
+            )
+            return
+
+        player["fullname"] = new_fullname
+        await safe_reply(
+            message,
+            f"✅ Игрок переименован: {format_player_link(player)}.",
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+            action_name="reply to /player rename success",
+        )
+        logging.getLogger(__name__).info(
+            "✏️ Админ %s переименовал игрока %s в %r",
+            message.from_user.id if message.from_user else None,
+            player_id,
+            new_fullname,
+        )
+
     @router.message(Command("player"))
     async def player_handler(message: Message) -> None:
-        """Команда для подробного вывода информации об игроках (только для администратора)."""
+        """Информация об игроках и переименование (только для администратора)."""
         user = message.from_user
         if user is None:
             return
@@ -2450,6 +2550,11 @@ def register_handlers(dp: Dispatcher, bot: Bot) -> None:
             return
 
         args = message.text.split()
+
+        if len(args) >= 2 and args[1].lower() == "rename":
+            parts = message.text.split(maxsplit=2)
+            await _rename_player(message, parts[2] if len(parts) > 2 else "")
+            return
 
         # 1. Ответ на сообщение — показать одного игрока
         if message.reply_to_message and message.reply_to_message.from_user:
